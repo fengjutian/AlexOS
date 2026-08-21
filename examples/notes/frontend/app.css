@@ -1,0 +1,143 @@
+body {
+  font-family: "Segoe UI", system-ui, sans-serif;
+  margin: 0;
+  padding: 0 1.5rem 2rem;
+  color: #1d1d1f;
+  background: #f7f7f8;
+}
+
+header {
+  padding: 1.5rem 0 1rem;
+  border-bottom: 1px solid #d0d0d4;
+  margin-bottom: 1.5rem;
+}
+
+h1 {
+  margin: 0 0 0.25rem;
+  font-size: 1.4rem;
+}
+
+h2 {
+  font-size: 1.05rem;
+  margin: 0 0 0.5rem;
+}
+
+p {
+  margin: 0.5rem 0;
+}
+
+code {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.85em;
+  background: #e9e9ec;
+  padding: 0.05em 0.35em;
+  border-radius: 3px;
+}
+
+button {
+  font: inherit;
+  padding: 0.35rem 0.9rem;
+  border: 1px solid #b8b8bf;
+  background: #ffffff;
+  border-radius: 4px;
+  cursor: pointer;
+}
+
+button:hover {
+  background: #f0f0f3;
+}
+
+button:active {
+  background: #e4e4e8;
+}
+
+button:disabled {
+  opacity: 0.5;
+  cursor: not-allowed;
+}
+
+main {
+  display: grid;
+  gap: 1.5rem;
+  max-width: 720px;
+}
+
+form {
+  display: grid;
+  gap: 0.5rem;
+}
+
+form label {
+  display: grid;
+  gap: 0.25rem;
+  font-size: 0.85rem;
+  color: #5d5d63;
+}
+
+form input,
+form textarea {
+  font: inherit;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #b8b8bf;
+  border-radius: 4px;
+  background: #ffffff;
+  resize: vertical;
+}
+
+ul {
+  list-style: none;
+  padding: 0;
+  margin: 0.5rem 0 0;
+}
+
+li {
+  display: grid;
+  gap: 0.4rem;
+  padding: 0.6rem 0.75rem;
+  border: 1px solid #d8d8dd;
+  border-radius: 4px;
+  margin-bottom: 0.5rem;
+  background: #ffffff;
+}
+
+.note-header {
+  display: flex;
+  align-items: baseline;
+  justify-content: space-between;
+  gap: 0.5rem;
+}
+
+.note-title {
+  font-weight: 600;
+  font-size: 1rem;
+}
+
+.note-date {
+  color: #5d5d63;
+  font-size: 0.75rem;
+}
+
+.note-body {
+  margin: 0;
+  white-space: pre-wrap;
+  color: #1d1d1f;
+  font-size: 0.9rem;
+}
+
+.note-actions {
+  display: flex;
+  justify-content: flex-end;
+}
+
+#status,
+#form-status {
+  color: #5d5d63;
+  font-size: 0.85rem;
+  min-height: 1.2em;
+}
+
+.error {
+  color: #b1271b;
+}

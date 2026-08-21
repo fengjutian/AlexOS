@@ -84,11 +84,14 @@ impl EventEnvelope {
 
 /// Subscribe/unsubscribe envelopes accepted over the same IPC
 /// channel as calls. The page prefers the SDK wrappers, which
-/// generate these for them.
+/// generate these for them. The `id` field is the same id the
+/// host used to dispatch the call, not a page-minted value, so
+/// it is ignored on deserialize.
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct SubscribeRequest {
-    pub id: String,
+    #[serde(default)]
+    pub id: Option<String>,
     pub event: String,
     #[serde(default)]
     pub filter: Option<Value>,
@@ -97,6 +100,7 @@ pub struct SubscribeRequest {
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct UnsubscribeRequest {
-    pub id: String,
+    #[serde(default)]
+    pub id: Option<String>,
     pub subscription_id: String,
 }

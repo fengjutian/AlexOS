@@ -1,0 +1,7 @@
+{
+  "protocol": 1,
+  "id": "paths-1",
+  "source": "com.alex.full",
+  "method": "paths.dataDir",
+  "params": {}
+}

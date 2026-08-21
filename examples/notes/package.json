@@ -1,0 +1,10 @@
+{
+  "name": "alex-notes",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Service-mode notes demo for Alex OS. The shipped package includes a `node_modules` tree (built via `npm ci --omit=dev`) so the runtime never has to fetch deps over the network. Native modules like `better-sqlite3` must be built against the same Node ABI the host uses; build on the target machine or with `--target=<host-runtime>` when packaging.",
+  "dependencies": {
+    "express": "^4.21.2",
+    "better-sqlite3": "^11.7.0"
+  }
+}

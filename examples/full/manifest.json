@@ -1,0 +1,40 @@
+{
+  "schemaVersion": 1,
+  "id": "com.alex.full",
+  "name": "Alex Full",
+  "version": "0.1.0",
+  "frontend": {
+    "entry": "frontend/index.html"
+  },
+  "backend": {
+    "runtime": "node",
+    "entry": "backend/index.js"
+  },
+  "permissions": [
+    {
+      "name": "filesystem.read",
+      "paths": ["data"]
+    },
+    {
+      "name": "filesystem.write",
+      "paths": ["data"]
+    },
+    {
+      "name": "filesystem.watch",
+      "paths": ["data"]
+    },
+    {
+      "name": "filesystem.delete",
+      "paths": ["data"]
+    },
+    { "name": "dialog.open" },
+    { "name": "dialog.save" },
+    { "name": "storage" },
+    { "name": "paths" },
+    { "name": "window.manage" },
+    { "name": "notification.show" },
+    { "name": "process.spawn", "executables": ["tools/converter.exe"] },
+    { "name": "runtime.invoke" },
+    { "name": "runtime.manage" }
+  ]
+}

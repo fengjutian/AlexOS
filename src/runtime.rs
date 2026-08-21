@@ -1229,6 +1229,7 @@ mod service_runtime_tests {
     /// sees a `Ready` runtime with a real loopback port and a 64-char
     /// hex token, and that the backend actually serves /health.
     #[test]
+    #[serial_test::serial]
     fn runtime_handle_starts_service_hello_and_handshakes() {
         if discover_node().is_none() {
             eprintln!("skipping: Node.js not available");
@@ -1350,6 +1351,137 @@ mod service_runtime_tests {
         assert!(body["uptimeMs"].is_number());
 
         // Tear down so the next test can claim a fresh port.
+        let _ = handle.cancel();
+        let _ = handle.status(Duration::from_secs(2));
+    }
+
+    /// End-to-end: launch the `examples/notes` Express + SQLite
+    /// backend, then exercise the full CRUD surface through the
+    /// reverse proxy. The backend is expected to fall back to
+    /// `node:http` + `node:sqlite` if `express` / `better-sqlite3`
+    /// are not installed, so this test does not require `npm ci`
+    /// in the example directory; it just needs Node 22.5+ (which
+    /// is what `node:sqlite` requires). The test uses an isolated
+    /// data directory under a tempdir so the host-managed path
+    /// (`%LOCALAPPDATA%/AlexOS/apps/com.alex.notes/`) is not
+    /// touched.
+    #[test]
+    #[serial_test::serial]
+    fn runtime_handle_starts_notes_and_round_trips_crud() {
+        if discover_node().is_none() {
+            eprintln!("skipping: Node.js not available");
+            return;
+        }
+        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let package_root = workspace.join("examples").join("notes");
+        let backend_index = package_root.join("backend").join("index.js");
+        if !backend_index.is_file() {
+            eprintln!("skipping: {} not built", backend_index.display());
+            return;
+        }
+        let manifest_path = package_root.join("manifest.json");
+        let manifest_text = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let manifest: crate::manifest::AppManifest =
+            serde_json::from_str(&manifest_text).expect("parse manifest");
+        let backend = manifest.backend.expect("backend present");
+
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let data_dir = tmp.path().join("data");
+        let _log_dir = tmp.path().join("logs");
+        let spec = RuntimeSpec {
+            app_id: manifest.id.clone(),
+            package_root: package_root.clone(),
+            backend: backend.clone(),
+            data_dir: Some(data_dir.clone()),
+            cache_dir: None,
+        };
+        let handle = RuntimeHandle::start_with_spec(spec).expect("notes runtime starts");
+        let status = handle
+            .status(Duration::from_secs(2))
+            .expect("status query succeeds");
+        assert_eq!(status.state, RuntimeState::Ready);
+        let port = status.port.expect("notes reports a port");
+        let token = status.token.expect("notes reports a token");
+        let endpoint = ServiceEndpoint { port, token: token.clone() };
+
+        // POST a new note via the proxy.
+        let create = Request::post("alex://app/api/notes")
+            .header("content-type", "application/json")
+            .body(
+                br#"{"title":"first","body":"hello from the e2e test"}"#
+                    .to_vec(),
+            )
+            .expect("post request");
+        let created = crate::proxy::proxy_to_service(
+            &endpoint,
+            &manifest.id,
+            "/api/notes",
+            &create,
+        );
+        assert_eq!(created.status().as_u16(), 201, "create: {:?}", created.body());
+        let created_body: serde_json::Value =
+            serde_json::from_slice(created.body()).expect("create returns JSON");
+        let note_id = created_body["id"]
+            .as_u64()
+            .expect("create returns numeric id");
+        assert_eq!(created_body["title"], "first");
+
+        // List via the proxy and confirm the new note is there.
+        let list = Request::get("alex://app/api/notes")
+            .body(Vec::new())
+            .expect("get request");
+        let listed = crate::proxy::proxy_to_service(
+            &endpoint,
+            &manifest.id,
+            "/api/notes",
+            &list,
+        );
+        assert_eq!(listed.status().as_u16(), 200);
+        let listed_body: serde_json::Value =
+            serde_json::from_slice(listed.body()).expect("list returns JSON");
+        let notes = listed_body["notes"]
+            .as_array()
+            .expect("notes is an array");
+        assert!(
+            notes.iter().any(|n| n["id"].as_u64() == Some(note_id)),
+            "list missing id={note_id}: {listed_body}"
+        );
+
+        // DELETE the note and confirm the list shrinks.
+        let delete = Request::delete("alex://app/api/notes/9999")
+            .body(Vec::new())
+            .expect("delete request");
+        let gone = crate::proxy::proxy_to_service(
+            &endpoint,
+            &manifest.id,
+            "/api/notes/9999",
+            &delete,
+        );
+        assert_eq!(gone.status().as_u16(), 404);
+
+        let delete2 = Request::delete(format!("alex://app/api/notes/{note_id}"))
+            .body(Vec::new())
+            .expect("delete request");
+        let ok = crate::proxy::proxy_to_service(
+            &endpoint,
+            &manifest.id,
+            &format!("/api/notes/{note_id}"),
+            &delete2,
+        );
+        assert_eq!(ok.status().as_u16(), 204);
+
+        // The data directory must contain notes.db — the SQLite
+        // fallback writes the file even though we only ran a
+        // stdlib round-trip. (Express + better-sqlite3 does the
+        // same thing; this assertion verifies the host's
+        // auto-computed path was honoured.)
+        let db_file = data_dir.join("notes.db");
+        assert!(
+            db_file.is_file(),
+            "notes.db missing at {}",
+            db_file.display()
+        );
+
         let _ = handle.cancel();
         let _ = handle.status(Duration::from_secs(2));
     }

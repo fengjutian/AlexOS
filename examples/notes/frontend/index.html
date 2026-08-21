@@ -1,0 +1,42 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8">
+    <title>Alex Notes</title>
+    <link rel="stylesheet" href="app.css">
+  </head>
+  <body>
+    <header>
+      <h1>Alex Notes</h1>
+      <p id="subtitle">
+        Service-mode demo. The page talks to the Node backend through
+        the <code>alex://app/api/*</code> reverse proxy; the bound
+        loopback port is host-managed and never reaches the page.
+      </p>
+    </header>
+    <main>
+      <section>
+        <h2>New note</h2>
+        <form id="note-form">
+          <label>
+            Title
+            <input id="title" type="text" maxlength="200" required>
+          </label>
+          <label>
+            Body
+            <textarea id="body" rows="4" maxlength="10000" required></textarea>
+          </label>
+          <button type="submit">Add note</button>
+        </form>
+        <p id="form-status"></p>
+      </section>
+      <section>
+        <h2>Notes</h2>
+        <button id="refresh" type="button">Refresh</button>
+        <p id="status">Loading…</p>
+        <ul id="notes"></ul>
+      </section>
+    </main>
+    <script src="app.js"></script>
+  </body>
+</html>

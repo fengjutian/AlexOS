@@ -1,0 +1,7 @@
+{
+  "protocol": 1,
+  "id": "cap-1",
+  "source": "com.alex.full",
+  "method": "system.capabilities",
+  "params": {}
+}

@@ -1,0 +1,9 @@
+{
+  "protocol": 1,
+  "id": "storage-2",
+  "source": "com.alex.full",
+  "method": "storage.get",
+  "params": {
+    "key": "user.name"
+  }
+}

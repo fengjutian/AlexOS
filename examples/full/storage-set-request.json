@@ -1,0 +1,10 @@
+{
+  "protocol": 1,
+  "id": "storage-1",
+  "source": "com.alex.full",
+  "method": "storage.set",
+  "params": {
+    "key": "user.name",
+    "value": "Alex"
+  }
+}

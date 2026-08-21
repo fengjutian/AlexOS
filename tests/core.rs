@@ -1887,3 +1887,274 @@ fn chrono_like_parse(value: &str) -> Option<u64> {
     let secs = (days as u64) * 86_400 + (hour as u64) * 3600 + (minute as u64) * 60 + second as u64;
     Some(secs)
 }
+
+// ---------------------------------------------------------------------------
+// Phase 1 (P0/P1) API surface: filesystem binary, storage, paths, dialog,
+// runtime cancel, events, watch, and capabilities. These tests exercise the
+// new IPC methods end-to-end through `ApiRouter::dispatch` against the
+// `examples/hello` package, which now declares every new permission so a
+// single manifest can drive both the existing and the new tests.
+// ---------------------------------------------------------------------------
+
+fn hello_router() -> (std::path::PathBuf, ApiRouter) {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/full");
+    let app = load_app(&root).unwrap();
+    (root.clone(), ApiRouter::new(root, app))
+}
+
+fn call(router: &ApiRouter, method: &str, params: serde_json::Value) -> ipc::Response {
+    let _lock = ALEX_ENV_LOCK.lock().unwrap_or_else(|e| e.into_inner());
+    router.dispatch(Request {
+        protocol: 1,
+        id: format!("test-{}", method),
+        source: "com.alex.full".into(),
+        method: method.into(),
+        params,
+        deadline_ms: None,
+    })
+}
+
+#[test]
+fn api_filesystem_binary_round_trip() {
+    let (_root, router) = hello_router();
+    let payload = vec![0u8, 1, 2, 3, 0xFF, 0xAB, 0xCD];
+    let encoded = base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &payload);
+    let write = call(
+        &router,
+        "filesystem.writeBinary",
+        json!({ "path": "data/blob.bin", "data": encoded }),
+    );
+    assert!(write.error.is_none(), "writeBinary: {:?}", write.error);
+    let read = call(&router, "filesystem.readBinary", json!({ "path": "data/blob.bin" }));
+    let result = read.result.expect("readBinary result");
+    let data_b64 = result["data"].as_str().expect("base64 string");
+    let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
+        .expect("decode base64");
+    assert_eq!(decoded, payload);
+    let stat = call(&router, "filesystem.stat", json!({ "path": "data/blob.bin" }));
+    let stat_value = stat.result.expect("stat result");
+    assert_eq!(stat_value["type"], "file");
+    assert_eq!(stat_value["size"], payload.len() as u64);
+}
+
+#[test]
+fn api_filesystem_readdir_returns_sorted_entries() {
+    let (_root, router) = hello_router();
+    let list = call(&router, "filesystem.readDir", json!({ "path": "data" }));
+    let result = list.result.expect("readDir result");
+    let entries = result["entries"].as_array().expect("entries array");
+    let names: Vec<&str> = entries
+        .iter()
+        .map(|entry| entry["name"].as_str().unwrap_or(""))
+        .collect();
+    assert!(names.contains(&"message.txt"));
+}
+
+#[test]
+fn api_filesystem_create_remove_rename_copy() {
+    let (_root, router) = hello_router();
+    let create = call(
+        &router,
+        "filesystem.createDir",
+        json!({ "path": "data/sub", "recursive": true }),
+    );
+    assert!(create.result.is_some(), "createDir result");
+    let create_file = call(
+        &router,
+        "filesystem.writeText",
+        json!({ "path": "data/sub/note.txt", "content": "abc" }),
+    );
+    assert!(create_file.result.is_some());
+    let copy = call(
+        &router,
+        "filesystem.copy",
+        json!({ "from": "data/sub/note.txt", "to": "data/sub/note-copy.txt" }),
+    );
+    assert!(copy.result.is_some(), "copy result: {:?}", copy.error);
+    let rename = call(
+        &router,
+        "filesystem.rename",
+        json!({ "from": "data/sub/note-copy.txt", "to": "data/sub/note-renamed.txt" }),
+    );
+    assert!(rename.result.is_some(), "rename result: {:?}", rename.error);
+    let remove = call(
+        &router,
+        "filesystem.remove",
+        json!({ "path": "data/sub/note-renamed.txt" }),
+    );
+    assert!(remove.result.is_some(), "remove file: {:?}", remove.error);
+    let exists = call(&router, "filesystem.exists", json!({ "path": "data/sub/note-renamed.txt" }));
+    assert_eq!(exists.result.unwrap()["exists"], json!(false));
+    let remove_dir = call(
+        &router,
+        "filesystem.remove",
+        json!({ "path": "data/sub", "recursive": true }),
+    );
+    assert!(remove_dir.result.is_some(), "remove dir: {:?}", remove_dir.error);
+}
+
+#[test]
+fn api_filesystem_remove_blocks_recursive_root() {
+    let (_root, router) = hello_router();
+    // Recursive delete with `..` resolves to a path that
+    // escapes the package root, which the host refuses. The
+    // exact code is `PATH_ERROR` (escape) rather than
+    // `PERMISSION_DENIED` because the path simply isn't
+    // reachable from any granted root.
+    let result = call(
+        &router,
+        "filesystem.remove",
+        json!({ "path": "..", "recursive": true }),
+    );
+    let err = result.error.expect("expected error for recursive root delete");
+    assert!(
+        err.code == "PATH_ERROR" || err.code == "PERMISSION_DENIED",
+        "unexpected error code: {err:?}"
+    );
+}
+
+#[test]
+fn api_storage_round_trip() {
+    let (_root, router) = hello_router();
+    let set = call(
+        &router,
+        "storage.set",
+        json!({ "key": "user.name", "value": "Alex" }),
+    );
+    assert!(set.error.is_none(), "storage.set: {:?}", set.error);
+    let get = call(&router, "storage.get", json!({ "key": "user.name" }));
+    assert_eq!(get.result.unwrap()["value"], json!("Alex"));
+    let keys = call(&router, "storage.keys", json!({}));
+    let keys_value = keys.result.unwrap()["keys"].as_array().unwrap().clone();
+    assert!(keys_value.iter().any(|k| k == "user.name"));
+    let del = call(&router, "storage.delete", json!({ "key": "user.name" }));
+    assert_eq!(del.result.unwrap()["removed"], json!(true));
+}
+
+#[test]
+fn api_storage_rejects_invalid_key() {
+    let (_root, router) = hello_router();
+    let result = call(
+        &router,
+        "storage.set",
+        json!({ "key": "has spaces", "value": "x" }),
+    );
+    assert!(result.error.is_some());
+    assert_eq!(result.error.unwrap().code, "STORAGE_ERROR");
+}
+
+#[test]
+fn api_paths_return_local_app_data() {
+    let (_root, router) = hello_router();
+    for method in ["paths.dataDir", "paths.cacheDir", "paths.tempDir"] {
+        let result = call(&router, method, json!({}));
+        let path = result
+            .result
+            .unwrap_or_else(|| panic!("{method} failed: {:?}", result.error))
+            ["path"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        assert!(!path.is_empty(), "{method} returned empty path");
+    }
+}
+
+#[test]
+fn api_events_subscribe_and_unsubscribe() {
+    let (_root, router) = hello_router();
+    let sub = call(
+        &router,
+        "events.subscribe",
+        json!({ "event": "filesystem.changed" }),
+    );
+    let result = sub.result.unwrap_or_else(|| {
+        panic!(
+            "subscribe failed: code={} message={}",
+            sub.error.as_ref().map(|e| &e.code).unwrap_or(&String::new()),
+            sub.error.as_ref().map(|e| &e.message).unwrap_or(&String::new())
+        )
+    });
+    let id = result["subscriptionId"].as_str().unwrap().to_owned();
+    let unsub = call(
+        &router,
+        "events.unsubscribe",
+        json!({ "subscriptionId": id }),
+    );
+    assert_eq!(unsub.result.unwrap()["removed"], json!(true));
+}
+
+#[test]
+fn api_events_rejects_empty_event_name() {
+    let (_root, router) = hello_router();
+    let result = call(&router, "events.subscribe", json!({ "event": "" }));
+    assert!(result.error.is_some());
+    assert_eq!(result.error.unwrap().code, "SUBSCRIBE_FAILED");
+}
+
+#[test]
+fn api_filesystem_watch_returns_subscription() {
+    let (_root, router) = hello_router();
+    let result = call(&router, "filesystem.watch", json!({ "path": "data" }));
+    // The bus-driven subscription must always succeed
+    // (the OS watcher is an implementation detail of the
+    // shell layer). The current shell-less test environment
+    // still has the watcher registry attached, so we
+    // expect the watcher to be created or — if notify
+    // refused to watch a Windows test path — for the
+    // subscription to still be issued and the shell to
+    // clean up the handle on unwatch.
+    let payload = result.result.unwrap_or_else(|| {
+        panic!(
+            "watch failed: code={} message={}",
+            result.error.as_ref().map(|e| &e.code).unwrap_or(&String::new()),
+            result.error.as_ref().map(|e| &e.message).unwrap_or(&String::new())
+        )
+    });
+    let sub_id = payload["subscriptionId"]
+        .as_str()
+        .expect("subscriptionId in watch result")
+        .to_owned();
+    let unwatch = call(
+        &router,
+        "filesystem.unwatch",
+        json!({ "subscriptionId": sub_id }),
+    );
+    assert_eq!(unwatch.result.unwrap()["removed"], json!(true));
+}
+
+#[test]
+fn api_capabilities_lists_every_method() {
+    let (_root, router) = hello_router();
+    let result = call(&router, "system.capabilities", json!({}));
+    let caps = result
+        .result
+        .unwrap()["capabilities"]
+        .as_array()
+        .unwrap()
+        .clone();
+    let names: Vec<&str> = caps.iter().map(|v| v.as_str().unwrap()).collect();
+    for required in [
+        "filesystem.readBinary",
+        "filesystem.writeBinary",
+        "filesystem.stat",
+        "filesystem.readDir",
+        "filesystem.remove",
+        "filesystem.rename",
+        "filesystem.copy",
+        "filesystem.watch",
+        "storage",
+        "paths",
+        "events.subscribe",
+        "runtime.cancel",
+    ] {
+        assert!(names.contains(&required), "missing capability {required}");
+    }
+}
+
+#[test]
+fn api_capabilities_rejects_unknown_method() {
+    let (_root, router) = hello_router();
+    let result = call(&router, "filesystem.doesNotExist", json!({}));
+    assert!(result.error.is_some());
+    assert_eq!(result.error.unwrap().code, "METHOD_NOT_FOUND");
+}

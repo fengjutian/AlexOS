@@ -1,0 +1,20 @@
+{
+  "schemaVersion": 1,
+  "id": "com.alex.notes",
+  "name": "Alex Notes",
+  "version": "0.1.0",
+  "description": "Service-mode CRUD demo: a long-running Express + SQLite backend bound to a host-allocated loopback port. The frontend talks to it through the `alex://app/api/*` reverse proxy, so the page never sees the upstream port. Data persists in the host-managed data dir and survives restarts.",
+  "frontend": {
+    "entry": "frontend/index.html"
+  },
+  "backend": {
+    "runtime": "node",
+    "entry": "backend/index.js",
+    "mode": "service",
+    "healthCheck": {
+      "path": "/health",
+      "timeoutMs": 10000
+    }
+  },
+  "permissions": []
+}
