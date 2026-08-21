@@ -8,6 +8,7 @@ use std::{
 use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
 use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
 use rand_core::OsRng;
+use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -45,6 +46,10 @@ pub enum PackageError {
     Limit(String),
     #[error("package signature check failed: {0}")]
     Signature(String),
+    #[error("package version check failed: {0}")]
+    Version(String),
+    #[error("update package id {actual} does not match installed app {expected}")]
+    IdentityMismatch { expected: String, actual: String },
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -76,6 +81,15 @@ pub struct InstalledApp {
     pub name: String,
     pub version: String,
     pub path: PathBuf,
+}
+
+#[derive(Debug)]
+pub struct UpdateResult {
+    pub id: String,
+    pub previous_version: String,
+    pub version: String,
+    pub path: PathBuf,
+    pub backup_retained: bool,
 }
 
 pub fn create_project(destination: &Path, package_id: &str) -> Result<(), PackageError> {
@@ -354,6 +368,61 @@ pub fn signer_public_key(archive_path: &Path) -> Result<Option<String>, PackageE
         Err(zip::result::ZipError::FileNotFound) => Ok(None),
         Err(error) => Err(error.into()),
     }
+}
+
+pub fn update_verified(
+    archive_path: &Path,
+    install_root: &Path,
+    require_signature: bool,
+    trusted_key: Option<&str>,
+    allow_downgrade: bool,
+) -> Result<UpdateResult, PackageError> {
+    fs::create_dir_all(install_root)?;
+    let staging = tempfile::Builder::new()
+        .prefix(".alex-update-")
+        .tempdir_in(install_root)?;
+    let staged_path =
+        install_verified(archive_path, staging.path(), require_signature, trusted_key)?;
+    let next = load_app(&staged_path)?;
+    let destination = install_root.join(&next.id);
+    if !destination.is_dir() {
+        return Err(PackageError::NotInstalled(next.id));
+    }
+    let current = load_app(&destination)?;
+    if current.id != next.id {
+        return Err(PackageError::IdentityMismatch {
+            expected: current.id,
+            actual: next.id,
+        });
+    }
+    let current_version = Version::parse(&current.version)
+        .map_err(|error| PackageError::Version(format!("installed version: {error}")))?;
+    let next_version = Version::parse(&next.version)
+        .map_err(|error| PackageError::Version(format!("update version: {error}")))?;
+    if !allow_downgrade && next_version <= current_version {
+        return Err(PackageError::Version(format!(
+            "{} is not newer than {}",
+            next.version, current.version
+        )));
+    }
+
+    let backup = install_root.join(format!(".alex-backup-{}-{}", next.id, std::process::id()));
+    if backup.exists() {
+        return Err(PackageError::AlreadyInstalled(backup));
+    }
+    fs::rename(&destination, &backup)?;
+    if let Err(error) = fs::rename(&staged_path, &destination) {
+        let _ = fs::rename(&backup, &destination);
+        return Err(PackageError::Io(error));
+    }
+    let backup_retained = fs::remove_dir_all(&backup).is_err();
+    Ok(UpdateResult {
+        id: next.id,
+        previous_version: current.version,
+        version: next.version,
+        path: destination,
+        backup_retained,
+    })
 }
 
 pub fn list_installed(install_root: &Path) -> Result<Vec<InstalledApp>, PackageError> {

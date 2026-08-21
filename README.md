@@ -26,6 +26,7 @@ cargo run -- pack examples/hello target/hello-signed.alex --sign target/publishe
 cargo run -- install target/hello-signed.alex --root target/apps --require-signature
 cargo run -- trust add "Example Publisher" "PUBLIC_KEY" --root target/trust
 cargo run -- install target/hello-signed.alex --root target/apps --trust-root target/trust
+cargo run -- update target/hello-v2.alex --root target/apps --trust-root target/trust
 cargo run -- install target/hello.alex --root target/apps
 cargo run -- list --root target/apps
 cargo run -- uninstall com.alex.hello --root target/apps

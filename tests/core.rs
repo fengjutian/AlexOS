@@ -313,3 +313,38 @@ fn publisher_trust_store_persists_and_matches_signed_packages() {
     assert!(reopened.remove(&fingerprint).unwrap());
     assert!(reopened.require(&public_key).is_err());
 }
+
+#[test]
+fn application_updates_are_atomic_and_reject_downgrades() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = workspace.path().join("update_app");
+    let apps = workspace.path().join("apps");
+    let version_one = workspace.path().join("v1.alex");
+    let version_two = workspace.path().join("v2.alex");
+    package::create_project(&source, "com.alex.update_test").unwrap();
+    package::pack(&source, &version_one).unwrap();
+    package::install(&version_one, &apps).unwrap();
+
+    let manifest_path = source.join("manifest.json");
+    let mut manifest: serde_json::Value =
+        serde_json::from_slice(&fs::read(&manifest_path).unwrap()).unwrap();
+    manifest["version"] = json!("0.2.0");
+    fs::write(
+        &manifest_path,
+        format!("{}\n", serde_json::to_string_pretty(&manifest).unwrap()),
+    )
+    .unwrap();
+    package::pack(&source, &version_two).unwrap();
+
+    let result = package::update_verified(&version_two, &apps, false, None, false).unwrap();
+    assert_eq!(result.previous_version, "0.1.0");
+    assert_eq!(result.version, "0.2.0");
+    assert!(!result.backup_retained);
+    assert_eq!(load_app(&result.path).unwrap().version, "0.2.0");
+
+    let error = package::update_verified(&version_one, &apps, false, None, false)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("not newer"));
+    assert_eq!(load_app(&result.path).unwrap().version, "0.2.0");
+}

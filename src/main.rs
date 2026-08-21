@@ -62,6 +62,20 @@ enum Commands {
         #[arg(long)]
         trust_root: Option<PathBuf>,
     },
+    /// Atomically replace an installed app with a verified .alex package.
+    Update {
+        archive: PathBuf,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        require_signature: bool,
+        #[arg(long)]
+        trusted_key: Option<String>,
+        #[arg(long)]
+        trust_root: Option<PathBuf>,
+        #[arg(long)]
+        allow_downgrade: bool,
+    },
     /// List valid applications in an installation directory.
     List {
         #[arg(long)]
@@ -230,6 +244,33 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             )?;
             println!("installed {}", installed.display());
         }
+        Commands::Update {
+            archive,
+            root,
+            require_signature,
+            trusted_key,
+            trust_root,
+            allow_downgrade,
+        } => {
+            let trusted_key = resolve_trusted_key(&archive, trusted_key, trust_root)?;
+            let updated = package::update_verified(
+                &archive,
+                &root,
+                require_signature || trusted_key.is_some(),
+                trusted_key.as_deref(),
+                allow_downgrade,
+            )?;
+            println!(
+                "updated {} {} -> {} ({})",
+                updated.id,
+                updated.previous_version,
+                updated.version,
+                updated.path.display()
+            );
+            if updated.backup_retained {
+                eprintln!("warning: the old-version backup could not be removed");
+            }
+        }
         Commands::List { root } => {
             let applications = package::list_installed(&root)?;
             if applications.is_empty() {
@@ -303,4 +344,19 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         },
     }
     Ok(())
+}
+
+fn resolve_trusted_key(
+    archive: &std::path::Path,
+    explicit: Option<String>,
+    trust_root: Option<PathBuf>,
+) -> Result<Option<String>, Box<dyn std::error::Error>> {
+    if let Some(trust_root) = trust_root {
+        let signer = package::signer_public_key(archive)?
+            .ok_or_else(|| package::PackageError::Signature("package is unsigned".into()))?;
+        TrustStore::open(&trust_root)?.require(&signer)?;
+        Ok(Some(signer))
+    } else {
+        Ok(explicit)
+    }
 }
