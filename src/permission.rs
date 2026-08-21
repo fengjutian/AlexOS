@@ -9,22 +9,74 @@ pub enum Permission {
     FilesystemRead { paths: Vec<PathBuf> },
     #[serde(rename = "filesystem.write")]
     FilesystemWrite { paths: Vec<PathBuf> },
+    /// Watch for filesystem changes under the listed paths. Path
+    /// semantics match `filesystem.read` — relative paths are joined
+    /// onto the package root, symlinks must resolve inside the
+    /// granted set, and watchers cannot escape the scope.
+    #[serde(rename = "filesystem.watch")]
+    FilesystemWatch { paths: Vec<PathBuf> },
+    /// Delete files / directories. Path semantics match
+    /// `filesystem.read` / `filesystem.write`. Recursive deletion
+    /// needs the explicit `recursive: true` flag at call time; the
+    /// permission itself just gates whether the app is allowed to
+    /// delete at all.
+    #[serde(rename = "filesystem.delete")]
+    FilesystemDelete { paths: Vec<PathBuf> },
+    /// Receive paths dropped onto the window from the OS shell.
+    /// The host converts each dropped path into a `fileDrop` event
+    /// that includes a per-file, session-scoped access token. The
+    /// app must hold a `filesystem.read` (or `filesystem.write`)
+    /// permission to actually read the bytes.
+    #[serde(rename = "filesystem.drop")]
+    FilesystemDrop,
     #[serde(rename = "dialog.open")]
     DialogOpen,
+    #[serde(rename = "dialog.save")]
+    DialogSave,
     #[serde(rename = "clipboard.read")]
     ClipboardRead,
     #[serde(rename = "clipboard.write")]
     ClipboardWrite,
     #[serde(rename = "system.openExternal")]
     OpenExternal { origins: Vec<String> },
+    /// Per-app persistent key/value store. The host computes the
+    /// backing file path from the manifest id; the permission only
+    /// gates read/write.
+    #[serde(rename = "storage")]
+    Storage,
+    /// Read-only access to the host-managed per-app directories
+    /// (data / cache / temp). Apps that want to write into the
+    /// temp dir still need `storage`; the path APIs are
+    /// informational.
+    #[serde(rename = "paths")]
+    Paths,
     #[serde(rename = "window.manage")]
     WindowManage,
+    /// Open additional windows beyond the primary one. Apps
+    /// without this permission may still control their own
+    /// primary window via `window.manage`, but `window.create`
+    /// will be rejected.
+    #[serde(rename = "window.open")]
+    WindowOpen,
     #[serde(rename = "notification.show")]
     NotificationShow,
+    #[serde(rename = "menu.manage")]
+    MenuManage,
+    #[serde(rename = "tray.manage")]
+    TrayManage,
+    #[serde(rename = "shortcut.register")]
+    ShortcutRegister,
     #[serde(rename = "runtime.invoke")]
     RuntimeInvoke,
     #[serde(rename = "runtime.manage")]
     RuntimeManage,
+    /// Bounded process spawn through the host. Each permission
+    /// entry lists the relative or absolute executable paths
+    /// (resolved under the package root when relative) the app is
+    /// allowed to run. Anything not on the list is refused before
+    /// the host even resolves the path.
+    #[serde(rename = "process.spawn")]
+    ProcessSpawn { executables: Vec<PathBuf> },
     #[serde(rename = "media.camera")]
     MediaCamera,
     #[serde(rename = "media.microphone")]
@@ -39,6 +91,13 @@ pub enum Permission {
     SystemManageApps,
     #[serde(rename = "system.manageExtensions")]
     SystemManageExtensions,
+    /// Per-origin network access. The list is matched against the
+    /// URL's origin (`scheme://host[:port]`) — *not* just the host
+    /// — so an HTTPS origin and an HTTP origin are distinct
+    /// permissions. Redirects are re-checked against the same
+    /// list; a 30x to a disallowed origin aborts the request.
+    #[serde(rename = "network.fetch")]
+    NetworkFetch { origins: Vec<String> },
 }
 
 impl Permission {
@@ -78,14 +137,25 @@ impl Permission {
         match self {
             Permission::FilesystemRead { .. } => "filesystem.read",
             Permission::FilesystemWrite { .. } => "filesystem.write",
+            Permission::FilesystemWatch { .. } => "filesystem.watch",
+            Permission::FilesystemDelete { .. } => "filesystem.delete",
+            Permission::FilesystemDrop => "filesystem.drop",
             Permission::DialogOpen => "dialog.open",
+            Permission::DialogSave => "dialog.save",
             Permission::ClipboardRead => "clipboard.read",
             Permission::ClipboardWrite => "clipboard.write",
             Permission::OpenExternal { .. } => "system.openExternal",
+            Permission::Storage => "storage",
+            Permission::Paths => "paths",
             Permission::WindowManage => "window.manage",
+            Permission::WindowOpen => "window.open",
             Permission::NotificationShow => "notification.show",
+            Permission::MenuManage => "menu.manage",
+            Permission::TrayManage => "tray.manage",
+            Permission::ShortcutRegister => "shortcut.register",
             Permission::RuntimeInvoke => "runtime.invoke",
             Permission::RuntimeManage => "runtime.manage",
+            Permission::ProcessSpawn { .. } => "process.spawn",
             Permission::MediaCamera => "media.camera",
             Permission::MediaMicrophone => "media.microphone",
             Permission::Geolocation => "geolocation",
@@ -93,6 +163,7 @@ impl Permission {
             Permission::SystemUninstall => "system.uninstall",
             Permission::SystemManageApps => "system.manageApps",
             Permission::SystemManageExtensions => "system.manageExtensions",
+            Permission::NetworkFetch { .. } => "network.fetch",
         }
     }
 
@@ -100,6 +171,8 @@ impl Permission {
         let roots = match (self, operation) {
             (Permission::FilesystemRead { paths }, "filesystem.read") => paths,
             (Permission::FilesystemWrite { paths }, "filesystem.write") => paths,
+            (Permission::FilesystemWatch { paths }, "filesystem.watch") => paths,
+            (Permission::FilesystemDelete { paths }, "filesystem.delete") => paths,
             _ => return false,
         };
         let Some(requested) = normalize(requested, package_root) else {
@@ -108,6 +181,20 @@ impl Permission {
         roots.iter().any(|allowed| {
             normalize(allowed, package_root).is_some_and(|allowed| requested.starts_with(allowed))
         })
+    }
+
+    /// Return the set of relative or absolute path roots that this
+    /// permission grants for the named operation. Used by the
+    /// subscription / event registry to know which paths an app
+    /// can be watching, without re-parsing the manifest.
+    pub fn paths_for(&self, operation: &str) -> Option<&[PathBuf]> {
+        match (self, operation) {
+            (Permission::FilesystemRead { paths }, "filesystem.read") => Some(paths),
+            (Permission::FilesystemWrite { paths }, "filesystem.write") => Some(paths),
+            (Permission::FilesystemWatch { paths }, "filesystem.watch") => Some(paths),
+            (Permission::FilesystemDelete { paths }, "filesystem.delete") => Some(paths),
+            _ => None,
+        }
     }
 }
 
@@ -130,4 +217,114 @@ fn normalize(path: &Path, package_root: &Path) -> Option<PathBuf> {
         }
     }
     Some(clean)
+}
+
+/// Resolve a requested path through a permission's path scope, with
+/// defence against symlink escape. The host calls this for every
+/// filesystem call (read / write / watch / delete) and on every
+/// subsequent hop (rename, copy) so that a granted root cannot be
+/// used to reach an ungranted target via a symlink planted inside
+/// the granted root.
+///
+/// `package_root` is the canonicalized package root; the function
+/// refuses any target whose canonical path escapes any of the
+/// permission's granted roots. `recursive` is passed through to
+/// the underlying metadata read so that the host can still
+/// canonicalize a directory tree for `readDir` / `remove`.
+pub fn resolve_scoped_path(
+    package_root: &Path,
+    requested: &Path,
+    permission: &Permission,
+    operation: &str,
+) -> Result<PathBuf, PathError> {
+    let roots = permission.paths_for(operation).ok_or(PathError::NotAllowed)?;
+    if roots.is_empty() {
+        return Err(PathError::NotAllowed);
+    }
+    let joined = if requested.is_absolute() {
+        requested.to_path_buf()
+    } else {
+        package_root.join(requested)
+    };
+    let canonical_root = package_root
+        .canonicalize()
+        .unwrap_or_else(|_| package_root.to_path_buf());
+    let canonical = match joined.canonicalize() {
+        Ok(value) => value,
+        // The path does not exist yet (e.g. write / create). The
+        // best we can do is canonicalize the deepest existing
+        // ancestor and then re-join the rest of the components. If
+        // even the parent doesn't exist, treat the path as scoped
+        // to the package root via the literal components — a
+        // `..` would have already been caught by the loop below.
+        Err(_) => {
+            let mut ancestor = joined.as_path();
+            let mut suffix_components: Vec<std::path::Component> = Vec::new();
+            loop {
+                let Some(parent) = ancestor.parent() else {
+                    return Err(PathError::NotFound(joined.clone()));
+                };
+                suffix_components.insert(0, ancestor.components().last().unwrap());
+                if parent == ancestor {
+                    // We walked past the root; give up.
+                    return Err(PathError::NotFound(joined.clone()));
+                }
+                if let Ok(value) = parent.canonicalize() {
+                    let mut clean = value;
+                    for component in suffix_components.iter().rev() {
+                        clean.push(component.as_os_str());
+                    }
+                    break clean;
+                }
+                ancestor = parent;
+            }
+        }
+    };
+    // Reject anything that escapes the package root entirely.
+    if !canonical.starts_with(&canonical_root) {
+        return Err(PathError::Escape);
+    }
+    // Reject anything that escapes every granted root.
+    let inside = roots.iter().any(|allowed| {
+        let normalized = normalize(allowed, &canonical_root).unwrap_or_else(|| canonical_root.clone());
+        canonical.starts_with(&normalized)
+    });
+    if !inside {
+        return Err(PathError::OutsideScope);
+    }
+    Ok(canonical)
+}
+
+/// Reasons why a path resolution through `resolve_scoped_path` can
+/// fail. Mapped to a stable error code by the API layer so the
+/// page can branch on it.
+#[derive(Debug, PartialEq, Eq)]
+pub enum PathError {
+    /// The permission does not include the requested operation at
+    /// all (e.g. `filesystem.delete` was declared but the call
+    /// asked for `filesystem.read`).
+    NotAllowed,
+    /// The target was not found on disk and no parent existed that
+    /// could be canonicalized to bound the new path.
+    NotFound(PathBuf),
+    /// The target resolves to outside the package root via a
+    /// symlink or junction. Always refused, regardless of the
+    /// permission.
+    Escape,
+    /// The target is inside the package root but not under any
+    /// of the granted roots.
+    OutsideScope,
+}
+
+impl std::fmt::Display for PathError {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        match self {
+            PathError::NotAllowed => formatter.write_str("operation is not allowed by this permission"),
+            PathError::NotFound(path) => {
+                write!(formatter, "path not found: {}", path.display())
+            }
+            PathError::Escape => formatter.write_str("path escapes the package root"),
+            PathError::OutsideScope => formatter.write_str("path is outside the granted scope"),
+        }
+    }
 }

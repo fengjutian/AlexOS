@@ -107,7 +107,6 @@ pub fn proxy_to_service(
     let _ = stream.set_write_timeout(Some(READ_WRITE_TIMEOUT));
 
     let head = build_upstream_request(endpoint, app_id, request_path, request);
-    eprintln!("[proxy] sending {} bytes: {}", head.len(), String::from_utf8_lossy(&head));
     if let Err(error) = stream.write_all(&head) {
         return text_response(
             StatusCode::BAD_GATEWAY,
@@ -193,7 +192,7 @@ fn parse_upstream_response(raw: &[u8]) -> Response<Cow<'static, [u8]>> {
     let mut lines = head_str.split("\r\n");
     let status_line = lines.next().unwrap_or("");
     let status_code: u16 = status_line
-        .splitn(3, ' ')
+        .split(' ')
         .nth(1)
         .and_then(|s| s.parse().ok())
         .unwrap_or(502);
