@@ -124,6 +124,9 @@ impl ErrorCode {
             }
             ContainerError::Runtime(_) => Self::BackendSpawn,
             ContainerError::StopTimeout(_) => Self::Internal,
+            // Any future launch step that lands before spawn
+            // becomes a generic "we failed to start" error.
+            ContainerError::Launch { .. } => Self::BackendSpawn,
         }
     }
 }

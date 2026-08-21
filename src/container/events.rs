@@ -94,7 +94,7 @@ pub enum EventLogError {
         path: PathBuf,
         source: std::io::Error,
     },
-    #[error("event line could not be serialised: {source}")]
+    #[error("event line could not be serialised: {0}")]
     Serialise(#[from] serde_json::Error),
     #[error("event file {path} could not be written: {source}")]
     Write {

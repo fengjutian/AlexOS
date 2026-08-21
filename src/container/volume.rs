@@ -38,6 +38,7 @@ impl ContainerDirs {
         app_version: &str,
     ) -> Self {
         let instance_root = data_root.join("containers").join(instance_id);
+        let events = instance_root.join("events");
         let app_dirs: AppDirs = AppDirs {
             data: instance_root.join("data"),
             cache: instance_root.join("cache"),
@@ -54,7 +55,7 @@ impl ContainerDirs {
             cache: app_dirs.cache,
             logs: app_dirs.logs,
             runtime: app_dirs.runtime,
-            events: instance_root.join("events"),
+            events,
             application_root,
         }
     }

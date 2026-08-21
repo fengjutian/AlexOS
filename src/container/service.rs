@@ -370,7 +370,7 @@ impl ContainerService for DefaultContainerService {
         entry.state.endpoint = None;
         entry.state.updated_at = iso8601_now();
         store.save(entry.state.clone())?;
-        self.record_event_locked(entry, EventKind::StopRequested, "stop requested");
+        self.record_event_locked(entry, EventKind::StopRequested, "stop requested".to_string());
         Ok(ContainerView::from_state(
             &entry.state,
             entry.instance_dir.clone(),

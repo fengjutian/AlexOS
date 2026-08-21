@@ -31,12 +31,12 @@ impl ContainerFilter {
             return false;
         }
         if let Some(observed) = self.observed
-            && state.observed != *observed
+            && state.observed != observed
         {
             return false;
         }
         if let Some(desired) = self.desired
-            && state.desired != *desired
+            && state.desired != desired
         {
             return false;
         }

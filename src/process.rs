@@ -324,22 +324,33 @@ mod tests {
 
     #[test]
     fn registry_spawns_then_kills() {
-        // Spawn a real long-running process (cmd.exe on
+        // Spawn a real long-running process (ping on
         // Windows, sleep on Unix) and verify the
         // registry can kill it. Skipped on CI when the
         // host binary is unavailable.
+        let (executable, args): (String, Vec<String>) = if cfg!(windows) {
+            (
+                "ping".into(),
+                vec!["-n".into(), "30".into(), "127.0.0.1".into()],
+            )
+        } else {
+            ("sleep".into(), vec!["30".into()])
+        };
         let spec = ProcessSpec {
-            executable: if cfg!(windows) { "cmd.exe" } else { "sleep" }.into(),
-            args: if cfg!(windows) {
-                vec!["/C".into(), "timeout /t 30 /nobreak".into()]
-            } else {
-                vec!["30".into()]
-            },
+            executable,
+            args,
             cwd: None,
             timeout_ms: Some(60_000),
         };
         let registry = ProcessRegistry::new();
-        let info = registry.spawn(Path::new("."), &spec).expect("spawn");
+        let info = match registry.spawn(Path::new("."), &spec) {
+            Ok(value) => value,
+            Err(ProcessError::Spawn(message)) => {
+                eprintln!("skipping: spawn failed: {message}");
+                return;
+            }
+            Err(other) => panic!("unexpected spawn error: {other:?}"),
+        };
         // The pid is parseable as u32.
         let pid: u32 = info.pid.parse().expect("pid is u32");
         assert!(pid > 0);

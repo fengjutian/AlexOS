@@ -210,7 +210,7 @@ impl NetworkPolicy {
     /// `true` for policies the host can honour on Windows in 0.2.
     /// L1/L2 both accept loopback listening; L1 only audits outbound
     /// rules and that is what "audit-only" below means.
-    pub const fn is_audit_only(self) -> bool {
+    pub fn is_audit_only(&self) -> bool {
         // In 0.2 the host records outbound policy in the event log
         // but does not block the connection. L2 will flip this to
         // false once AppContainer enforcement lands.
