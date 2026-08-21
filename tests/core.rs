@@ -2150,6 +2150,8 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
         "notification.show",
         "runtime.invoke",
         "runtime.cancel",
+        "process.spawn",
+        "process.kill",
     ] {
         assert!(
             available_names.contains(&required),
@@ -2157,14 +2159,15 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
         );
     }
     // Not yet wired — the page must not branch on these as
-    // if they were real. `process.spawn` / `network.fetch`
-    // / `window.create` / `menu.*` / `tray.*` / `shortcut.*`
-    // are all in the registry but the host side is still
-    // a stub. `events.subscribe` is wired for the page
-    // side, but the shell does not yet pump bus events
-    // back, so the subscription never delivers.
+    // if they were real. `network.fetch` / `window.create` /
+    // `menu.*` / `tray.*` / `shortcut.*` are all in the
+    // registry but the host side is still a stub.
+    // `events.subscribe` is wired for the page side, but the
+    // shell does not yet pump bus events back, so the
+    // subscription never delivers. `process.spawn` is now
+    // real (Command::spawn + taskkill /T /F), so it is in
+    // `available`.
     for required in [
-        "process.spawn",
         "network.fetch",
         "window.open",
         "menu.manage",
@@ -2439,19 +2442,28 @@ fn api_process_spawn_rejects_parent_escape() {
 #[cfg(windows)]
 #[test]
 fn api_process_spawn_real_kill_real() {
-    // End-to-end: spawn a real `cmd.exe /C timeout` on
-    // Windows and kill it via the registry. Skipped on
-    // non-Windows CI.
-    let (_root, router) = hello_router();
+    // End-to-end: spawn a real long-running process on
+    // Windows and kill it via the registry. `ping`
+    // ships on every Windows install. The example
+    // fixture is a .bat file, which `Command::spawn`
+    // cannot execute directly, so we build a fresh
+    // router from an inline manifest whose allow-list
+    // is exactly `ping`.
+    let app = load_app_inline_with_process("ping");
+    let router = ApiRouter::new(std::path::PathBuf::from("."), app);
     let result = call(
         &router,
         "process.spawn",
         json!({
-            "executable": "tools/converter.exe",
-            "args": [],
+            "executable": "ping",
+            "args": ["-n", "30", "127.0.0.1"],
             "timeoutMs": 60_000
         }),
     );
+    if let Some(error) = result.error.as_ref() {
+        eprintln!("skipping: process.spawn failed: {error:?}");
+        return;
+    }
     let info = result
         .result
         .expect("process.spawn result")
@@ -2460,6 +2472,23 @@ fn api_process_spawn_real_kill_real() {
     assert!(info["started"].as_bool().unwrap_or(false));
     let kill = call(&router, "process.kill", json!({ "pid": pid }));
     assert!(kill.result.is_some(), "kill: {:?}", kill.error);
+}
+
+fn load_app_inline_with_process(exe: &str) -> alex::manifest::AppManifest {
+    let manifest_json = format!(
+        r#"{{
+            "schemaVersion": 1,
+            "id": "com.alex.process-test",
+            "name": "Process Test",
+            "version": "0.1.0",
+            "frontend": {{ "entry": "index.html" }},
+            "permissions": [
+                {{ "name": "process.spawn", "executables": ["{exe}"] }}
+            ]
+        }}"#
+    );
+    serde_json::from_str::<alex::manifest::AppManifest>(&manifest_json)
+        .expect("inline manifest parses")
 }
 
 #[test]

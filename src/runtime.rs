@@ -905,7 +905,7 @@ impl RuntimeProcess {
                     .as_ref()
                     .map(|e| e.token.as_str())
                     .unwrap_or("");
-                match probe_health(reported_port, token, health) {
+                match probe_health(reported_port, health) {
                     Ok(()) => {}
                     Err(error) => {
                         let _ = child.kill();
