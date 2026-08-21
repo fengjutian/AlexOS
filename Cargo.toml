@@ -1,0 +1,15 @@
+[package]
+name = "alex"
+version = "0.1.0"
+edition = "2024"
+description = "Alex OS desktop application runtime prototype"
+license = "MIT"
+
+[dependencies]
+clap = { version = "4.6.1", features = ["derive"] }
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+thiserror = "2.0.20"
+
+[dev-dependencies]
+tempfile = "3.23.0"
