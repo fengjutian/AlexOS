@@ -18,6 +18,7 @@ use crate::{
     menu_tray::{MenuStore, MenuTemplate, TraySpec},
     native::{self, DialogFilter, HostCommand, NativeHost, OpenDialogSpec, SaveDialogSpec},
     permission::Permission,
+    process::{ProcessRegistry, ProcessSpec},
     runtime::{RuntimeError, RuntimeHandle},
     storage::AppStorage,
     watcher::WatcherRegistry,
@@ -47,6 +48,7 @@ pub struct ApiRouter {
     watcher_registry: Option<Arc<WatcherRegistry>>,
     windows: Arc<WindowRegistry>,
     menu_store: Arc<MenuStore>,
+    process_registry: Arc<ProcessRegistry>,
     inflight: Arc<Mutex<InflightTracker>>,
 }
 
@@ -94,6 +96,7 @@ impl ApiRouter {
         let watcher_registry = WatcherRegistry::new(Arc::clone(&bus));
         let windows = WindowRegistry::new();
         let menu_store = MenuStore::new();
+        let process_registry = ProcessRegistry::new();
         Self {
             package_root,
             manifest,
@@ -107,6 +110,7 @@ impl ApiRouter {
             watcher_registry: Some(watcher_registry),
             windows,
             menu_store,
+            process_registry,
             inflight: Arc::new(Mutex::new(InflightTracker::default())),
         }
     }
@@ -150,6 +154,7 @@ impl ApiRouter {
         self.file_tokens.revoke_all(&self.manifest.id);
         self.windows.drop_app(&self.manifest.id);
         self.menu_store.drop_app(&self.manifest.id);
+        self.process_registry.clear();
         let mut tracker = self.inflight.lock().expect("inflight lock poisoned");
         for token in tracker.pending.values() {
             token.cancel();
@@ -1084,6 +1089,11 @@ impl ApiRouter {
             "runtime.invoke",
             "runtime.manage",
             "runtime.cancel",
+            // Process spawn is real: Command::spawn on
+            // Unix, taskkill /T /F on Windows. The
+            // registry tracks pids and reaps on exit.
+            "process.spawn",
+            "process.kill",
         ];
         let experimental: &[&str] = &[
             // Watchers exist (notify-based registry) but
@@ -1104,7 +1114,6 @@ impl ApiRouter {
             "menu.manage",
             "tray.manage",
             "shortcut.register",
-            "process.spawn",
             "network.fetch",
             "events.subscribe",
             "events.unsubscribe",
@@ -1558,10 +1567,9 @@ impl ApiRouter {
             return Err(("INVALID_PARAMS", "executable is empty".into()));
         }
         let executable_path = PathBuf::from(&params.executable);
-        // Refuse paths that escape the package root or that
-        // contain `..` components. The host re-checks
-        // canonicalization at exec time, so a TOCTOU race
-        // cannot smuggle an unauthorized binary in.
+        // Refuse paths that contain `..` components. The
+        // allow-list is enforced against the resolved
+        // (package-root-joined) form below.
         if executable_path
             .components()
             .any(|c| matches!(c, std::path::Component::ParentDir))
@@ -1571,15 +1579,20 @@ impl ApiRouter {
                 "executable path may not contain '..'".into(),
             ));
         }
-        // Manifest must list the executable explicitly.
+        let resolved = if executable_path.is_absolute() {
+            executable_path.clone()
+        } else {
+            self.package_root.join(&executable_path)
+        };
         let allowed = self.manifest.permissions.iter().any(|permission| {
             matches!(permission, Permission::ProcessSpawn { executables } if executables.iter().any(|allowed| {
                 let allowed_path = PathBuf::from(allowed);
-                if allowed_path.is_absolute() {
-                    allowed_path == executable_path
+                let resolved_allowed = if allowed_path.is_absolute() {
+                    allowed_path
                 } else {
-                    self.package_root.join(&allowed_path) == self.package_root.join(&executable_path)
-                }
+                    self.package_root.join(&allowed_path)
+                };
+                resolved_allowed == resolved
             }))
         });
         if !allowed {
@@ -1588,19 +1601,27 @@ impl ApiRouter {
                 "executable is not on the process.spawn allow-list".into(),
             ));
         }
-        // We deliberately do not actually spawn the
-        // process here in the 0.2 P1 slice — the Windows
-        // Job Object integration is the next milestone.
-        // For now we record the request so the host can
-        // surface it via diagnostics and return a stable
-        // shape.
-        let pid = format!("p-{:x}", now_ms());
-        Ok(json!({
-            "pid": pid,
-            "executable": params.executable,
-            "args": params.args,
-            "started": true,
-        }))
+        // Build the spec and hand it to the real
+        // registry. The registry spawns a `Command` child
+        // and starts a reaper thread that drops the
+        // entry when the child exits.
+        let spec = ProcessSpec {
+            executable: params.executable.clone(),
+            args: params.args.clone(),
+            cwd: params.cwd.clone(),
+            timeout_ms: params.timeout_ms,
+        };
+        self.process_registry
+            .spawn(&self.package_root, &spec)
+            .map(|info| {
+                json!({
+                    "pid": info.pid,
+                    "executable": params.executable,
+                    "args": params.args,
+                    "started": true,
+                })
+            })
+            .map_err(|error| ("PROCESS_ERROR", error.to_string()))
     }
 
     fn process_kill(&self, params: &Value) -> ApiResult {
@@ -1612,12 +1633,10 @@ impl ApiRouter {
             .get("pid")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ("INVALID_PARAMS", "missing `pid`".to_owned()))?;
-        // Stub: a future slice will look the pid up in a
-        // Job-Object-backed handle table and call
-        // `TerminateJobObject`. Today no real process was
-        // ever spawned, so the kill is a no-op.
-        let _ = pid;
-        Ok(json!({ "killed": true }))
+        self.process_registry
+            .kill(pid)
+            .map(|_| json!({ "killed": true }))
+            .map_err(|error| ("PROCESS_ERROR", error.to_string()))
     }
 
     // ------------------------------------------------------------------

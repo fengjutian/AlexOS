@@ -160,9 +160,16 @@ pub enum RuntimeError {
     NoFreeServicePort,
 }
 
-/// Snapshot of a runtime slot. `mode`, `port`, `token`, and `ready`
-/// are populated when the backend is running in `service` mode; for
+/// Snapshot of a runtime slot. `mode`, `port`, and `ready` are
+/// populated when the backend is running in `service` mode; for
 /// legacy `rpc` backends they hold their defaults.
+///
+/// The runtime token is **never** serialized here — it is a host-only
+/// shared secret used to authenticate the reverse-proxy, and exposing
+/// it to the WebView (via `runtime.status` JSON) would let any
+/// installed app hijack the loopback backend. Callers that need the
+/// token must keep the [`ServiceEndpoint`] they got back from
+/// `start_with_spec` and use it directly.
 #[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeStatus {
@@ -170,6 +177,7 @@ pub struct RuntimeStatus {
     pub pid: Option<u32>,
     pub mode: BackendMode,
     pub port: Option<u16>,
+    #[serde(skip)]
     pub token: Option<String>,
     pub ready: bool,
     pub restart_count: u32,
@@ -778,17 +786,40 @@ impl RuntimeProcess {
         }
         let mut endpoint: Option<ServiceEndpoint> = None;
         if matches!(spec.backend.mode, BackendMode::Service) {
-            let port = allocate_service_port()?;
+            // Honour a manifest-declared `backend.port` if it's free
+            // and inside the service range; otherwise fall back to a
+            // dynamic allocation. A pre-declared port lets operators
+            // pin a well-known loopback port for an app that needs a
+            // stable upstream (e.g. a sidecar cache that other tools
+            // already point at).
+            let port = if let Some(requested) = spec.backend.port {
+                if !(SERVICE_PORT_RANGE_START..=SERVICE_PORT_RANGE_END).contains(&requested) {
+                    return Err(RuntimeError::Protocol(format!(
+                        "manifest port {requested} is outside the service range \
+                         {SERVICE_PORT_RANGE_START}..={SERVICE_PORT_RANGE_END}"
+                    )));
+                }
+                if TcpListener::bind(("127.0.0.1", requested)).is_err() {
+                    return Err(RuntimeError::Protocol(format!(
+                        "manifest port {requested} is not free"
+                    )));
+                }
+                requested
+            } else {
+                allocate_service_port()?
+            };
             let token = generate_runtime_token();
             command.env("ALEX_SERVICE_PORT", port.to_string());
             command.env("ALEX_RUNTIME_TOKEN", &token);
             endpoint = Some(ServiceEndpoint { port, token });
         }
-        // Service mode: don't wire stdin (host never writes) and let
-        // stdout go to the log collector. RPC mode: keep both
-        // ends of the JSON Lines channel under host control.
+        // Service mode: no stdin (host never writes). Stdout is
+        // piped to the log collector so plain `console.log` output
+        // shows up in the App Manager's runtime view. RPC mode
+        // keeps both ends of the JSON Lines channel under host
+        // control.
         let (stdin_cfg, stdout_cfg) = match spec.backend.mode {
-            BackendMode::Service => (Stdio::null(), Stdio::null()),
+            BackendMode::Service => (Stdio::null(), Stdio::piped()),
             BackendMode::Rpc => (Stdio::piped(), Stdio::piped()),
         };
         let mut child = command
@@ -805,7 +836,7 @@ impl RuntimeProcess {
         let stdout = child.stdout.take().map(BufReader::new);
 
         let (ready_tx, ready_rx) = if endpoint.is_some() {
-            let (tx, rx) = mpsc::sync_channel::<()>(1);
+            let (tx, rx) = mpsc::sync_channel::<u16>(1);
             (Some(tx), Some(rx))
         } else {
             (None, None)
@@ -822,17 +853,55 @@ impl RuntimeProcess {
         thread::spawn(move || {
             stderr_pump(stderr, logs_for_thread, ready_tx, flag_for_thread);
         });
+        // Service mode also gets a stdout drain. RPC mode keeps
+        // stdout in `Self::stdout` for the JSON Lines read loop.
+        if matches!(spec.backend.mode, BackendMode::Service) {
+            if let Some(stdout_pipe) = child.stdout.take() {
+                let logs_for_stdout = Arc::clone(&logs);
+                thread::spawn(move || {
+                    stdout_pump(stdout_pipe, logs_for_stdout);
+                });
+            }
+        }
 
         if let Some(rx) = ready_rx {
-            match rx.recv_timeout(READY_HANDSHAKE_TIMEOUT) {
-                Ok(()) => {
-                    // ready_flag is set inside stderr_pump before it
-                    // sends; nothing more to do here.
-                }
+            let reported_port = match rx.recv_timeout(READY_HANDSHAKE_TIMEOUT) {
+                Ok(value) => value,
                 Err(_) => {
                     let _ = child.kill();
                     let _ = child.wait();
                     return Err(RuntimeError::ServiceReadyTimeout(READY_HANDSHAKE_TIMEOUT));
+                }
+            };
+            // The child must report the port the host actually
+            // allocated. A mismatch means the backend is either
+            // buggy or actively malicious (claiming a different
+            // port would let it collude with an attacker on a port
+            // the host is about to wire to the proxy).
+            let allocated = endpoint.as_ref().map(|e| e.port);
+            if Some(reported_port) != allocated {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(RuntimeError::Protocol(format!(
+                    "service ready handshake reported port {reported_port} but host allocated {allocated:?}"
+                )));
+            }
+            // Run the optional health probe. The contract is:
+            //   - if `healthCheck` is absent, declare Ready on the
+            //     handshake alone (matches the documented default
+            //     of `/health` but the backend may not implement
+            //     it; we don't fail here).
+            //   - if `healthCheck` is present, do an HTTP GET on
+            //     `127.0.0.1:<port><path>` and require a 2xx
+            //     response within `timeoutMs`.
+            if let Some(health) = &spec.backend.health_check {
+                match probe_health(reported_port, health) {
+                    Ok(()) => {}
+                    Err(error) => {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                        return Err(error);
+                    }
                 }
             }
         }
@@ -968,7 +1037,7 @@ impl Drop for RuntimeProcess {
 fn stderr_pump(
     stderr: std::process::ChildStderr,
     logs: Arc<Mutex<VecDeque<String>>>,
-    ready_tx: Option<mpsc::SyncSender<()>>,
+    ready_tx: Option<mpsc::SyncSender<u16>>,
     ready_flag: Option<Arc<AtomicBool>>,
 ) {
     let mut reader = BufReader::new(stderr);
@@ -980,20 +1049,22 @@ fn stderr_pump(
             Ok(0) => break,
             Ok(_) => {
                 let trimmed = line.trim_end();
-                if !signalled && try_parse_ready_signal(trimmed) {
+                if !signalled
+                    && let Some(port) = try_parse_ready_signal(trimmed)
+                {
                     signalled = true;
                     if let Some(flag) = &ready_flag {
                         flag.store(true, Ordering::Release);
                     }
                     if let Some(tx) = &ready_tx {
-                        let _ = tx.send(());
+                        let _ = tx.send(port);
                     }
                 }
                 if let Ok(mut buffer) = logs.lock() {
                     if buffer.len() == MAX_LOG_LINES {
                         buffer.pop_front();
                     }
-                    buffer.push_back(trimmed.to_string());
+                    buffer.push_back(format!("[stderr] {trimmed}"));
                 }
             }
             Err(_) => break,
@@ -1007,15 +1078,29 @@ fn stderr_pump(
     }
 }
 
-/// True if `line` parses as a JSON object whose `type` field equals
-/// `alex.ready`. Anything else — non-JSON, JSON without `type`,
-/// JSON with a different `type` — is treated as a normal log line.
-fn try_parse_ready_signal(line: &str) -> bool {
-    serde_json::from_str::<Value>(line)
-        .ok()
-        .and_then(|value| value.get("type").and_then(|t| t.as_str()).map(String::from))
-        .as_deref()
-        == Some("alex.ready")
+/// Parse a backend's `alex.ready` handshake line. Returns the
+/// `port` the child claims to be listening on when the line is
+/// well-formed; returns `None` for any other shape so the line is
+/// treated as a normal log entry instead.
+///
+/// Handshake contract (see `docs/status-and-roadmap.md` §2.4):
+///   - must be a JSON object
+///   - `type` must be the exact string `"alex.ready"`
+///   - `port` must be present as a non-zero integer
+///
+/// Earlier versions only checked the `type` field, which let a
+/// child report any port (or none) and still pass the handshake.
+fn try_parse_ready_signal(line: &str) -> Option<u16> {
+    let value = serde_json::from_str::<Value>(line).ok()?;
+    if value.get("type").and_then(|t| t.as_str())? != "alex.ready" {
+        return None;
+    }
+    let port = value.get("port").and_then(|p| p.as_u64())?;
+    let port = u16::try_from(port).ok()?;
+    if port == 0 {
+        return None;
+    }
+    Some(port)
 }
 
 /// Find the first port in the service range that the OS is willing to
@@ -1034,24 +1119,26 @@ fn allocate_service_port() -> Result<u16, RuntimeError> {
 
 /// Generate a per-launch shared secret. The secret never leaves the
 /// host; the host injects it as `ALEX_RUNTIME_TOKEN` and later
-/// authenticates the reverse-proxy with it. Entropy comes from PID,
-/// nanosecond clock and a process-local counter — sufficient for a
-/// loopback-only token that the host mints itself. Not suitable for
-/// use as a credential toward external services.
+/// authenticates the reverse-proxy with it.
+///
+/// Entropy comes from the operating-system CSPRNG via the `getrandom`
+/// crate (which is already a transitive dep of `rand_core` and
+/// `ed25519-dalek`). 32 random bytes are encoded as 64 lowercase hex
+/// characters. The token authenticates the host against a
+/// loopback-only service backend, so the security requirement is that
+/// an external attacker cannot guess it from a small sample — which
+/// PID+nanos+counter mixing does not provide, and which the CSPRNG
+/// does.
 fn generate_runtime_token() -> String {
-    static COUNTER: AtomicU64 = AtomicU64::new(0);
-    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
-    let pid = std::process::id() as u64;
-    let now = SystemTime::now()
-        .duration_since(UNIX_EPOCH)
-        .map(|d| d.as_nanos() as u64)
-        .unwrap_or(0);
     let mut bytes = [0u8; 32];
-    bytes[..8].copy_from_slice(&pid.to_le_bytes());
-    bytes[8..16].copy_from_slice(&now.to_le_bytes());
-    bytes[16..24].copy_from_slice(&n.to_le_bytes());
-    let mix = pid ^ now ^ n;
-    bytes[24..32].copy_from_slice(&mix.to_le_bytes());
+    // `getrandom` is re-exported transitively. We use the crate
+    // directly to avoid pulling a new dependency into [dependencies].
+    if let Err(error) = getrandom::getrandom(&mut bytes) {
+        // CSPRNG failure is fatal: we cannot mint a usable token.
+        // Fail loudly so the supervisor does not silently downgrade
+        // security.
+        panic!("runtime token: CSPRNG unavailable: {error}");
+    }
     let mut hex = String::with_capacity(64);
     for byte in bytes {
         let _ = write!(hex, "{:02x}", byte);
@@ -1351,23 +1438,40 @@ mod service_runtime_tests {
 
     #[test]
     fn ready_signal_parser_accepts_canonical_line() {
-        assert!(try_parse_ready_signal(r#"{"type":"alex.ready","port":28000}"#));
+        assert_eq!(
+            try_parse_ready_signal(r#"{"type":"alex.ready","port":28000}"#),
+            Some(28000)
+        );
     }
 
     #[test]
-    fn ready_signal_parser_ignores_unrelated_json() {
-        assert!(!try_parse_ready_signal(r#"{"type":"http.request","method":"GET"}"#));
-        assert!(!try_parse_ready_signal(r#"{"port":28000}"#));
+    fn ready_signal_parser_rejects_wrong_type() {
+        assert_eq!(try_parse_ready_signal(r#"{"type":"http.request","method":"GET"}"#), None);
         // A non-string `type` (e.g. number) must not be mistaken for
         // the ready marker; only the exact string counts.
-        assert!(!try_parse_ready_signal(r#"{"type":1}"#));
+        assert_eq!(try_parse_ready_signal(r#"{"type":1}"#), None);
+    }
+
+    #[test]
+    fn ready_signal_parser_rejects_missing_or_zero_port() {
+        assert_eq!(try_parse_ready_signal(r#"{"type":"alex.ready"}"#), None);
+        assert_eq!(
+            try_parse_ready_signal(r#"{"type":"alex.ready","port":0}"#),
+            None
+        );
+        // Port must be a number, not a string. This blocks a child
+        // that tries to pass an obviously-wrong value like "1".
+        assert_eq!(
+            try_parse_ready_signal(r#"{"type":"alex.ready","port":"1"}"#),
+            None
+        );
     }
 
     #[test]
     fn ready_signal_parser_ignores_non_json() {
-        assert!(!try_parse_ready_signal(""));
-        assert!(!try_parse_ready_signal("listening on 28000"));
-        assert!(!try_parse_ready_signal("{not json"));
+        assert_eq!(try_parse_ready_signal(""), None);
+        assert_eq!(try_parse_ready_signal("listening on 28000"), None);
+        assert_eq!(try_parse_ready_signal("{not json"), None);
     }
 
     /// End-to-end: spawn a real Node child that writes the ready

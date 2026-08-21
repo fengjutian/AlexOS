@@ -2422,6 +2422,47 @@ fn api_process_spawn_requires_allow_list() {
 }
 
 #[test]
+fn api_process_spawn_rejects_parent_escape() {
+    let (_root, router) = hello_router();
+    // Even if the binary were on the allow-list, a
+    // `..` component must be rejected before any
+    // filesystem lookup happens.
+    let result = call(
+        &router,
+        "process.spawn",
+        json!({ "executable": "tools/../../bin/evil.exe" }),
+    );
+    let err = result.error.expect("expected error for parent escape");
+    assert_eq!(err.code, "OPERATION_FORBIDDEN");
+}
+
+#[cfg(windows)]
+#[test]
+fn api_process_spawn_real_kill_real() {
+    // End-to-end: spawn a real `cmd.exe /C timeout` on
+    // Windows and kill it via the registry. Skipped on
+    // non-Windows CI.
+    let (_root, router) = hello_router();
+    let result = call(
+        &router,
+        "process.spawn",
+        json!({
+            "executable": "tools/converter.exe",
+            "args": [],
+            "timeoutMs": 60_000
+        }),
+    );
+    let info = result
+        .result
+        .expect("process.spawn result")
+        .clone();
+    let pid = info["pid"].as_str().expect("pid string").to_owned();
+    assert!(info["started"].as_bool().unwrap_or(false));
+    let kill = call(&router, "process.kill", json!({ "pid": pid }));
+    assert!(kill.result.is_some(), "kill: {:?}", kill.error);
+}
+
+#[test]
 fn api_process_kill_requires_pid_field() {
     let (_root, router) = hello_router();
     // The stub used to silently swallow missing fields.

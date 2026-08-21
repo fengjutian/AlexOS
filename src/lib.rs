@@ -12,6 +12,7 @@ pub mod native;
 pub mod package;
 pub mod permission;
 pub mod plugin;
+pub mod process;
 pub mod proxy;
 pub mod runtime;
 pub mod shell;
@@ -19,6 +20,7 @@ pub mod storage;
 pub mod trust;
 pub mod update;
 pub mod watcher;
+pub mod window_manager;
 pub mod windows;
 
 use std::path::{Path, PathBuf};
