@@ -10,6 +10,21 @@ const listEl = document.querySelector("#apps");
 const extStatusEl = document.querySelector("#extension-status");
 const extListEl = document.querySelector("#extensions");
 const refreshBtn = document.querySelector("#refresh");
+const installBtn = document.querySelector("#install");
+const browseBtn = document.querySelector("#browse");
+const packagePathInput = document.querySelector("#package-path");
+const installStatusEl = document.querySelector("#install-status");
+
+// Host-side `SignatureState` (kebab-case) → UI label. Anything
+// outside this set falls back to `unsigned` so a future host
+// addition does not crash the UI.
+const SIGNATURE_LABELS = {
+  unsigned: "unsigned",
+  "signed-trusted": "trusted",
+  "signed-untrusted": "untrusted",
+  "invalid-signature": "invalid sig",
+};
+const SIGNATURE_STATES = new Set(Object.keys(SIGNATURE_LABELS));
 
 function setStatus(text, isError) {
   statusEl.textContent = text;
@@ -32,6 +47,24 @@ function makeAppRow(app) {
   const version = document.createElement("span");
   version.className = "version";
   version.textContent = `v${app.version}`;
+  const sig = document.createElement("span");
+  sig.className = "sig-badge";
+  const state = SIGNATURE_STATES.has(app.signatureState)
+    ? app.signatureState
+    : "unsigned";
+  sig.dataset.state = state;
+  sig.textContent = SIGNATURE_LABELS[state];
+  if (state === "invalid-signature") {
+    sig.title =
+      "Signature metadata is malformed — treat this package as untrusted.";
+  } else if (state === "signed-untrusted") {
+    sig.title =
+      "Signed by a key that is not in the trust store. Review before granting permissions.";
+  } else if (state === "signed-trusted") {
+    sig.title = "Signed by a publisher in the trust store.";
+  } else {
+    sig.title = "No signature metadata in the package.";
+  }
   const actions = document.createElement("span");
   actions.className = "actions";
   const uninstallBtn = document.createElement("button");
@@ -39,7 +72,7 @@ function makeAppRow(app) {
   uninstallBtn.textContent = "Uninstall";
   uninstallBtn.addEventListener("click", () => uninstallApp(app, uninstallBtn));
   actions.appendChild(uninstallBtn);
-  li.append(name, id, version, actions);
+  li.append(name, id, version, sig, actions);
   return li;
 }
 
@@ -138,6 +171,102 @@ refreshBtn.addEventListener("click", () => {
   loadApps();
   loadExtensions();
 });
+
+function setInstallStatus(text, isError) {
+  installStatusEl.textContent = text;
+  installStatusEl.classList.toggle("error", Boolean(isError));
+}
+
+async function installPackage() {
+  const raw = packagePathInput.value.trim();
+  if (!raw) {
+    setInstallStatus("Enter a path to a .alex archive first.", true);
+    packagePathInput.focus();
+    return;
+  }
+  if (!/\.alex$/i.test(raw)) {
+    setInstallStatus(
+      "Path does not end in .alex — make sure you selected the right file.",
+      true,
+    );
+    return;
+  }
+  // The host's `system.install` defaults to requiring a signature
+  // (H2). The user is installing a local archive, so the package
+  // is most likely unsigned — ask for an explicit confirmation
+  // before we send `requireSignature: false` and bypass the policy.
+  // This is the "operator-confirmed unsigned install" path the
+  // H2 default carves out.
+  const confirmed = window.confirm(
+    `Install the package at:\n\n${raw}\n\n` +
+      "The host requires a signed package by default. " +
+      "Proceed WITHOUT signature verification?\n\n" +
+      'Choose "Cancel" to abort and verify the publisher first.',
+  );
+  if (!confirmed) {
+    return;
+  }
+  installBtn.disabled = true;
+  setInstallStatus("Installing…");
+  try {
+    const result = await window.alex.invoke("system.install", {
+      packagePath: raw,
+      requireSignature: false,
+    });
+    setInstallStatus(
+      `Installed: ${result?.installed ?? raw} — refreshing the list.`,
+    );
+    // Keep the path in the input so the user can install the same
+    // archive again (e.g. after a failed install where they want to
+    // retry) without retyping. Clear only the install-error path
+    // below on a confirmed failure.
+    await loadApps();
+  } catch (error) {
+    setInstallStatus(
+      `Install failed: ${error?.message ?? error}`,
+      true,
+    );
+  } finally {
+    installBtn.disabled = false;
+  }
+}
+
+installBtn.addEventListener("click", installPackage);
+browseBtn.addEventListener("click", browseForPackage);
+packagePathInput.addEventListener("keydown", (event) => {
+  if (event.key === "Enter") {
+    event.preventDefault();
+    installPackage();
+  }
+});
+
+async function browseForPackage() {
+  // The host's `dialog.openFile` IPC is the only way a WebView can
+  // surface a real native file picker — WebView2's `<input
+  // type="file">` cannot return absolute paths. The manager
+  // plugin's manifest declares `dialog.open` so this is a regular
+  // permission-checked call.
+  browseBtn.disabled = true;
+  setInstallStatus("");
+  try {
+    const result = await window.alex.invoke("dialog.openFile", {
+      title: "Select an .alex package",
+    });
+    if (result?.path) {
+      packagePathInput.value = result.path;
+      setInstallStatus("");
+    }
+    // result === { path: null } is the user clicking "Cancel" on
+    // the picker — leave the previous value alone and stay quiet.
+  } catch (error) {
+    setInstallStatus(
+      `Could not open the file picker: ${error?.message ?? error}`,
+      true,
+    );
+  } finally {
+    browseBtn.disabled = false;
+  }
+}
 
 // `window.alex.invoke` is unavailable until the host has injected
 // the bridge. Wait for it before loading the first batch.

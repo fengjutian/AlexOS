@@ -9,6 +9,7 @@ pub mod native;
 pub mod package;
 pub mod permission;
 pub mod plugin;
+pub mod proxy;
 pub mod runtime;
 pub mod shell;
 pub mod trust;

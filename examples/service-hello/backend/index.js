@@ -20,6 +20,8 @@
 // No npm dependencies — only `node:http` from the standard library.
 
 const http = require("node:http");
+const fs = require("node:fs");
+const path = require("node:path");
 
 const port = Number(process.env.ALEX_SERVICE_PORT);
 if (!Number.isInteger(port) || port <= 0 || port > 65535) {
@@ -78,6 +80,43 @@ server.listen(port, "127.0.0.1", () => {
   process.stderr.write(
     `service-hello: listening on 127.0.0.1:${port} (token=${token.slice(0, 8)}…)\n`
   );
+
+  // Persist a per-launch record under the host-managed data dir so
+  // a subsequent launch (or a later app version) can see the prior
+  // boot. The host auto-created the directory before launching us;
+  // we treat write failures as non-fatal — the app should still
+  // serve HTTP even if the disk is full.
+  const dataDir = process.env.ALEX_APP_DATA_DIR;
+  if (dataDir) {
+    try {
+      fs.mkdirSync(dataDir, { recursive: true });
+      const boot = {
+        appId,
+        pid: process.pid,
+        port,
+        tokenPrefix: token.slice(0, 8),
+        startedAt: new Date().toISOString(),
+      };
+      fs.writeFileSync(
+        path.join(dataDir, "boot.json"),
+        JSON.stringify(boot, null, 2),
+      );
+    } catch (err) {
+      process.stderr.write(`service-hello: data dir write failed: ${err.message}\n`);
+    }
+  }
+  const logDir = process.env.ALEX_APP_LOG_DIR;
+  if (logDir) {
+    try {
+      fs.mkdirSync(logDir, { recursive: true });
+      fs.appendFileSync(
+        path.join(logDir, "backend.log"),
+        `${new Date().toISOString()} service-hello: started pid=${process.pid} port=${port}\n`,
+      );
+    } catch (err) {
+      process.stderr.write(`service-hello: log write failed: ${err.message}\n`);
+    }
+  }
 });
 
 const shutdown = (signal) => {

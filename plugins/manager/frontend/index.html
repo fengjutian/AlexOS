@@ -12,6 +12,25 @@
     </header>
     <main>
       <section>
+        <h2>Install a package</h2>
+        <p class="hint">
+          Enter the absolute path of a <code>.alex</code> archive on
+          this machine. Signed packages are installed as-is; unsigned
+          packages require an extra confirmation.
+        </p>
+        <div class="install-row">
+          <input
+            id="package-path"
+            type="text"
+            spellcheck="false"
+            placeholder="C:\path\to\package.alex"
+          />
+          <button id="browse" type="button">Browse…</button>
+          <button id="install" type="button">Install</button>
+        </div>
+        <p id="install-status"></p>
+      </section>
+      <section>
         <h2>Installed applications</h2>
         <button id="refresh" type="button">Refresh</button>
         <p id="status">Loading…</p>

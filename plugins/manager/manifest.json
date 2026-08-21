@@ -19,7 +19,8 @@
     { "name": "system.manageApps" },
     { "name": "system.install" },
     { "name": "system.uninstall" },
-    { "name": "system.manageExtensions" }
+    { "name": "system.manageExtensions" },
+    { "name": "dialog.open" }
   ],
   "extensionPoints": [
     { "kind": "command", "id": "manager.refresh", "label": "Refresh apps", "entry": "managerRefresh" },

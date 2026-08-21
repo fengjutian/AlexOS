@@ -114,6 +114,41 @@ li .actions {
   color: #b1271b;
 }
 
+.hint {
+  color: #5d5d63;
+  font-size: 0.85rem;
+  margin: 0 0 0.5rem;
+}
+
+.install-row {
+  display: flex;
+  gap: 0.5rem;
+  align-items: stretch;
+}
+
+.install-row input {
+  flex: 1 1 auto;
+  font: inherit;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.85rem;
+  padding: 0.4rem 0.55rem;
+  border: 1px solid #b8b8bf;
+  border-radius: 4px;
+  background: #ffffff;
+}
+
+.install-row input:focus {
+  outline: 2px solid #5a82d6;
+  outline-offset: -1px;
+}
+
+#install-status {
+  color: #5d5d63;
+  font-size: 0.85rem;
+  margin: 0.5rem 0 0;
+  min-height: 1.2em;
+}
+
 .sig-badge {
   display: inline-block;
   font-size: 0.72rem;

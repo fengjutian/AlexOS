@@ -31,6 +31,36 @@ const SERVICE_PORT_RANGE_END: u16 = 28999;
 /// line before declaring startup failure and killing the process.
 const READY_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
 const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
+/// Longer grace window for service-mode backends: they typically
+/// need to flush SQLite, drain in-flight HTTP, and close the
+/// listener. After this the host escalates to a process-tree kill.
+const SERVICE_SHUTDOWN_GRACE: Duration = Duration::from_secs(5);
+
+/// Exponential backoff schedule for crash-restart. Index 0 is the
+/// first restart (no delay), index 5+ caps at 16s. Combined with
+/// the manifest's `restart.maxRetries` (default 5) this gives a
+/// host policy of "give up after ~31s of consecutive failures".
+const BACKOFF_SCHEDULE: &[Duration] = &[
+    Duration::from_millis(0),
+    Duration::from_secs(1),
+    Duration::from_secs(2),
+    Duration::from_secs(4),
+    Duration::from_secs(8),
+    Duration::from_secs(16),
+];
+
+fn backoff_for(restart_count: u32) -> Duration {
+    let idx = (restart_count as usize).min(BACKOFF_SCHEDULE.len() - 1);
+    BACKOFF_SCHEDULE[idx]
+}
+
+fn shutdown_grace_for(endpoint: &Option<ServiceEndpoint>) -> Duration {
+    if endpoint.is_some() {
+        SERVICE_SHUTDOWN_GRACE
+    } else {
+        SHUTDOWN_GRACE
+    }
+}
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -100,9 +130,9 @@ pub struct ServiceEndpoint {
 
 /// Per-launch configuration for [`RuntimeHandle::start_with_spec`].
 /// `app_id` is injected as `ALEX_APP_ID`. `data_dir` / `cache_dir`
-/// are injected as `ALEX_APP_DATA_DIR` / `ALEX_APP_CACHE_DIR` and
-/// are where the user-data lives; service-mode backends additionally
-/// receive `ALEX_SERVICE_PORT` and `ALEX_RUNTIME_TOKEN`.
+/// override the host's auto-computed paths; the host always manages
+/// `log_dir`. Service-mode backends additionally receive
+/// `ALEX_SERVICE_PORT` and `ALEX_RUNTIME_TOKEN`.
 #[derive(Debug, Clone)]
 pub struct RuntimeSpec {
     pub app_id: String,
@@ -110,6 +140,91 @@ pub struct RuntimeSpec {
     pub backend: Backend,
     pub data_dir: Option<PathBuf>,
     pub cache_dir: Option<PathBuf>,
+}
+
+/// Per-app directories under the host's local data root. The host
+/// creates the tree on every start; backends are expected to write
+/// their persistent state under `data` and append-only logs under
+/// `logs`. The `runtime` slot is reserved for host-managed state
+/// (PID file, port file, last-ready timestamp) and is not injected
+/// into the backend.
+///
+/// ```text
+/// %LOCALAPPDATA%/AlexOS/apps/<app_id>/
+///   data/      user data (SQLite, settings)
+///   cache/     regenerable caches
+///   logs/      backend stdout/stderr mirror
+///   runtime/   host-managed state (PID, port, token)
+/// ```
+#[derive(Debug, Clone)]
+pub struct AppDirs {
+    pub data: PathBuf,
+    pub cache: PathBuf,
+    pub logs: PathBuf,
+    pub runtime: PathBuf,
+}
+
+impl AppDirs {
+    /// Create the directory tree. Idempotent — safe to call on every
+    /// launch; existing files and directories are left alone.
+    pub fn ensure(&self) -> std::io::Result<()> {
+        std::fs::create_dir_all(&self.data)?;
+        std::fs::create_dir_all(&self.cache)?;
+        std::fs::create_dir_all(&self.logs)?;
+        std::fs::create_dir_all(&self.runtime)?;
+        Ok(())
+    }
+}
+
+/// Resolve the per-app directories for `app_id`. Returns an error if
+/// `app_id` is not a reverse-domain identifier (defence in depth —
+/// the manifest is also validated upstream) or the local data root
+/// cannot be determined on this platform.
+pub fn compute_app_dirs(app_id: &str) -> Result<AppDirs, RuntimeError> {
+    if !valid_id(app_id) {
+        return Err(RuntimeError::Protocol(format!(
+            "invalid app id {app_id:?}; expected reverse-domain"
+        )));
+    }
+    let base = data_local_dir()
+        .ok_or_else(|| {
+            RuntimeError::Protocol("local data directory is not available".into())
+        })?
+        .join("AlexOS")
+        .join("apps")
+        .join(app_id);
+    Ok(AppDirs {
+        data: base.join("data"),
+        cache: base.join("cache"),
+        logs: base.join("logs"),
+        runtime: base.join("runtime"),
+    })
+}
+
+fn data_local_dir() -> Option<PathBuf> {
+    #[cfg(windows)]
+    {
+        std::env::var_os("LOCALAPPDATA").map(PathBuf::from)
+    }
+    #[cfg(not(windows))]
+    {
+        std::env::var_os("XDG_DATA_HOME")
+            .map(PathBuf::from)
+            .or_else(|| {
+                std::env::var_os("HOME")
+                    .map(|h| PathBuf::from(h).join(".local").join("share"))
+            })
+    }
+}
+
+fn valid_id(id: &str) -> bool {
+    id.contains('.')
+        && id.split('.').all(|part| {
+            !part.is_empty()
+                && part
+                    .chars()
+                    .all(|c| c.is_ascii_alphanumeric() || c == '-' || c == '_')
+        })
 }
 
 pub struct RuntimeProcess {
@@ -188,17 +303,60 @@ impl RuntimeHandle {
 
     /// Spawn a backend and start the supervisor thread. The handle
     /// returns once the process is up; for service mode it returns
-    /// only after the `alex.ready` handshake completes.
-    pub fn start_with_spec(spec: RuntimeSpec) -> Result<Self, RuntimeError> {
+    /// only after the `alex.ready` handshake completes. The host
+    /// auto-computes the per-app data / cache / log directories
+    /// under `%LOCALAPPDATA%/AlexOS/apps/<app_id>/`; explicit
+    /// `data_dir` / `cache_dir` on the spec take precedence.
+    pub fn start_with_spec(mut spec: RuntimeSpec) -> Result<Self, RuntimeError> {
+        // Legacy callers (and tests) pass a placeholder `app_id`
+        // like `"<unknown>"` that the host-side `valid_id` check
+        // rejects. For that path we skip the auto-managed
+        // `%LOCALAPPDATA%/AlexOS/apps/<id>/` tree entirely and
+        // let the runtime inherit the host's cwd — preserving
+        // 0.1 behaviour. Real launches always go through
+        // `RuntimeSupervisor` with the manifest id, which is a
+        // valid reverse-domain identifier.
+        let auto_dirs = if valid_id(&spec.app_id) {
+            let dirs = compute_app_dirs(&spec.app_id)?;
+            dirs.ensure().map_err(RuntimeError::Io)?;
+            Some(dirs)
+        } else {
+            None
+        };
+        if let Some(ref dirs) = auto_dirs {
+            if spec.data_dir.is_none() {
+                spec.data_dir = Some(dirs.data.clone());
+            }
+            if spec.cache_dir.is_none() {
+                spec.cache_dir = Some(dirs.cache.clone());
+            }
+        }
+        let log_dir = auto_dirs.as_ref().map(|dirs| dirs.logs.clone());
         let logs = Arc::new(Mutex::new(VecDeque::new()));
-        let (process, endpoint) =
-            RuntimeProcess::start_with_spec(&spec, Arc::clone(&logs))?;
+        let (process, endpoint) = RuntimeProcess::start_with_spec(
+            &spec,
+            spec.data_dir.as_deref(),
+            spec.cache_dir.as_deref(),
+            log_dir.as_deref(),
+            Arc::clone(&logs),
+        )?;
         let pid = Arc::new(AtomicU32::new(process.id()));
         let (sender, receiver) = mpsc::channel();
         let manager_pid = Arc::clone(&pid);
+        let log_dir_for_thread = log_dir.unwrap_or_default();
         thread::Builder::new()
             .name("alex-runtime-manager".into())
-            .spawn(move || runtime_manager(spec, process, endpoint, logs, manager_pid, receiver))
+            .spawn(move || {
+                runtime_manager(
+                    spec,
+                    process,
+                    endpoint,
+                    log_dir_for_thread,
+                    logs,
+                    manager_pid,
+                    receiver,
+                )
+            })
             .expect("runtime manager thread should start");
         Ok(Self { sender, pid })
     }
@@ -270,14 +428,16 @@ fn runtime_manager(
     spec: RuntimeSpec,
     initial: RuntimeProcess,
     initial_endpoint: Option<ServiceEndpoint>,
+    log_dir: PathBuf,
     logs: Arc<Mutex<VecDeque<String>>>,
     current_pid: Arc<AtomicU32>,
     rx: mpsc::Receiver<RuntimeCommand>,
 ) {
     let mut process = Some(initial);
     let mut endpoint = initial_endpoint;
-    let mut restart_count = 0;
+    let mut restart_count: u32 = 0;
     let mut last_error: Option<String> = None;
+    let mut last_exit_at: Option<Instant> = None;
     while let Ok(command) = rx.recv() {
         match command {
             RuntimeCommand::Invoke {
@@ -287,7 +447,14 @@ fn runtime_manager(
                 response,
             } => {
                 if process.is_none() {
-                    match RuntimeProcess::start_with_spec(&spec, Arc::clone(&logs)) {
+                    sleep_for_backoff(restart_count, &last_exit_at);
+                    match RuntimeProcess::start_with_spec(
+                        &spec,
+                        spec.data_dir.as_deref(),
+                        spec.cache_dir.as_deref(),
+                        Some(&log_dir),
+                        Arc::clone(&logs),
+                    ) {
                         Ok((value, new_endpoint)) => {
                             current_pid.store(value.id(), Ordering::Release);
                             process = Some(value);
@@ -325,11 +492,12 @@ fn runtime_manager(
                     last_error = result.as_ref().err().cloned();
                     process = None;
                     current_pid.store(0, Ordering::Release);
+                    last_exit_at = Some(Instant::now());
                 }
                 let _ = response.send(result);
             }
             RuntimeCommand::Status { response } => {
-                refresh(&mut process, &mut last_error);
+                refresh(&mut process, &mut last_error, &mut last_exit_at);
                 current_pid.store(
                     process.as_ref().map(RuntimeProcess::id).unwrap_or(0),
                     Ordering::Release,
@@ -344,45 +512,68 @@ fn runtime_manager(
             }
             RuntimeCommand::Restart { response } => {
                 if let Some(mut value) = process.take() {
-                    let _ = value.stop_gracefully(SHUTDOWN_GRACE);
+                    let _ = value.stop_gracefully(shutdown_grace_for(&endpoint));
                 }
-                let result = RuntimeProcess::start_with_spec(&spec, Arc::clone(&logs))
-                    .map(|(value, new_endpoint)| {
-                        current_pid.store(value.id(), Ordering::Release);
-                        process = Some(value);
-                        endpoint = new_endpoint;
-                        restart_count += 1;
-                        last_error = None;
-                        snapshot(
-                            &process,
-                            &endpoint,
-                            restart_count,
-                            &last_error,
-                            &logs,
-                        )
-                    })
-                    .map_err(|error| {
-                        current_pid.store(0, Ordering::Release);
-                        last_error = Some(error.to_string());
-                        error.to_string()
-                    });
+                sleep_for_backoff(restart_count, &last_exit_at);
+                let result = RuntimeProcess::start_with_spec(
+                    &spec,
+                    spec.data_dir.as_deref(),
+                    spec.cache_dir.as_deref(),
+                    Some(&log_dir),
+                    Arc::clone(&logs),
+                )
+                .map(|(value, new_endpoint)| {
+                    current_pid.store(value.id(), Ordering::Release);
+                    process = Some(value);
+                    endpoint = new_endpoint;
+                    restart_count += 1;
+                    last_error = None;
+                    snapshot(
+                        &process,
+                        &endpoint,
+                        restart_count,
+                        &last_error,
+                        &logs,
+                    )
+                })
+                .map_err(|error| {
+                    current_pid.store(0, Ordering::Release);
+                    last_error = Some(error.to_string());
+                    error.to_string()
+                });
                 let _ = response.send(result);
             }
         }
     }
     if let Some(mut value) = process {
-        let _ = value.stop_gracefully(SHUTDOWN_GRACE);
+        let _ = value.stop_gracefully(shutdown_grace_for(&endpoint));
     }
     current_pid.store(0, Ordering::Release);
 }
 
-fn refresh(process: &mut Option<RuntimeProcess>, last_error: &mut Option<String>) {
+fn sleep_for_backoff(restart_count: u32, last_exit_at: &Option<Instant>) {
+    let Some(last) = last_exit_at else {
+        return;
+    };
+    let wait = backoff_for(restart_count);
+    let elapsed = last.elapsed();
+    if elapsed < wait {
+        thread::sleep(wait - elapsed);
+    }
+}
+
+fn refresh(
+    process: &mut Option<RuntimeProcess>,
+    last_error: &mut Option<String>,
+    last_exit_at: &mut Option<Instant>,
+) {
     if let Some(status) = process
         .as_mut()
         .and_then(|runtime| runtime.try_wait().ok().flatten())
     {
         *last_error = Some(format!("runtime exited with {status}"));
         *process = None;
+        *last_exit_at = Some(Instant::now());
     }
 }
 
@@ -450,11 +641,14 @@ impl RuntimeProcess {
             cache_dir: None,
         };
         let logs = Arc::new(Mutex::new(VecDeque::new()));
-        Self::start_with_spec(&spec, Arc::clone(&logs)).map(|(p, _)| p)
+        Self::start_with_spec(&spec, None, None, None, Arc::clone(&logs)).map(|(p, _)| p)
     }
 
     fn start_with_spec(
         spec: &RuntimeSpec,
+        data_dir: Option<&Path>,
+        cache_dir: Option<&Path>,
+        log_dir: Option<&Path>,
         logs: Arc<Mutex<VecDeque<String>>>,
     ) -> Result<(Self, Option<ServiceEndpoint>), RuntimeError> {
         let executable = match spec.backend.runtime {
@@ -470,11 +664,14 @@ impl RuntimeProcess {
                 std::env::var_os("ALEX_INSTALL_ROOT").unwrap_or_default(),
             )
             .env("ALEX_APP_ID", &spec.app_id);
-        if let Some(data_dir) = &spec.data_dir {
+        if let Some(data_dir) = data_dir {
             command.env("ALEX_APP_DATA_DIR", data_dir);
         }
-        if let Some(cache_dir) = &spec.cache_dir {
+        if let Some(cache_dir) = cache_dir {
             command.env("ALEX_APP_CACHE_DIR", cache_dir);
+        }
+        if let Some(log_dir) = log_dir {
+            command.env("ALEX_APP_LOG_DIR", log_dir);
         }
         let mut endpoint: Option<ServiceEndpoint> = None;
         if matches!(spec.backend.mode, BackendMode::Service) {
@@ -800,6 +997,132 @@ fn terminate_process_tree(_pid: u32) -> bool {
 }
 
 #[cfg(test)]
+mod lifecycle_tests {
+    use super::*;
+
+    #[test]
+    fn backoff_schedule_starts_at_zero_and_caps_at_16s() {
+        assert_eq!(backoff_for(0), Duration::from_millis(0));
+        assert_eq!(backoff_for(1), Duration::from_secs(1));
+        assert_eq!(backoff_for(2), Duration::from_secs(2));
+        assert_eq!(backoff_for(3), Duration::from_secs(4));
+        assert_eq!(backoff_for(4), Duration::from_secs(8));
+        assert_eq!(backoff_for(5), Duration::from_secs(16));
+        // Way past the schedule: still 16s, not unbounded.
+        assert_eq!(backoff_for(100), Duration::from_secs(16));
+    }
+
+    #[test]
+    fn shutdown_grace_is_longer_for_service_backends() {
+        let rpc_endpoint: Option<ServiceEndpoint> = None;
+        let service_endpoint = Some(ServiceEndpoint {
+            port: 28000,
+            token: "x".repeat(64),
+        });
+        assert_eq!(shutdown_grace_for(&rpc_endpoint), SHUTDOWN_GRACE);
+        assert_eq!(
+            shutdown_grace_for(&service_endpoint),
+            SERVICE_SHUTDOWN_GRACE
+        );
+        assert!(SERVICE_SHUTDOWN_GRACE > SHUTDOWN_GRACE);
+    }
+
+    #[test]
+    fn sleep_for_backoff_is_noop_without_prior_exit() {
+        // No last_exit_at → first restart must not sleep at all.
+        let start = Instant::now();
+        sleep_for_backoff(0, &None);
+        sleep_for_backoff(5, &None);
+        assert!(start.elapsed() < Duration::from_millis(50));
+    }
+
+    #[test]
+    fn sleep_for_backoff_respects_elapsed_time() {
+        // Pretend the previous exit happened 100ms ago. With a
+        // 1s backoff, the caller should still wait ~900ms before
+        // being allowed to restart.
+        let last = Instant::now() - Duration::from_millis(100);
+        let start = Instant::now();
+        sleep_for_backoff(1, &Some(last));
+        let elapsed = start.elapsed();
+        assert!(
+            elapsed >= Duration::from_millis(800),
+            "expected ~900ms sleep, was {elapsed:?}"
+        );
+        // And it must not run away.
+        assert!(elapsed < Duration::from_millis(1500));
+    }
+}
+
+#[cfg(test)]
+mod app_dirs_tests {
+    use super::*;
+
+    #[test]
+    fn compute_app_dirs_rejects_malformed_ids() {
+        assert!(compute_app_dirs("").is_err());
+        assert!(compute_app_dirs("no-dots").is_err());
+        assert!(compute_app_dirs("../escape").is_err());
+        assert!(compute_app_dirs("has spaces.in.id").is_err());
+        assert!(compute_app_dirs(".leading-dot").is_err());
+    }
+
+    #[test]
+    fn compute_app_dirs_places_dirs_under_local_data_root() {
+        let dirs = compute_app_dirs("com.example.notes").expect("valid id");
+        let base = data_local_dir()
+            .expect("local data dir")
+            .join("AlexOS")
+            .join("apps")
+            .join("com.example.notes");
+        assert_eq!(dirs.data, base.join("data"));
+        assert_eq!(dirs.cache, base.join("cache"));
+        assert_eq!(dirs.logs, base.join("logs"));
+        assert_eq!(dirs.runtime, base.join("runtime"));
+    }
+
+    #[test]
+    fn app_dirs_ensure_creates_full_tree() {
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let dirs = AppDirs {
+            data: tmp.path().join("data"),
+            cache: tmp.path().join("cache"),
+            logs: tmp.path().join("logs"),
+            runtime: tmp.path().join("runtime"),
+        };
+        dirs.ensure().expect("ensure creates tree");
+        assert!(dirs.data.is_dir());
+        assert!(dirs.cache.is_dir());
+        assert!(dirs.logs.is_dir());
+        assert!(dirs.runtime.is_dir());
+
+        // ensure is idempotent: a second call must not fail even
+        // though the directories now exist.
+        dirs.ensure().expect("ensure is idempotent");
+    }
+
+    #[test]
+    fn app_dirs_ensure_leaves_existing_files_alone() {
+        // The host never deletes user data; a pre-existing file
+        // under data/ must not be removed or moved by ensure.
+        let tmp = tempfile::tempdir().expect("tempdir");
+        let data = tmp.path().join("data");
+        std::fs::create_dir_all(&data).expect("mkdir");
+        let user_file = data.join("user.txt");
+        std::fs::write(&user_file, b"keep me").expect("write");
+        let dirs = AppDirs {
+            data: data.clone(),
+            cache: tmp.path().join("cache"),
+            logs: tmp.path().join("logs"),
+            runtime: tmp.path().join("runtime"),
+        };
+        dirs.ensure().expect("ensure");
+        let preserved = std::fs::read(&user_file).expect("still readable");
+        assert_eq!(preserved, b"keep me");
+    }
+}
+
+#[cfg(test)]
 mod service_runtime_tests {
     use super::*;
     use std::collections::VecDeque;
@@ -970,6 +1293,30 @@ mod service_runtime_tests {
         assert!(
             response.contains("\"status\":\"ready\""),
             "health body was: {response}"
+        );
+
+        // Data dir was auto-created and the backend wrote boot.json
+        // into it during startup. We resolve the same path the host
+        // would have used and confirm the file is real.
+        let app_dirs =
+            compute_app_dirs(&manifest.id).expect("compute_app_dirs for service-hello");
+        let boot_json = app_dirs.data.join("boot.json");
+        assert!(
+            boot_json.is_file(),
+            "backend did not write boot.json at {}",
+            boot_json.display()
+        );
+        let boot_text = std::fs::read_to_string(&boot_json).expect("read boot.json");
+        let boot: serde_json::Value = serde_json::from_str(&boot_text).expect("parse boot.json");
+        assert_eq!(boot["appId"], manifest.id);
+        assert_eq!(boot["port"], port);
+        assert_eq!(boot["tokenPrefix"], &token[..8]);
+        // backend.log lives under logs/, not data/.
+        let backend_log = app_dirs.logs.join("backend.log");
+        assert!(
+            backend_log.is_file(),
+            "backend did not write backend.log at {}",
+            backend_log.display()
         );
 
         // Tear down so the next test can claim a fresh port.
