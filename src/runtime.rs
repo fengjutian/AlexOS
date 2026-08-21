@@ -901,7 +901,11 @@ impl RuntimeProcess {
             //     `127.0.0.1:<port><path>` and require a 2xx
             //     response within `timeoutMs`.
             if let Some(health) = &spec.backend.health_check {
-                match probe_health(reported_port, health) {
+                let token = endpoint
+                    .as_ref()
+                    .map(|e| e.token.as_str())
+                    .unwrap_or("");
+                match probe_health(reported_port, token, health) {
                     Ok(()) => {}
                     Err(error) => {
                         let _ = child.kill();
