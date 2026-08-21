@@ -348,10 +348,17 @@ impl ApiRouter {
             .get("packagePath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ("INVALID_PARAMS", "missing `packagePath`".to_owned()))?;
+        // `system.install` is the only path that can drop a new
+        // package onto the device, so unsigned installs are unsafe
+        // by default — flip the policy to require a signature. The
+        // caller has to opt in to an unsigned install explicitly by
+        // passing `"requireSignature": false`; that path is meant
+        // for the App Manager's "install unsigned package" flow,
+        // which should already be gated by a user confirmation.
         let require_signature = params
             .get("requireSignature")
             .and_then(|v| v.as_bool())
-            .unwrap_or(false);
+            .unwrap_or(true);
         let trusted_key = params.get("trustedKey").and_then(|v| v.as_str());
         crate::package::install_verified(
             std::path::Path::new(package_path),

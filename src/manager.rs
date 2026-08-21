@@ -500,6 +500,14 @@ impl AppManager for LocalAppManager {
     }
 
     fn uninstall(&self, id: &str, options: UninstallOptions) -> Result<(), ManagerError> {
+        // Stop the runtime first so the install directory is not
+        // yanked out from under a live Node process. Without this,
+        // Windows would keep the file handles open long enough to
+        // block the directory removal, the backend would keep
+        // running against data that no longer exists on disk, and
+        // the supervisor would carry a phantom handle for an app
+        // that the registry already says is gone.
+        self.runtimes.stop_and_forget(id);
         let _removed = package::uninstall(id, &self.install_root)?;
         self.registry.remove(id)?;
         if options.remove_data {
@@ -518,7 +526,13 @@ impl AppManager for LocalAppManager {
         let decisions = store.list();
         let mut out = Vec::new();
         for permission in &manifest.permissions {
-            let name = permission_method_name(permission);
+            // Use the manifest permission name (e.g. `filesystem.read`)
+            // — the IPC method name (e.g. `filesystem.readText`) is a
+            // detail of the runtime, not the manifest, and writing
+            // under the wrong key here would make UI changes look
+            // successful while the runtime keeps reading the original
+            // key.
+            let name = permission.name().to_owned();
             let decision = decisions
                 .get(&name)
                 .copied()
@@ -543,7 +557,7 @@ impl AppManager for LocalAppManager {
         if !manifest
             .permissions
             .iter()
-            .any(|p| permission_method_name(p) == permission)
+            .any(|p| p.name() == permission)
         {
             return Err(ManagerError::UndeclaredPermission(permission.to_owned()));
         }
@@ -614,8 +628,22 @@ impl RuntimeSupervisor {
         backend: &crate::manifest::Backend,
     ) -> Result<RuntimeStatus, SupervisorError> {
         let mut runtimes = self.runtimes.lock().expect("runtime lock poisoned");
-        if runtimes.contains_key(id) {
-            return Err(SupervisorError::AlreadyRunning(id.to_owned()));
+        // A stale entry from a process that already exited is a
+        // real-world hazard: the user sees the app marked as
+        // "stopped" in the UI, but the next launch returned
+        // `AlreadyRunning` and they had to dig out the supervisor to
+        // recover. Probe the existing handle before refusing; if the
+        // backend has already exited, drop the dead handle and
+        // proceed to spawn a fresh process.
+        if let Some(existing) = runtimes.get(id) {
+            let still_alive = existing
+                .status(Duration::from_millis(200))
+                .map(|status| matches!(status.state, RuntimeState::Running))
+                .unwrap_or(false);
+            if still_alive {
+                return Err(SupervisorError::AlreadyRunning(id.to_owned()));
+            }
+            runtimes.remove(id);
         }
         let handle = RuntimeHandle::start(install_root, backend)?;
         let status = handle.status(Duration::from_secs(2))?;
@@ -647,7 +675,7 @@ impl RuntimeSupervisor {
     }
 
     pub fn status(&self, id: &str) -> Result<RuntimeStatus, SupervisorError> {
-        let runtimes = self.runtimes.lock().expect("runtime lock poisoned");
+        let mut runtimes = self.runtimes.lock().expect("runtime lock poisoned");
         let Some(handle) = runtimes.get(id) else {
             return Ok(RuntimeStatus {
                 state: RuntimeState::Stopped,
@@ -657,7 +685,43 @@ impl RuntimeSupervisor {
                 logs: Vec::new(),
             });
         };
-        Ok(handle.status(Duration::from_millis(200))?)
+        let status = handle.status(Duration::from_millis(200))?;
+        // Best-effort cleanup: if the backend has already exited
+        // (crashed or stopped normally), drop the handle so the next
+        // `launch` doesn't hit `AlreadyRunning`. Reading the status
+        // again after we have a fresh lock could in principle race
+        // with a new `launch`, but that just causes the next launch
+        // to repeat the probe — which is harmless.
+        if matches!(status.state, RuntimeState::Stopped | RuntimeState::Crashed) {
+            runtimes.remove(id);
+        }
+        Ok(status)
+    }
+
+    /// Stop the runtime (graceful, then forceful) and forget about
+    /// it. Used by `uninstall` so the next install of the same id
+    /// can start with a clean supervisor slot. Idempotent.
+    pub fn stop_and_forget(&self, id: &str) {
+        let mut runtimes = self.runtimes.lock().expect("runtime lock poisoned");
+        let Some(handle) = runtimes.remove(id) else {
+            return;
+        };
+        // First ask nicely, then poll. The runtime's stop sequence
+        // already writes a shutdown envelope and waits a couple of
+        // seconds before falling back to a process-tree kill, so the
+        // poll loop here is a safety net for backends that ignore
+        // the shutdown envelope.
+        handle.cancel();
+        for _ in 0..40 {
+            match handle.status(Duration::from_millis(50)) {
+                Ok(status) if matches!(status.state, RuntimeState::Stopped | RuntimeState::Crashed) => {
+                    return;
+                }
+                _ => {}
+            }
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let _ = handle.cancel();
     }
 }
 
@@ -944,25 +1008,8 @@ fn with_trust_lookup(state: SignatureState, fingerprint: Option<&str>) -> Signat
     }
 }
 
-fn permission_method_name(permission: &Permission) -> String {
-    // Mirror the IPC method name the runtime uses. Keep in sync with api.rs.
-    match permission {
-        Permission::FilesystemRead { .. } => "filesystem.readText".into(),
-        Permission::FilesystemWrite { .. } => "filesystem.writeText".into(),
-        Permission::DialogOpen => "dialog.openFile".into(),
-        Permission::ClipboardRead => "clipboard.readText".into(),
-        Permission::ClipboardWrite => "clipboard.writeText".into(),
-        Permission::OpenExternal { .. } => "system.openExternal".into(),
-        Permission::WindowManage => "window.setTitle".into(),
-        Permission::NotificationShow => "notification.show".into(),
-        Permission::RuntimeInvoke => "runtime.invoke".into(),
-        Permission::RuntimeManage => "runtime.restart".into(),
-        Permission::MediaCamera => "media.camera".into(),
-        Permission::MediaMicrophone => "media.microphone".into(),
-        Permission::Geolocation => "geolocation".into(),
-        Permission::SystemInstall => "system.install".into(),
-        Permission::SystemUninstall => "system.uninstall".into(),
-        Permission::SystemManageApps => "system.manageApps".into(),
-        Permission::SystemManageExtensions => "system.manageExtensions".into(),
-    }
-}
+// `permission_method_name` was removed in H1 — the manifest
+// permission name (e.g. `filesystem.read`) is the only key the
+// permission store should use, and the `Permission::name` method is
+// the single source of truth for that string. See `permissions` and
+// `set_permission` above.

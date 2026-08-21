@@ -700,21 +700,21 @@ fn manager_permissions_round_trip() {
     assert!(
         states
             .iter()
-            .any(|s| s.name == "filesystem.readText" && s.manifest_declared),
+            .any(|s| s.name == "filesystem.read" && s.manifest_declared),
         "hello declares filesystem.read; should appear in permissions"
     );
 
     manager
         .set_permission(
             "com.alex.hello",
-            "filesystem.readText",
+            "filesystem.read",
             PermissionDecision::Denied,
         )
         .unwrap();
     let after = manager.permissions("com.alex.hello").unwrap();
     let read = after
         .iter()
-        .find(|s| s.name == "filesystem.readText")
+        .find(|s| s.name == "filesystem.read")
         .unwrap();
     assert_eq!(read.decision, PermissionDecision::Denied);
 
@@ -1545,9 +1545,13 @@ fn reverse_ipc_system_install_dispatch_writes_a_new_app_into_install_root() {
         .with_system_install_root(install_root.clone());
 
     // 1. hostCall → system.install. Build the same Request shape
-    //    that `run_unified_dispatch` constructs.
+    //    that `run_unified_dispatch` constructs. The package was
+    //    packed without a signing key, so we pass
+    //    `requireSignature: false` explicitly — this exercises the
+    //    "operator-confirmed unsigned install" path the new H2
+    //    default policy carves out.
     let install_line = format!(
-        r#"{{"kind":"hostCall","id":"inst-1","method":"system.install","params":{{"packagePath":"{}"}}}}"#,
+        r#"{{"kind":"hostCall","id":"inst-1","method":"system.install","params":{{"packagePath":"{}","requireSignature":false}}}}"#,
         archive.display().to_string().replace('\\', "\\\\")
     );
     let (install_id, install_method, install_params) =
