@@ -83,11 +83,118 @@ pub struct Frontend {
     pub entry: String,
 }
 
+/// Backend execution mode.
+///
+/// `Rpc` is the default: Node receives a single JSON Lines request on
+/// stdin and writes a single response on stdout (current 0.1 behaviour,
+/// see `src/runtime.rs`).
+///
+/// `Service` is a long-running backend (Express, WebSocket, SQLite,
+/// background jobs). The host allocates a private `127.0.0.1` port and
+/// injects it via `ALEX_SERVICE_PORT`, gives the backend a per-launch
+/// token via `ALEX_RUNTIME_TOKEN`, and waits for the backend to report
+/// readiness via a stderr JSON line:
+///
+/// ```text
+/// {"type":"alex.ready","port":<bound_port>}
+/// ```
+///
+/// All `service` backends must expose a health-check endpoint (default
+/// `GET /health`, configurable via `healthCheck.path`) and listen on
+/// `127.0.0.1` only.
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum BackendMode {
+    #[default]
+    Rpc,
+    Service,
+}
+
+/// Optional HTTP health check for a `service` backend. The host polls
+/// `path` (default `/health`) for `200 OK` after receiving the
+/// `alex.ready` signal. If `timeout_ms` elapses without a 200, the
+/// backend is marked `unhealthy` and the restart policy decides what
+/// happens next.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct HealthCheck {
+    #[serde(default = "HealthCheck::default_path")]
+    pub path: String,
+    #[serde(default = "HealthCheck::default_timeout_ms")]
+    pub timeout_ms: u64,
+}
+
+impl Default for HealthCheck {
+    fn default() -> Self {
+        Self {
+            path: Self::default_path(),
+            timeout_ms: Self::default_timeout_ms(),
+        }
+    }
+}
+
+impl HealthCheck {
+    fn default_path() -> String {
+        "/health".into()
+    }
+    fn default_timeout_ms() -> u64 {
+        10_000
+    }
+}
+
+/// Restart policy for a backend. `policy` is one of:
+///
+/// - `never`: no auto-restart;
+/// - `on-failure` (default): restart only on non-zero exit;
+/// - `always`: restart on any exit.
+///
+/// `max_retries` caps the count inside a host-defined sliding window.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct RestartPolicy {
+    #[serde(default = "RestartPolicy::default_policy")]
+    pub policy: String,
+    #[serde(default = "RestartPolicy::default_max_retries")]
+    pub max_retries: u32,
+}
+
+impl Default for RestartPolicy {
+    fn default() -> Self {
+        Self {
+            policy: Self::default_policy(),
+            max_retries: Self::default_max_retries(),
+        }
+    }
+}
+
+impl RestartPolicy {
+    fn default_policy() -> String {
+        "on-failure".into()
+    }
+    fn default_max_retries() -> u32 {
+        5
+    }
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(deny_unknown_fields)]
 pub struct Backend {
     pub runtime: RuntimeKind,
     pub entry: String,
+    /// Execution mode. Defaults to `rpc` for backward compatibility.
+    #[serde(default)]
+    pub mode: BackendMode,
+    /// Optional HTTP health check for `service` mode. Defaults are
+    /// applied per-field when the struct is present.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub health_check: Option<HealthCheck>,
+    /// Optional restart policy. Defaults are applied per-field.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub restart: Option<RestartPolicy>,
+    /// Optional fixed service port. If absent, the host allocates one
+    /// from the private 28000–28999 range.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub port: Option<u16>,
 }
 
 #[derive(Debug, Clone, Copy, Serialize, Deserialize)]

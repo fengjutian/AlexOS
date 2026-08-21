@@ -1666,6 +1666,7 @@ fn manager_uninstall_refuses_to_remove_the_running_app_manager() {
     // the self-protection check, not from "package not found".
     let manager_dir = workspace.path().join("com.alex.manager");
     fs::create_dir_all(manager_dir.join("frontend")).unwrap();
+    fs::create_dir_all(manager_dir.join("backend")).unwrap();
     fs::write(manager_dir.join("frontend/index.html"), "<h1>m</h1>").unwrap();
     fs::write(manager_dir.join("backend/index.js"), "// stub").unwrap();
     fs::write(
@@ -1814,12 +1815,16 @@ fn chrono_like_parse(value: &str) -> Option<u64> {
         // round-trip test stays valid as long as the two functions
         // agree.
         let y = if m <= 2 { y - 1 } else { y };
-        let era = if y >= 0 { y } else { y - 399 } / 400;
-        let yoe = (y - era * 400) as u32;
+        let era: i64 = if y >= 0 {
+            (y / 400) as i64
+        } else {
+            ((y - 399) / 400) as i64
+        };
+        let yoe = (y - (era as i32) * 400) as u32;
         let m = if m > 2 { m - 3 } else { m + 9 };
         let doy = (153 * m + 2) / 5 + d - 1;
         let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
-        Some((era * 146_097 + doe as i64) - 719_468)
+        Some(era * 146_097 + doe as i64 - 719_468)
     };
     let days = days_from_civil(year, month, day)?;
     let secs = (days as u64) * 86_400 + (hour as u64) * 3600 + (minute as u64) * 60 + second as u64;

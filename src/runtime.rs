@@ -1,24 +1,36 @@
 use std::{
     collections::VecDeque,
+    fmt::Write as _,
     io::{BufRead, BufReader, Write},
+    net::TcpListener,
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU32, Ordering},
+        atomic::{AtomicBool, AtomicU32, AtomicU64, Ordering},
         mpsc,
     },
     thread,
-    time::{Duration, Instant},
+    time::{Duration, Instant, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::manifest::{Backend, RuntimeKind};
+use crate::manifest::{Backend, BackendMode, RuntimeKind};
 
 const MAX_LOG_LINES: usize = 200;
+/// Private TCP range the host allocates service-mode backends from.
+/// Service backends must listen on `127.0.0.1`; the host never exposes
+/// the chosen port to the page directly — later slices will reverse
+/// proxy through `alex://app/api/`.
+const SERVICE_PORT_RANGE_START: u16 = 28000;
+const SERVICE_PORT_RANGE_END: u16 = 28999;
+/// How long the host waits for the backend's stderr `alex.ready`
+/// line before declaring startup failure and killing the process.
+const READY_HANDSHAKE_TIMEOUT: Duration = Duration::from_secs(15);
+const SHUTDOWN_GRACE: Duration = Duration::from_secs(2);
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
@@ -37,30 +49,78 @@ pub enum RuntimeError {
     Backend { code: String, message: String },
     #[error("runtime request timed out after {0:?}")]
     Timeout(Duration),
+    #[error("service backend did not report ready within {0:?}")]
+    ServiceReadyTimeout(Duration),
+    #[error("no free port available in service range 28000-28999")]
+    NoFreeServicePort,
 }
 
-#[derive(Debug, Clone, Serialize)]
+/// Snapshot of a runtime slot. `mode`, `port`, `token`, and `ready`
+/// are populated when the backend is running in `service` mode; for
+/// legacy `rpc` backends they hold their defaults.
+#[derive(Debug, Clone, Default, Serialize)]
 #[serde(rename_all = "camelCase")]
 pub struct RuntimeStatus {
     pub state: RuntimeState,
     pub pid: Option<u32>,
+    pub mode: BackendMode,
+    pub port: Option<u16>,
+    pub token: Option<String>,
+    pub ready: bool,
     pub restart_count: u32,
     pub last_error: Option<String>,
     pub logs: Vec<String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize)]
+#[derive(Debug, Clone, Copy, Default, Serialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeState {
+    /// RPC backend is alive and answering requests. For service mode
+    /// this is never observed — service backends transition straight
+    /// from `Starting` to `Ready` (or `Crashed` on failure).
     Running,
+    /// Service backend started, awaiting its `alex.ready` handshake.
+    Starting,
+    /// Service backend reported `alex.ready` and is accepting
+    /// connections on its allocated port.
+    Ready,
     Crashed,
+    #[default]
     Stopped,
+}
+
+/// Network endpoint bound by a service backend, plus the per-launch
+/// shared secret the host injects as `ALEX_RUNTIME_TOKEN` and later
+/// uses to authenticate the reverse-proxy in subsequent slices.
+#[derive(Debug, Clone)]
+pub struct ServiceEndpoint {
+    pub port: u16,
+    pub token: String,
+}
+
+/// Per-launch configuration for [`RuntimeHandle::start_with_spec`].
+/// `app_id` is injected as `ALEX_APP_ID`. `data_dir` / `cache_dir`
+/// are injected as `ALEX_APP_DATA_DIR` / `ALEX_APP_CACHE_DIR` and
+/// are where the user-data lives; service-mode backends additionally
+/// receive `ALEX_SERVICE_PORT` and `ALEX_RUNTIME_TOKEN`.
+#[derive(Debug, Clone)]
+pub struct RuntimeSpec {
+    pub app_id: String,
+    pub package_root: PathBuf,
+    pub backend: Backend,
+    pub data_dir: Option<PathBuf>,
+    pub cache_dir: Option<PathBuf>,
 }
 
 pub struct RuntimeProcess {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: Option<BufReader<ChildStdout>>,
+    service: Option<ServiceState>,
+}
+
+struct ServiceState {
+    ready: Arc<AtomicBool>,
 }
 
 #[derive(Clone)]
@@ -112,19 +172,33 @@ struct BackendError {
 }
 
 impl RuntimeHandle {
+    /// Legacy entry point kept for backward compatibility with the
+    /// 0.1 `shell::run` and `RuntimeSupervisor` call sites. Defaults
+    /// `app_id` to a placeholder and skips data-dir injection; for
+    /// service mode prefer [`RuntimeHandle::start_with_spec`].
     pub fn start(package_root: &Path, backend: &Backend) -> Result<Self, RuntimeError> {
-        let package_root = package_root.canonicalize()?;
+        Self::start_with_spec(RuntimeSpec {
+            app_id: "<unknown>".into(),
+            package_root: package_root.canonicalize()?,
+            backend: backend.clone(),
+            data_dir: None,
+            cache_dir: None,
+        })
+    }
+
+    /// Spawn a backend and start the supervisor thread. The handle
+    /// returns once the process is up; for service mode it returns
+    /// only after the `alex.ready` handshake completes.
+    pub fn start_with_spec(spec: RuntimeSpec) -> Result<Self, RuntimeError> {
         let logs = Arc::new(Mutex::new(VecDeque::new()));
-        let process = RuntimeProcess::start_with_logs(&package_root, backend, Arc::clone(&logs))?;
+        let (process, endpoint) =
+            RuntimeProcess::start_with_spec(&spec, Arc::clone(&logs))?;
         let pid = Arc::new(AtomicU32::new(process.id()));
         let (sender, receiver) = mpsc::channel();
-        let backend = backend.clone();
         let manager_pid = Arc::clone(&pid);
         thread::Builder::new()
             .name("alex-runtime-manager".into())
-            .spawn(move || {
-                runtime_manager(package_root, backend, process, logs, manager_pid, receiver)
-            })
+            .spawn(move || runtime_manager(spec, process, endpoint, logs, manager_pid, receiver))
             .expect("runtime manager thread should start");
         Ok(Self { sender, pid })
     }
@@ -193,16 +267,17 @@ fn receive<T>(rx: mpsc::Receiver<Result<T, String>>, timeout: Duration) -> Resul
 }
 
 fn runtime_manager(
-    root: PathBuf,
-    backend: Backend,
+    spec: RuntimeSpec,
     initial: RuntimeProcess,
+    initial_endpoint: Option<ServiceEndpoint>,
     logs: Arc<Mutex<VecDeque<String>>>,
     current_pid: Arc<AtomicU32>,
     rx: mpsc::Receiver<RuntimeCommand>,
 ) {
     let mut process = Some(initial);
+    let mut endpoint = initial_endpoint;
     let mut restart_count = 0;
-    let mut last_error = None;
+    let mut last_error: Option<String> = None;
     while let Ok(command) = rx.recv() {
         match command {
             RuntimeCommand::Invoke {
@@ -212,15 +287,22 @@ fn runtime_manager(
                 response,
             } => {
                 if process.is_none() {
-                    match RuntimeProcess::start_with_logs(&root, &backend, Arc::clone(&logs)) {
-                        Ok(value) => {
+                    match RuntimeProcess::start_with_spec(&spec, Arc::clone(&logs)) {
+                        Ok((value, new_endpoint)) => {
                             current_pid.store(value.id(), Ordering::Release);
                             process = Some(value);
+                            endpoint = new_endpoint;
                             restart_count += 1;
                             last_error = None;
                         }
                         Err(error) => last_error = Some(error.to_string()),
                     }
+                }
+                if endpoint.is_some() {
+                    let _ = response.send(Err(
+                        "invoke is unavailable for service-mode backends; talk to the backend over HTTP".into(),
+                    ));
+                    continue;
                 }
                 let result = process
                     .as_mut()
@@ -252,19 +334,32 @@ fn runtime_manager(
                     process.as_ref().map(RuntimeProcess::id).unwrap_or(0),
                     Ordering::Release,
                 );
-                let _ = response.send(snapshot(&process, restart_count, &last_error, &logs));
+                let _ = response.send(snapshot(
+                    &process,
+                    &endpoint,
+                    restart_count,
+                    &last_error,
+                    &logs,
+                ));
             }
             RuntimeCommand::Restart { response } => {
                 if let Some(mut value) = process.take() {
-                    let _ = value.stop_gracefully(Duration::from_secs(2));
+                    let _ = value.stop_gracefully(SHUTDOWN_GRACE);
                 }
-                let result = RuntimeProcess::start_with_logs(&root, &backend, Arc::clone(&logs))
-                    .map(|value| {
+                let result = RuntimeProcess::start_with_spec(&spec, Arc::clone(&logs))
+                    .map(|(value, new_endpoint)| {
                         current_pid.store(value.id(), Ordering::Release);
                         process = Some(value);
+                        endpoint = new_endpoint;
                         restart_count += 1;
                         last_error = None;
-                        snapshot(&process, restart_count, &last_error, &logs)
+                        snapshot(
+                            &process,
+                            &endpoint,
+                            restart_count,
+                            &last_error,
+                            &logs,
+                        )
                     })
                     .map_err(|error| {
                         current_pid.store(0, Ordering::Release);
@@ -276,7 +371,7 @@ fn runtime_manager(
         }
     }
     if let Some(mut value) = process {
-        let _ = value.stop_gracefully(Duration::from_secs(2));
+        let _ = value.stop_gracefully(SHUTDOWN_GRACE);
     }
     current_pid.store(0, Ordering::Release);
 }
@@ -293,19 +388,45 @@ fn refresh(process: &mut Option<RuntimeProcess>, last_error: &mut Option<String>
 
 fn snapshot(
     process: &Option<RuntimeProcess>,
+    endpoint: &Option<ServiceEndpoint>,
     restart_count: u32,
     last_error: &Option<String>,
     logs: &Arc<Mutex<VecDeque<String>>>,
 ) -> RuntimeStatus {
-    RuntimeStatus {
-        state: if process.is_some() {
-            RuntimeState::Running
-        } else if last_error.is_some() {
-            RuntimeState::Crashed
+    let state = if process.is_some() {
+        if endpoint.is_some() {
+            RuntimeState::Ready
         } else {
-            RuntimeState::Stopped
-        },
+            RuntimeState::Running
+        }
+    } else if last_error.is_some() {
+        RuntimeState::Crashed
+    } else {
+        RuntimeState::Stopped
+    };
+    let (port, token, ready) = match endpoint {
+        Some(ep) => {
+            let ready = process
+                .as_ref()
+                .and_then(|p| p.service.as_ref())
+                .map(|s| s.ready.load(Ordering::Acquire))
+                .unwrap_or(false);
+            (Some(ep.port), Some(ep.token.clone()), ready)
+        }
+        None => (None, None, false),
+    };
+    let mode = if endpoint.is_some() {
+        BackendMode::Service
+    } else {
+        BackendMode::Rpc
+    };
+    RuntimeStatus {
+        state,
         pid: process.as_ref().map(RuntimeProcess::id),
+        mode,
+        port,
+        token,
+        ready,
         restart_count,
         last_error: last_error.clone(),
         logs: logs
@@ -316,73 +437,123 @@ fn snapshot(
 }
 
 impl RuntimeProcess {
+    /// Legacy entry point preserved for tests and any external caller
+    /// that doesn't need the new `RuntimeSpec` injection. Service
+    /// mode is unreachable from here (no port allocation / no env
+    /// injection); prefer `start_with_spec` for real launches.
     pub fn start(package_root: &Path, backend: &Backend) -> Result<Self, RuntimeError> {
-        Self::start_with_logs(
-            &package_root.canonicalize()?,
-            backend,
-            Arc::new(Mutex::new(VecDeque::new())),
-        )
+        let spec = RuntimeSpec {
+            app_id: "<unknown>".into(),
+            package_root: package_root.canonicalize()?,
+            backend: backend.clone(),
+            data_dir: None,
+            cache_dir: None,
+        };
+        let logs = Arc::new(Mutex::new(VecDeque::new()));
+        Self::start_with_spec(&spec, Arc::clone(&logs)).map(|(p, _)| p)
     }
 
-    fn start_with_logs(
-        root: &Path,
-        backend: &Backend,
+    fn start_with_spec(
+        spec: &RuntimeSpec,
         logs: Arc<Mutex<VecDeque<String>>>,
-    ) -> Result<Self, RuntimeError> {
-        let executable = match backend.runtime {
+    ) -> Result<(Self, Option<ServiceEndpoint>), RuntimeError> {
+        let executable = match spec.backend.runtime {
             RuntimeKind::Node => discover_node().ok_or(RuntimeError::NodeNotFound)?,
         };
-        let mut child = Command::new(&executable)
-            .arg(&backend.entry)
-            .current_dir(root)
-            .env("ALEX_PACKAGE_ROOT", root)
+        let mut command = Command::new(&executable);
+        command
+            .arg(&spec.backend.entry)
+            .current_dir(&spec.package_root)
+            .env("ALEX_PACKAGE_ROOT", &spec.package_root)
             .env(
                 "ALEX_INSTALL_ROOT",
                 std::env::var_os("ALEX_INSTALL_ROOT").unwrap_or_default(),
             )
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
+            .env("ALEX_APP_ID", &spec.app_id);
+        if let Some(data_dir) = &spec.data_dir {
+            command.env("ALEX_APP_DATA_DIR", data_dir);
+        }
+        if let Some(cache_dir) = &spec.cache_dir {
+            command.env("ALEX_APP_CACHE_DIR", cache_dir);
+        }
+        let mut endpoint: Option<ServiceEndpoint> = None;
+        if matches!(spec.backend.mode, BackendMode::Service) {
+            let port = allocate_service_port()?;
+            let token = generate_runtime_token();
+            command.env("ALEX_SERVICE_PORT", port.to_string());
+            command.env("ALEX_RUNTIME_TOKEN", &token);
+            endpoint = Some(ServiceEndpoint { port, token });
+        }
+        // Service mode: don't wire stdin (host never writes) and let
+        // stdout go to the log collector. RPC mode: keep both
+        // ends of the JSON Lines channel under host control.
+        let (stdin_cfg, stdout_cfg) = match spec.backend.mode {
+            BackendMode::Service => (Stdio::null(), Stdio::null()),
+            BackendMode::Rpc => (Stdio::piped(), Stdio::piped()),
+        };
+        let mut child = command
+            .stdin(stdin_cfg)
+            .stdout(stdout_cfg)
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|source| RuntimeError::Start { executable, source })?;
-        let stdin = child
-            .stdin
-            .take()
-            .ok_or_else(|| RuntimeError::Protocol("runtime stdin is unavailable".into()))?;
-        let stdout = child
-            .stdout
-            .take()
-            .ok_or_else(|| RuntimeError::Protocol("runtime stdout is unavailable".into()))?;
         let stderr = child
             .stderr
             .take()
             .ok_or_else(|| RuntimeError::Protocol("runtime stderr is unavailable".into()))?;
+        let stdin = child.stdin.take();
+        let stdout = child.stdout.take().map(BufReader::new);
+
+        let (ready_tx, ready_rx) = if endpoint.is_some() {
+            let (tx, rx) = mpsc::sync_channel::<()>(1);
+            (Some(tx), Some(rx))
+        } else {
+            (None, None)
+        };
+        let ready_flag = if endpoint.is_some() {
+            let flag = Arc::new(AtomicBool::new(false));
+            Some(Arc::clone(&flag))
+        } else {
+            None
+        };
+        let flag_for_thread = ready_flag.as_ref().map(Arc::clone);
+
+        let logs_for_thread = Arc::clone(&logs);
         thread::spawn(move || {
-            for line in BufReader::new(stderr).lines().map_while(Result::ok) {
-                if let Ok(mut buffer) = logs.lock() {
-                    if buffer.len() == MAX_LOG_LINES {
-                        buffer.pop_front();
-                    }
-                    buffer.push_back(line);
+            stderr_pump(stderr, logs_for_thread, ready_tx, flag_for_thread);
+        });
+
+        if let Some(rx) = ready_rx {
+            match rx.recv_timeout(READY_HANDSHAKE_TIMEOUT) {
+                Ok(()) => {
+                    // ready_flag is set inside stderr_pump before it
+                    // sends; nothing more to do here.
+                }
+                Err(_) => {
+                    let _ = child.kill();
+                    let _ = child.wait();
+                    return Err(RuntimeError::ServiceReadyTimeout(READY_HANDSHAKE_TIMEOUT));
                 }
             }
+        }
+
+        let service = endpoint.is_some().then(|| ServiceState {
+            ready: ready_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
         });
-        Ok(Self {
-            child,
-            stdin: Some(stdin),
-            stdout: Some(BufReader::new(stdout)),
-        })
+        Ok((Self { child, stdin, stdout, service }, endpoint))
     }
 
     pub fn id(&self) -> u32 {
         self.child.id()
     }
+
     /// Take ownership of the child's stdin. Used by `plugin::run` to
     /// send reverse-IPC responses back to a plugin that asked the host
     /// a question. Returns `None` if stdin has already been taken.
     pub fn take_stdin(&mut self) -> Option<ChildStdin> {
         self.stdin.take()
     }
+
     /// Take ownership of the child's stdout. The caller (e.g.
     /// `plugin::run`) uses this to forward backend output to the host
     /// terminal. Once taken, `RuntimeProcess::invoke` cannot be used
@@ -390,6 +561,7 @@ impl RuntimeProcess {
     pub fn take_stdout(&mut self) -> Option<BufReader<ChildStdout>> {
         self.stdout.take()
     }
+
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, RuntimeError> {
         Ok(self.child.try_wait()?)
     }
@@ -400,6 +572,11 @@ impl RuntimeProcess {
         method: &str,
         params: &Value,
     ) -> Result<Value, RuntimeError> {
+        if self.service.is_some() {
+            return Err(RuntimeError::Protocol(
+                "invoke is unavailable for service-mode backends; talk to the backend over HTTP".into(),
+            ));
+        }
         if let Some(status) = self.child.try_wait()? {
             return Err(RuntimeError::Protocol(format!(
                 "runtime already exited with {status}"
@@ -408,7 +585,7 @@ impl RuntimeProcess {
         let stdin = self
             .stdin
             .as_mut()
-            .ok_or_else(|| RuntimeError::Protocol("runtime stdin already taken".into()))?;
+            .ok_or_else(|| RuntimeError::Protocol("runtime stdin is unavailable".into()))?;
         serde_json::to_writer(
             &mut *stdin,
             &BackendRequest {
@@ -425,7 +602,7 @@ impl RuntimeProcess {
         let stdout = self
             .stdout
             .as_mut()
-            .ok_or_else(|| RuntimeError::Protocol("runtime stdout already taken".into()))?;
+            .ok_or_else(|| RuntimeError::Protocol("runtime stdout is unavailable".into()))?;
         if stdout.read_line(&mut line)? == 0 {
             return Err(RuntimeError::Protocol(
                 "runtime closed stdout without a response".into(),
@@ -481,6 +658,103 @@ impl Drop for RuntimeProcess {
     fn drop(&mut self) {
         let _ = self.stop();
     }
+}
+
+/// Drain a child's stderr. Each line is appended to the shared log
+/// ring buffer; if `ready_tx` is set, the first JSON line whose
+/// `"type"` field equals `"alex.ready"` also flips `ready_flag` and
+/// unblocks the start path. EOF is reported as a single
+/// `ready_tx.send(Err(()))` (which we never actually call here; the
+/// start path times out instead, which is more useful for tests).
+fn stderr_pump(
+    stderr: std::process::ChildStderr,
+    logs: Arc<Mutex<VecDeque<String>>>,
+    ready_tx: Option<mpsc::SyncSender<()>>,
+    ready_flag: Option<Arc<AtomicBool>>,
+) {
+    let mut reader = BufReader::new(stderr);
+    let mut line = String::new();
+    let mut signalled = false;
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) => break,
+            Ok(_) => {
+                let trimmed = line.trim_end();
+                if !signalled {
+                    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
+                        if value.get("type").and_then(|v| v.as_str())
+                            == Some("alex.ready")
+                        {
+                            signalled = true;
+                            if let Some(flag) = &ready_flag {
+                                flag.store(true, Ordering::Release);
+                            }
+                            if let Some(tx) = &ready_tx {
+                                let _ = tx.send(());
+                            }
+                        }
+                    }
+                }
+                if let Ok(mut buffer) = logs.lock() {
+                    if buffer.len() == MAX_LOG_LINES {
+                        buffer.pop_front();
+                    }
+                    buffer.push_back(trimmed.to_string());
+                }
+            }
+            Err(_) => break,
+        }
+    }
+    // EOF before ready — wake the start path with a failed send so
+    // it tears the child down rather than hanging on the timeout.
+    if !signalled {
+        if let Some(flag) = &ready_flag {
+            flag.store(false, Ordering::Release);
+        }
+        drop(ready_tx);
+    }
+}
+
+/// Find the first port in the service range that the OS is willing to
+/// bind. The probe `bind` is then immediately dropped before the
+/// child starts, so there is still a small race window where the
+/// port could be stolen; the next slice will hand ownership to the
+/// reverse proxy for the duration of the session.
+fn allocate_service_port() -> Result<u16, RuntimeError> {
+    for candidate in SERVICE_PORT_RANGE_START..=SERVICE_PORT_RANGE_END {
+        if TcpListener::bind(("127.0.0.1", candidate)).is_ok() {
+            return Ok(candidate);
+        }
+    }
+    Err(RuntimeError::NoFreeServicePort)
+}
+
+/// Generate a per-launch shared secret. The secret never leaves the
+/// host; the host injects it as `ALEX_RUNTIME_TOKEN` and later
+/// authenticates the reverse-proxy with it. Entropy comes from PID,
+/// nanosecond clock and a process-local counter — sufficient for a
+/// loopback-only token that the host mints itself. Not suitable for
+/// use as a credential toward external services.
+fn generate_runtime_token() -> String {
+    static COUNTER: AtomicU64 = AtomicU64::new(0);
+    let n = COUNTER.fetch_add(1, Ordering::Relaxed);
+    let pid = std::process::id() as u64;
+    let now = SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_nanos() as u64)
+        .unwrap_or(0);
+    let mut bytes = [0u8; 32];
+    bytes[..8].copy_from_slice(&pid.to_le_bytes());
+    bytes[8..16].copy_from_slice(&now.to_le_bytes());
+    bytes[16..24].copy_from_slice(&n.to_le_bytes());
+    let mix = pid ^ now ^ n;
+    bytes[24..32].copy_from_slice(&mix.to_le_bytes());
+    let mut hex = String::with_capacity(64);
+    for byte in bytes {
+        let _ = write!(hex, "{:02x}", byte);
+    }
+    hex
 }
 
 /// Locate the Node.js executable. Honours the `ALEX_NODE` env override

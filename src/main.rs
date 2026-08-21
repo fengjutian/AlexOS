@@ -46,6 +46,11 @@ enum Commands {
     Manager {
         #[arg(long, default_value = "./target/apps")]
         install_root: PathBuf,
+        /// Trust store root. When supplied, the manager upgrades a
+        /// `signed-untrusted` package to `signed-trusted` if the
+        /// publisher fingerprint is in this store.
+        #[arg(long)]
+        trust_root: Option<PathBuf>,
     },
     /// Run an installed plugin. Default opens a WebView so the
     /// plugin behaves like an app (frontend + backend + system
@@ -56,6 +61,9 @@ enum Commands {
         id: String,
         #[arg(long, default_value = "./target/apps")]
         install_root: PathBuf,
+        /// Trust store root (see `alex manager --help`).
+        #[arg(long)]
+        trust_root: Option<PathBuf>,
         /// Run the plugin without a WebView (backend only).
         #[arg(long)]
         headless: bool,
@@ -259,7 +267,10 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let app = load_app(&path)?;
             dev::run(&path, app)?;
         }
-        Commands::Manager { install_root } => {
+        Commands::Manager {
+            install_root,
+            trust_root,
+        } => {
             // Self-hosting path: if `com.alex.manager` is installed as a
             // plugin, prefer it. We delegate to `shell::run` (same path
             // as `alex plugin <id>` without `--headless`) so the plugin
@@ -283,7 +294,22 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 );
                 shell::run(&plugin_path, manifest, Some(&install_root))?;
             } else {
-                let manager = LocalAppManager::open(&install_root)?;
+                // Built-in manager fallback: pass the trust root
+                // through so the UI's signature badges can show
+                // "signed-trusted" when the fingerprint is in the
+                // store.
+                let permissions_root = std::env::var_os("ALEX_DATA_DIR")
+                    .map(PathBuf::from)
+                    .or_else(|| {
+                        std::env::var_os("LOCALAPPDATA")
+                            .map(|p| PathBuf::from(p).join("AlexOS"))
+                    })
+                    .unwrap_or_else(|| install_root.clone());
+                let manager = LocalAppManager::open_with_trust(
+                    &install_root,
+                    permissions_root,
+                    trust_root,
+                )?;
                 let router = Arc::new(ManagerRouter::new(Arc::new(manager)));
                 manager_webview::run(router)?;
             }
@@ -291,6 +317,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Plugin {
             id,
             install_root,
+            trust_root: _,
             headless,
         } => {
             let install_path = plugin::find_in_install(&install_root, &id)?.ok_or_else(|| {

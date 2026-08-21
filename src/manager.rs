@@ -406,6 +406,13 @@ pub struct LocalAppManager {
     registry: AppRegistry,
     permissions_root: PathBuf,
     runtimes: Arc<RuntimeSupervisor>,
+    /// Optional trust store root. When `Some`, `list_apps` and
+    /// `get_app` will upgrade a `SignedUntrusted` summary to
+    /// `SignedTrusted` for any fingerprint present in this store.
+    /// `None` means "no trust info available" — the per-record
+    /// `Signed` / `InvalidSignature` states still come through, but
+    /// we never promote anything to `SignedTrusted`.
+    trust_root: Option<PathBuf>,
 }
 
 impl LocalAppManager {
@@ -420,18 +427,47 @@ impl LocalAppManager {
     /// Construct a manager with an explicit permissions root. Tests use this
     /// to avoid sharing the global `ALEX_DATA_DIR` between parallel runs.
     pub fn open_with(install_root: &Path, permissions_root: PathBuf) -> Result<Self, ManagerError> {
+        Self::open_with_trust(install_root, permissions_root, None)
+    }
+
+    /// Construct a manager with an explicit trust store root. The CLI
+    /// passes `--trust-root` through here so the running manager can
+    /// answer "is this fingerprint trusted?" from inside `list_apps` /
+    /// `get_app` without going through the env.
+    pub fn open_with_trust(
+        install_root: &Path,
+        permissions_root: PathBuf,
+        trust_root: Option<PathBuf>,
+    ) -> Result<Self, ManagerError> {
         let registry = AppRegistry::open_or_rebuild(install_root)?;
         Ok(Self {
             install_root: install_root.to_path_buf(),
             registry,
             permissions_root,
             runtimes: Arc::new(RuntimeSupervisor::default()),
+            trust_root,
         })
+    }
+
+    /// Build a closure that answers "is this fingerprint in the
+    /// trust store?". Caches the open store per call so a missing /
+    /// unreadable trust root doesn't keep re-failing on every list.
+    fn trust_lookup(&self) -> impl Fn(&str) -> bool + '_ {
+        let cache = self
+            .trust_root
+            .as_deref()
+            .and_then(|root| trust::TrustStore::open(root).ok());
+        move |fingerprint: &str| {
+            cache
+                .as_ref()
+                .is_some_and(|store| store.list().any(|(fp, _)| fp == fingerprint))
+        }
     }
 }
 
 impl AppManager for LocalAppManager {
     fn list_apps(&self) -> Result<Vec<AppSummary>, ManagerError> {
+        let trust_lookup = self.trust_lookup();
         let mut out = Vec::new();
         for (id, record) in self.registry.records() {
             let app_path = self.install_root.join(&id);
@@ -442,13 +478,14 @@ impl AppManager for LocalAppManager {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            out.push(summary_from(&manifest, &record, &app_path));
+            out.push(summary_from(&manifest, &record, &app_path, &trust_lookup));
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(out)
     }
 
     fn get_app(&self, id: &str) -> Result<AppDetails, ManagerError> {
+        let trust_lookup = self.trust_lookup();
         let record = self
             .registry
             .records()
@@ -461,7 +498,7 @@ impl AppManager for LocalAppManager {
             return Err(ManagerError::NotFound(id.to_owned()));
         }
         let manifest = load_app(&install_path)?;
-        let summary = summary_from(&manifest, &record, &install_path);
+        let summary = summary_from(&manifest, &record, &install_path, &trust_lookup);
         let permissions = self.permissions(id)?;
         Ok(AppDetails {
             summary,
@@ -513,7 +550,12 @@ impl AppManager for LocalAppManager {
             .find(|(rid, _)| rid == &manifest.id)
             .map(|(_, r)| r)
             .ok_or_else(|| ManagerError::NotFound(manifest.id.clone()))?;
-        Ok(summary_from(&manifest, &record_ref, &installed))
+        Ok(summary_from(
+            &manifest,
+            &record_ref,
+            &installed,
+            &self.trust_lookup(),
+        ))
     }
 
     fn uninstall(&self, id: &str, options: UninstallOptions) -> Result<(), ManagerError> {
@@ -984,7 +1026,12 @@ fn manager_error_response(id: &str, error: ManagerError) -> crate::ipc::Response
     crate::ipc::Response::error(id, code, error.to_string())
 }
 
-fn summary_from(manifest: &AppManifest, record: &AppRecord, path: &Path) -> AppSummary {
+fn summary_from(
+    manifest: &AppManifest,
+    record: &AppRecord,
+    path: &Path,
+    trust_lookup: &dyn Fn(&str) -> bool,
+) -> AppSummary {
     AppSummary {
         id: manifest.id.clone(),
         name: manifest.name.clone(),
@@ -997,39 +1044,35 @@ fn summary_from(manifest: &AppManifest, record: &AppRecord, path: &Path) -> AppS
         signature_state: with_trust_lookup(
             record.signature_state,
             record.publisher_fingerprint.as_deref(),
+            trust_lookup,
         ),
     }
 }
 
 /// Upgrade `SignedUntrusted` to `SignedTrusted` when the fingerprint
-/// is present in the trust store. Reads the trust root from the
-/// `ALEX_TRUST_ROOT` env var; missing / unreadable trust stores are
+/// is present in the trust store. The lookup is supplied as a
+/// closure so `LocalAppManager` can use its injected `trust_root`
+/// (and so tests can supply an in-memory trust set without
+/// touching the filesystem). Missing / unreadable trust stores are
 /// treated as "no trust info" and the state is left unchanged
 /// (showing `SignedUntrusted`). This is intentionally best-effort —
 /// the trust store can be added after install, and the next read
 /// will surface the new state without rewriting the registry.
-fn with_trust_lookup(state: SignatureState, fingerprint: Option<&str>) -> SignatureState {
+fn with_trust_lookup(
+    state: SignatureState,
+    fingerprint: Option<&str>,
+    trust_lookup: &dyn Fn(&str) -> bool,
+) -> SignatureState {
     if !matches!(state, SignatureState::SignedUntrusted) {
         return state;
     }
     let Some(fingerprint) = fingerprint else {
         return state;
     };
-    let Some(root) = std::env::var_os("ALEX_TRUST_ROOT") else {
-        return state;
-    };
-    match trust::TrustStore::open(std::path::Path::new(&root)) {
-        Ok(store) => {
-            if store
-                .list()
-                .any(|(stored, _)| stored == fingerprint)
-            {
-                SignatureState::SignedTrusted
-            } else {
-                state
-            }
-        }
-        Err(_) => state,
+    if trust_lookup(fingerprint) {
+        SignatureState::SignedTrusted
+    } else {
+        state
     }
 }
 
