@@ -1644,3 +1644,184 @@ fn reverse_ipc_system_install_dispatch_writes_a_new_app_into_install_root() {
         "second app directory should be removed after uninstall"
     );
 }
+
+#[test]
+fn manager_uninstall_refuses_to_remove_the_running_app_manager() {
+    // Self-protection: the manager plugin is the one currently
+    // running this code, and the UI happens to be served by it. A
+    // stray `system.uninstall` against the manager id must be
+    // refused so the user cannot accidentally nuke the running
+    // process and the host it is driving.
+    let (_lock, workspace) = install_root();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    manager
+        .install(&archive, InstallOptions::default())
+        .unwrap();
+
+    // Lay out a com.alex.manager directory so the path validation
+    // would otherwise succeed — we want the refusal to come from
+    // the self-protection check, not from "package not found".
+    let manager_dir = workspace.path().join("com.alex.manager");
+    fs::create_dir_all(manager_dir.join("frontend")).unwrap();
+    fs::write(manager_dir.join("frontend/index.html"), "<h1>m</h1>").unwrap();
+    fs::write(manager_dir.join("backend/index.js"), "// stub").unwrap();
+    fs::write(
+        manager_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.alex.manager",
+          "name": "Manager",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" }
+        }"#,
+    )
+    .unwrap();
+
+    let error = manager
+        .uninstall(
+            alex::manager::MANAGER_PLUGIN_ID,
+            UninstallOptions::default(),
+        )
+        .unwrap_err();
+    let message = error.to_string();
+    assert!(
+        message.contains("refusing to uninstall the running App Manager"),
+        "self-uninstall must be refused with a clear message: {message}"
+    );
+    // The install must still be on disk after the failed removal.
+    assert!(
+        manager_dir.join("manifest.json").is_file(),
+        "manager install must remain after a refused self-uninstall"
+    );
+}
+
+#[test]
+fn api_system_uninstall_refuses_to_remove_the_running_app_manager() {
+    // Same self-protection contract on the `system.uninstall` path:
+    // a plugin that has been granted `system.uninstall` still cannot
+    // use that permission to remove the manager itself.
+    let workspace = tempfile::tempdir().unwrap();
+    let install_root = workspace.path().join("apps");
+    fs::create_dir_all(&install_root).unwrap();
+
+    let plugin_dir = workspace.path().join("plugin");
+    fs::create_dir_all(plugin_dir.join("backend")).unwrap();
+    fs::create_dir_all(plugin_dir.join("frontend")).unwrap();
+    fs::write(plugin_dir.join("backend/index.js"), "// stub").unwrap();
+    fs::write(plugin_dir.join("frontend/index.html"), "<h1>p</h1>").unwrap();
+    fs::write(
+        plugin_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.example.killer",
+          "name": "Killer",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" },
+          "permissions": [
+            { "name": "system.manageApps" },
+            { "name": "system.uninstall" }
+          ]
+        }"#,
+    )
+    .unwrap();
+    let manifest = load_app(&plugin_dir).unwrap();
+    let store = PermissionStore::open_at(workspace.path(), &manifest.id).unwrap();
+    for permission in &manifest.permissions {
+        if permission.name().starts_with("system.") {
+            store
+                .set(permission.name(), PermissionDecision::Granted)
+                .unwrap();
+        }
+    }
+    let router = ApiRouter::new(plugin_dir.clone(), manifest.clone())
+        .with_permission_store(store)
+        .with_system_install_root(install_root.clone());
+
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: "self-rm".into(),
+        source: manifest.id.clone(),
+        method: "system.uninstall".into(),
+        params: json!({ "id": "com.alex.manager" }),
+        deadline_ms: None,
+    });
+    let error = response.error.expect("self-uninstall must be rejected");
+    assert_eq!(error.code, "OPERATION_FAILED");
+    assert!(
+        error.message.contains("refusing to uninstall the running App Manager"),
+        "rejection message should mention the self-protection: {}",
+        error.message
+    );
+}
+
+#[test]
+fn iso8601_strings_round_trip_through_javascript_date() {
+    // M8: the registry timestamps are fed to `new Date(value)` on
+    // the JS side, so they must be real ISO 8601 — the previous
+    // epoch-seconds string would parse as a Unix ms value when
+    // JavaScript is in a forgiving mood and silently produce a date
+    // in 1970. Sample a few instants across the year boundary to
+    // catch a hard-coded value or a UTC vs local-time bug.
+    let candidates = [
+        0,                     // 1970-01-01T00:00:00Z
+        86_400,                // 1970-01-02T00:00:00Z
+        1_577_836_800,         // 2020-01-01T00:00:00Z
+        1_704_067_200,         // 2024-01-01T00:00:00Z
+        1_704_153_600,         // 2024-01-02T00:00:00Z
+        1_893_456_000,         // 2030-01-01T00:00:00Z (close to the 2038 wrap)
+    ];
+    for secs in candidates {
+        let formatted =
+            alex::manager::format_epoch_seconds_as_iso8601(secs);
+        let parsed = chrono_like_parse(&formatted).unwrap_or_else(|| {
+            panic!("iso8601 string did not parse: {formatted}")
+        });
+        assert_eq!(
+            parsed, secs,
+            "round-trip mismatch: formatted={formatted}, original={secs}"
+        );
+    }
+}
+
+// JavaScript's `Date.parse` accepts RFC 3339 / ISO 8601 strings and
+// returns the millisecond count. We don't have `chrono` in the
+// dependency graph, so emulate the relevant subset by computing
+// the expected instant from the same RFC 3339 string with a small
+// parser — enough to verify round-tripping without a full date
+// library. If this ever bites (e.g. 2038 overflow), the test is the
+// place to surface it.
+fn chrono_like_parse(value: &str) -> Option<u64> {
+    let (date, _) = value.split_once('T')?;
+    let mut date_parts = date.split('-');
+    let year: i32 = date_parts.next()?.parse().ok()?;
+    let month: u32 = date_parts.next()?.parse().ok()?;
+    let day: u32 = date_parts.next()?.parse().ok()?;
+    let time = value.split_once('T')?.1.trim_end_matches('Z');
+    let mut time_parts = time.split(':');
+    let hour: u32 = time_parts.next()?.parse().ok()?;
+    let minute: u32 = time_parts.next()?.parse().ok()?;
+    let second: u32 = time_parts.next()?.parse().ok()?;
+    let days_from_civil = |y: i32, m: u32, d: u32| -> Option<i64> {
+        // Howard Hinnant's days-from-civil, matching
+        // `epoch_seconds_to_ymdhms` in `manager.rs` exactly so this
+        // round-trip test stays valid as long as the two functions
+        // agree.
+        let y = if m <= 2 { y - 1 } else { y };
+        let era = if y >= 0 { y } else { y - 399 } / 400;
+        let yoe = (y - era * 400) as u32;
+        let m = if m > 2 { m - 3 } else { m + 9 };
+        let doy = (153 * m + 2) / 5 + d - 1;
+        let doe = yoe * 365 + yoe / 4 - yoe / 100 + doy;
+        Some((era * 146_097 + doe as i64) - 719_468)
+    };
+    let days = days_from_civil(year, month, day)?;
+    let secs = (days as u64) * 86_400 + (hour as u64) * 3600 + (minute as u64) * 60 + second as u64;
+    Some(secs)
+}

@@ -386,6 +386,19 @@ impl ApiRouter {
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ("INVALID_PARAMS", "missing `id`".to_owned()))?;
+        // Self-protection: the running App Manager cannot remove
+        // itself. Without this guard, a click in the manager UI
+        // could yank the install out from under the live process
+        // (mid-IPC, mid-render) and leave the host in an
+        // unrecoverable state.
+        if id == crate::manager::MANAGER_PLUGIN_ID {
+            return Err((
+                "OPERATION_FAILED",
+                format!(
+                    "refusing to uninstall the running App Manager ({id})"
+                ),
+            ));
+        }
         crate::package::uninstall(id, install_root)
             .map(|removed| json!({ "removed": removed.display().to_string() }))
             .map_err(|error| ("OPERATION_FAILED", error.to_string()))

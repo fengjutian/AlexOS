@@ -37,7 +37,7 @@ function makeAppRow(app) {
   const uninstallBtn = document.createElement("button");
   uninstallBtn.type = "button";
   uninstallBtn.textContent = "Uninstall";
-  uninstallBtn.addEventListener("click", () => uninstallApp(app.id, uninstallBtn));
+  uninstallBtn.addEventListener("click", () => uninstallApp(app, uninstallBtn));
   actions.appendChild(uninstallBtn);
   li.append(name, id, version, actions);
   return li;
@@ -93,13 +93,43 @@ async function loadExtensions() {
   }
 }
 
-async function uninstallApp(id, button) {
+async function uninstallApp(app, button) {
+  // Self-protection: never let the manager tear itself down. The
+  // plugin id is fixed by the host convention, so a string compare
+  // is enough. The Rust side also rejects this, but checking here
+  // gives the user an immediate, in-UI error message instead of a
+  // round-trip.
+  if (app.id === "com.alex.manager") {
+    setStatus(
+      `Cannot uninstall ${app.name} — the running App Manager cannot remove itself.`,
+      true,
+    );
+    return;
+  }
+  // Two-step confirmation: first "are you sure", then "also delete
+  // the app's private data directory". Both default to "no" so an
+  // accidental click does not nuke the install or the data.
+  const confirmed = window.confirm(
+    `Uninstall ${app.name} (${app.id})?\n\nThe package files will be removed from the system.`,
+  );
+  if (!confirmed) {
+    return;
+  }
+  const removeData = window.confirm(
+    `Also delete ${app.name}'s private data?\n\nThis cannot be undone. Choose "Cancel" to keep the data directory.`,
+  );
   button.disabled = true;
   try {
-    await window.alex.invoke("system.uninstall", { id });
+    await window.alex.invoke("system.uninstall", {
+      id: app.id,
+      removeData,
+    });
     await loadApps();
   } catch (error) {
-    setStatus(`Failed to uninstall ${id}: ${error?.message ?? error}`, true);
+    setStatus(
+      `Failed to uninstall ${app.id}: ${error?.message ?? error}`,
+      true,
+    );
     button.disabled = false;
   }
 }

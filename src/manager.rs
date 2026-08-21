@@ -31,13 +31,18 @@ use crate::{
     manifest::AppManifest,
     package,
     package::PackageError,
-    permission::Permission,
     runtime::{RuntimeHandle, RuntimeState, RuntimeStatus},
     trust,
 };
 
 const REGISTRY_FILENAME: &str = "registry.json";
 const REGISTRY_VERSION: u32 = 1;
+
+/// The well-known plugin id of the self-hosted App Manager. The host
+/// looks this id up in the install root to decide whether to delegate
+/// `alex manager` to the plugin; the same id is used by both
+/// `system.uninstall` and `manager.uninstall` to refuse a self-remove.
+pub const MANAGER_PLUGIN_ID: &str = "com.alex.manager";
 
 /// 应用安装来源 — 用于 App Registry 区分 .alex 包 / 远程更新 / dev 模式
 #[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
@@ -383,6 +388,18 @@ fn epoch_seconds_to_ymdhms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
     (y as i32, m as u32, d as u32, hour, minute, second)
 }
 
+/// Public version of `iso8601_now`/`epoch_seconds_to_ymdhms` for
+/// tests that want to assert on the exact serialised format. Tests
+/// cover a few well-known epoch seconds to catch a regression to
+/// epoch-seconds-as-string.
+pub fn format_epoch_seconds_as_iso8601(secs: u64) -> String {
+    let (year, month, day, hour, minute, second) = epoch_seconds_to_ymdhms(secs);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    )
+}
+
 /// 本地实现:把现有 package / permission / trust 模块 facade 起来
 pub struct LocalAppManager {
     install_root: PathBuf,
@@ -500,6 +517,14 @@ impl AppManager for LocalAppManager {
     }
 
     fn uninstall(&self, id: &str, options: UninstallOptions) -> Result<(), ManagerError> {
+        // Self-protection: refuse to remove the running App Manager.
+        // Without this guard, the manager UI's own Uninstall button
+        // could yank the install out from under the live process.
+        if id == MANAGER_PLUGIN_ID {
+            return Err(ManagerError::NotFound(format!(
+                "refusing to uninstall the running App Manager ({id})"
+            )));
+        }
         // Stop the runtime first so the install directory is not
         // yanked out from under a live Node process. Without this,
         // Windows would keep the file handles open long enough to
