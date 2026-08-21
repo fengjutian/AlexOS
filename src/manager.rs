@@ -567,7 +567,17 @@ impl AppManager for LocalAppManager {
             .backend
             .as_ref()
             .ok_or_else(|| ManagerError::Runtime("application has no backend runtime".into()))?;
-        Ok(self.runtimes.launch(id, &install_path, backend)?)
+        let status = self.runtimes.launch(id, &install_path, backend)?;
+        // Update "last launched" after a successful start so the UI
+        // can show a recents list. The launch itself has already
+        // succeeded — a registry write failure here is a soft error:
+        // we log it but do not roll back the runtime.
+        if let Err(error) = self.registry.touch_last_launched(id) {
+            eprintln!(
+                "alex manager: failed to record launch time for {id}: {error}"
+            );
+        }
+        Ok(status)
     }
 
     fn stop(&self, id: &str) -> Result<RuntimeStatus, ManagerError> {
@@ -920,11 +930,16 @@ fn with_trust_lookup(state: SignatureState, fingerprint: Option<&str>) -> Signat
         return state;
     };
     match trust::TrustStore::open(std::path::Path::new(&root)) {
-        Ok(store) => store
-            .list()
-            .any(|(stored, _)| stored == fingerprint)
-            .then_some(SignatureState::SignedTrusted)
-            .unwrap_or(state),
+        Ok(store) => {
+            if store
+                .list()
+                .any(|(stored, _)| stored == fingerprint)
+            {
+                SignatureState::SignedTrusted
+            } else {
+                state
+            }
+        }
         Err(_) => state,
     }
 }
