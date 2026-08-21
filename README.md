@@ -10,6 +10,9 @@ This repository contains the M0/M1 runtime core and the first Windows WebView2 s
 content calls the permission-checked Rust API through a small injected bridge.
 Node backends use a versioned JSON Lines protocol over managed stdin/stdout; logs belong on stderr.
 
+The dependency-free [`@alex/sdk`](packages/sdk) package provides typed filesystem, runtime,
+and system namespaces plus consistent timeout, cancellation, and error handling.
+
 ## Try it
 
 ```powershell
