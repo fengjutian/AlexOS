@@ -1,7 +1,9 @@
+pub mod api;
 pub mod ipc;
 pub mod manifest;
 pub mod permission;
 pub mod runtime;
+pub mod shell;
 
 use std::path::{Path, PathBuf};
 

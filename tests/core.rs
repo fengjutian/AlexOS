@@ -1,6 +1,12 @@
 use std::fs;
 
-use alex::{ipc, load_app, permission::Permission};
+use alex::{
+    api::ApiRouter,
+    ipc::{self, Request},
+    load_app,
+    permission::Permission,
+};
+use serde_json::json;
 
 #[test]
 fn loads_the_example_application() {
@@ -46,4 +52,48 @@ fn ipc_response_has_a_stable_shape() {
     assert_eq!(value["protocol"], 1);
     assert_eq!(value["error"]["code"], "PERMISSION_DENIED");
     assert!(value.get("result").is_none());
+}
+
+#[test]
+fn router_reads_only_from_an_allowed_scope() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    let router = ApiRouter::new(root, app);
+    let allowed = router.dispatch(Request {
+        protocol: 1,
+        id: "allowed".into(),
+        source: "com.alex.hello".into(),
+        method: "filesystem.readText".into(),
+        params: json!({ "path": "data/message.txt" }),
+        deadline_ms: None,
+    });
+    assert_eq!(
+        allowed.result.unwrap()["content"],
+        "Hello from the permission-checked Alex API.\n"
+    );
+
+    let denied = router.dispatch(Request {
+        protocol: 1,
+        id: "denied".into(),
+        source: "com.alex.hello".into(),
+        method: "filesystem.readText".into(),
+        params: json!({ "path": "manifest.json" }),
+        deadline_ms: None,
+    });
+    assert_eq!(denied.error.unwrap().code, "PERMISSION_DENIED");
+}
+
+#[test]
+fn router_rejects_spoofed_package_identity() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    let response = ApiRouter::new(root, app).dispatch(Request {
+        protocol: 1,
+        id: "spoofed".into(),
+        source: "com.attacker.app".into(),
+        method: "system.info".into(),
+        params: json!({}),
+        deadline_ms: None,
+    });
+    assert_eq!(response.error.unwrap().code, "SOURCE_MISMATCH");
 }

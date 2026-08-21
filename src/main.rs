@@ -1,6 +1,6 @@
 use std::{path::PathBuf, thread, time::Duration};
 
-use alex::{load_app, runtime::RuntimeProcess};
+use alex::{api::ApiRouter, ipc::Request, load_app, runtime::RuntimeProcess, shell};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -18,6 +18,10 @@ enum Commands {
     Inspect { path: PathBuf },
     /// Start the application's managed backend runtime.
     Run { path: PathBuf },
+    /// Open the application frontend in the native WebView shell.
+    Shell { path: PathBuf },
+    /// Invoke an Alex API request from a JSON file (diagnostic command).
+    Invoke { path: PathBuf, request: PathBuf },
 }
 
 fn main() {
@@ -57,6 +61,17 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 }
                 thread::sleep(Duration::from_millis(100));
             }
+        }
+        Commands::Shell { path } => {
+            let app = load_app(&path)?;
+            shell::run(&path, app)?;
+        }
+        Commands::Invoke { path, request } => {
+            let app = load_app(&path)?;
+            let request = std::fs::read_to_string(request)?;
+            let request: Request = serde_json::from_str(&request)?;
+            let response = ApiRouter::new(path, app).dispatch(request);
+            println!("{}", serde_json::to_string_pretty(&response)?);
         }
     }
     Ok(())

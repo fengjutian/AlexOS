@@ -6,14 +6,16 @@ IPC envelope.
 
 ## Current milestone
 
-This repository contains the headless M0/M1 runtime core. WebView2 rendering and transport
-wiring are deliberately separated from the core and are the next milestone.
+This repository contains the M0/M1 runtime core and the first Windows WebView2 shell. Web
+content calls the permission-checked Rust API through a small injected bridge.
 
 ## Try it
 
 ```powershell
 cargo run -- validate examples/hello
 cargo run -- inspect examples/hello
+cargo run -- invoke examples/hello examples/hello/read-request.json
+cargo run -- shell examples/hello
 $env:ALEX_NODE = "C:\path\to\node.exe"
 cargo run -- run examples/hello
 cargo test

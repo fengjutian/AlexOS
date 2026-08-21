@@ -1,0 +1,9 @@
+{
+  "protocol": 1,
+  "id": "example-read-1",
+  "source": "com.alex.hello",
+  "method": "filesystem.readText",
+  "params": {
+    "path": "data/message.txt"
+  }
+}
