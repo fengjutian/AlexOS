@@ -1,6 +1,7 @@
 pub mod api;
 pub mod ipc;
 pub mod manifest;
+pub mod package;
 pub mod permission;
 pub mod runtime;
 pub mod shell;

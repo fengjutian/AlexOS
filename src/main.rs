@@ -1,6 +1,6 @@
 use std::{path::PathBuf, thread, time::Duration};
 
-use alex::{api::ApiRouter, ipc::Request, load_app, runtime::RuntimeProcess, shell};
+use alex::{api::ApiRouter, ipc::Request, load_app, package, runtime::RuntimeProcess, shell};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -12,6 +12,12 @@ struct Cli {
 
 #[derive(Debug, Subcommand)]
 enum Commands {
+    /// Create a new Alex application project.
+    Create {
+        path: PathBuf,
+        #[arg(long)]
+        id: String,
+    },
     /// Validate an Alex application package.
     Validate { path: PathBuf },
     /// Show the normalized application manifest.
@@ -22,6 +28,14 @@ enum Commands {
     Shell { path: PathBuf },
     /// Invoke an Alex API request from a JSON file (diagnostic command).
     Invoke { path: PathBuf, request: PathBuf },
+    /// Build a validated .alex application archive.
+    Pack { path: PathBuf, output: PathBuf },
+    /// Install a .alex archive into an application directory.
+    Install {
+        archive: PathBuf,
+        #[arg(long)]
+        root: PathBuf,
+    },
 }
 
 fn main() {
@@ -34,6 +48,10 @@ fn main() {
 fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
+        Commands::Create { path, id } => {
+            package::create_project(&path, &id)?;
+            println!("created {}", path.display());
+        }
         Commands::Validate { path } => {
             let app = load_app(&path)?;
             println!("valid: {} {} ({})", app.name, app.version, app.id);
@@ -78,6 +96,14 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             }
             let response = router.dispatch(request);
             println!("{}", serde_json::to_string_pretty(&response)?);
+        }
+        Commands::Pack { path, output } => {
+            package::pack(&path, &output)?;
+            println!("packed {}", output.display());
+        }
+        Commands::Install { archive, root } => {
+            let installed = package::install(&archive, &root)?;
+            println!("installed {}", installed.display());
         }
     }
     Ok(())

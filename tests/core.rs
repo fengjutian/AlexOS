@@ -3,7 +3,7 @@ use std::fs;
 use alex::{
     api::ApiRouter,
     ipc::{self, Request},
-    load_app,
+    load_app, package,
     permission::Permission,
 };
 use serde_json::json;
@@ -104,4 +104,25 @@ fn router_rejects_oversized_ipc_messages() {
     let app = load_app(&root).unwrap();
     let response = ApiRouter::new(root, app).dispatch_json(&"x".repeat(1024 * 1024 + 1));
     assert_eq!(response.error.unwrap().code, "MESSAGE_TOO_LARGE");
+}
+
+#[test]
+fn package_round_trip_preserves_a_valid_application() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    let apps = workspace.path().join("apps");
+    package::pack(&source, &archive).unwrap();
+    let installed = package::install(&archive, &apps).unwrap();
+    let app = load_app(&installed).unwrap();
+    assert_eq!(app.id, "com.alex.hello");
+    assert!(installed.join("backend/index.js").is_file());
+}
+
+#[test]
+fn project_scaffolding_creates_a_valid_application() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = workspace.path().join("new_app");
+    package::create_project(&project, "com.alex.new_app").unwrap();
+    assert_eq!(load_app(&project).unwrap().id, "com.alex.new_app");
 }

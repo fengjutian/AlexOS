@@ -17,6 +17,8 @@ cargo run -- validate examples/hello
 cargo run -- inspect examples/hello
 cargo run -- invoke examples/hello examples/hello/read-request.json
 cargo run -- shell examples/hello
+cargo run -- pack examples/hello target/hello.alex
+cargo run -- install target/hello.alex --root target/apps
 $env:ALEX_NODE = "C:\path\to\node.exe"
 cargo run -- run examples/hello
 cargo test
