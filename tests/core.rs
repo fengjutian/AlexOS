@@ -2158,3 +2158,220 @@ fn api_capabilities_rejects_unknown_method() {
     assert!(result.error.is_some());
     assert_eq!(result.error.unwrap().code, "METHOD_NOT_FOUND");
 }
+
+// ---------------------------------------------------------------------------
+// Multi-window, menu / tray / shortcut, and process / network APIs.
+// ---------------------------------------------------------------------------
+
+#[test]
+fn api_window_lifecycle_isolates_apps() {
+    let (_root, router) = hello_router();
+    let create = call(
+        &router,
+        "window.create",
+        json!({
+            "url": "editor.html",
+            "title": "Editor",
+            "width": 1024,
+            "height": 768
+        }),
+    );
+    let info = create.result.unwrap();
+    let id = info["id"].as_u64().unwrap();
+    let list = call(&router, "window.list", json!({}));
+    let windows = list.result.unwrap()["windows"].as_array().unwrap().clone();
+    assert_eq!(windows.len(), 1);
+    assert_eq!(windows[0]["id"].as_u64().unwrap(), id);
+    let bounds = call(
+        &router,
+        "window.getBounds",
+        json!({ "windowId": id }),
+    );
+    assert_eq!(bounds.result.unwrap()["width"], 1024);
+    let update = call(
+        &router,
+        "window.setBounds",
+        json!({
+            "windowId": id,
+            "x": 50,
+            "y": 60,
+            "width": 800,
+            "height": 600
+        }),
+    );
+    assert_eq!(update.result.unwrap()["width"], 800);
+    let full = call(
+        &router,
+        "window.setFullscreen",
+        json!({ "windowId": id, "fullscreen": true }),
+    );
+    assert_eq!(full.result.unwrap()["fullscreen"], json!(true));
+    let is_full = call(
+        &router,
+        "window.isFullscreen",
+        json!({ "windowId": id }),
+    );
+    assert_eq!(is_full.result.unwrap()["fullscreen"], json!(true));
+    let destroy = call(
+        &router,
+        "window.destroy",
+        json!({ "windowId": id }),
+    );
+    assert_eq!(destroy.result.unwrap()["destroyed"], json!(true));
+    let gone = call(
+        &router,
+        "window.getBounds",
+        json!({ "windowId": id }),
+    );
+    assert!(gone.error.is_some());
+}
+
+#[test]
+fn api_window_create_rejects_zero_dimensions() {
+    let (_root, router) = hello_router();
+    let result = call(
+        &router,
+        "window.create",
+        json!({ "url": "x.html", "width": 0, "height": 100 }),
+    );
+    assert!(result.error.is_some());
+    assert_eq!(result.error.unwrap().code, "WINDOW_ERROR");
+}
+
+#[test]
+fn api_menu_set_application_menu_persists() {
+    let (_root, router) = hello_router();
+    let result = call(
+        &router,
+        "menu.setApplicationMenu",
+        json!({
+            "items": [
+                { "type": "normal", "id": "open", "label": "Open" },
+                { "type": "separator" },
+                { "type": "normal", "id": "quit", "label": "Quit", "accelerator": "Ctrl+Q" }
+            ]
+        }),
+    );
+    assert!(result.result.is_some(), "setApplicationMenu: {:?}", result.error);
+}
+
+#[test]
+fn api_menu_rejects_too_many_items() {
+    let (_root, router) = hello_router();
+    let items: Vec<serde_json::Value> = (0..300)
+        .map(|i| {
+            json!({
+                "type": "normal",
+                "id": format!("item-{i}"),
+                "label": format!("item-{i}")
+            })
+        })
+        .collect();
+    let result = call(
+        &router,
+        "menu.setApplicationMenu",
+        json!({ "items": items }),
+    );
+    assert!(result.error.is_some());
+    assert_eq!(result.error.unwrap().code, "MENU_ERROR");
+}
+
+#[test]
+fn api_tray_create_then_destroy() {
+    let (_root, router) = hello_router();
+    let result = call(
+        &router,
+        "tray.create",
+        json!({
+            "icon": "assets/tray.png",
+            "tooltip": "Alex App"
+        }),
+    );
+    let info = result.result.unwrap();
+    let id = info["id"].as_str().unwrap().to_owned();
+    let destroy = call(&router, "tray.destroy", json!({ "id": id }));
+    assert_eq!(destroy.result.unwrap()["destroyed"], json!(true));
+}
+
+#[test]
+fn api_tray_rejects_icon_outside_package() {
+    let (_root, router) = hello_router();
+    let result = call(
+        &router,
+        "tray.create",
+        json!({
+            "icon": "C:/Windows/System32/shell32.dll",
+            "tooltip": "host file"
+        }),
+    );
+    assert!(result.error.is_some(), "expected error for absolute icon path");
+}
+
+#[test]
+fn api_shortcut_register_and_list() {
+    let (_root, router) = hello_router();
+    let reg = call(
+        &router,
+        "shortcuts.register",
+        json!({ "accelerator": "Ctrl+Shift+P" }),
+    );
+    assert!(reg.result.is_some(), "register: {:?}", reg.error);
+    let list = call(&router, "shortcuts.list", json!({}));
+    let list_value = list.result.unwrap();
+    let shortcuts = list_value["shortcuts"].as_array().unwrap();
+    let has_accel = shortcuts
+        .iter()
+        .any(|s| s.as_str().unwrap_or("").ends_with("P"));
+    assert!(has_accel, "shortcut missing: {shortcuts:?}");
+    let unreg = call(
+        &router,
+        "shortcuts.unregister",
+        json!({ "accelerator": "Ctrl+Shift+P" }),
+    );
+    assert!(unreg.result.is_some());
+}
+
+#[test]
+fn api_shortcut_rejects_invalid_accelerator() {
+    let (_root, router) = hello_router();
+    let result = call(
+        &router,
+        "shortcuts.register",
+        json!({ "accelerator": "Bogus+P" }),
+    );
+    assert!(result.error.is_some());
+    assert_eq!(result.error.unwrap().code, "SHORTCUT_ERROR");
+}
+
+#[test]
+fn api_process_spawn_requires_allow_list() {
+    let (_root, router) = hello_router();
+    // Executable is not in the manifest's allow-list.
+    let result = call(
+        &router,
+        "process.spawn",
+        json!({ "executable": "../bin/evil.exe" }),
+    );
+    assert!(result.error.is_some(), "expected permission denied");
+    let err = result.error.unwrap();
+    assert!(
+        err.code == "OPERATION_FORBIDDEN" || err.code == "PERMISSION_DENIED",
+        "unexpected code: {err:?}"
+    );
+}
+
+#[test]
+fn api_net_fetch_blocks_undeclared_origin() {
+    let (_root, router) = hello_router();
+    let result = call(
+        &router,
+        "net.fetch",
+        json!({ "url": "https://api.evil.com/leak" }),
+    );
+    assert!(result.error.is_some());
+    let err = result.error.unwrap();
+    assert!(
+        err.code == "PERMISSION_DENIED" || err.code == "INVALID_PARAMS",
+        "unexpected code: {err:?}"
+    );
+}

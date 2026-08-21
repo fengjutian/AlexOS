@@ -169,7 +169,13 @@ fn response(
         .header("X-Content-Type-Options", "nosniff")
         .header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
+            // connect-src 'self' matches the main shell's policy
+            // (`src/shell.rs`). The fallback system WebView does
+            // not host a service backend, so the rule has no
+            // practical effect here; keeping it consistent with the
+            // main shell avoids a future surprise if a system
+            // page ever starts calling out to a service.
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
         )
         .body(body.into())
         .expect("static response is valid")

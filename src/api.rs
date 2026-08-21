@@ -1371,7 +1371,13 @@ impl ApiRouter {
             "window.manage",
         )?;
         let id = self.parse_window_id(params)?;
-        let bounds: WindowBounds = parse_params(params)?;
+        // WindowBounds is `deny_unknown_fields`; strip the
+        // `windowId` key before deserializing.
+        let mut filtered = params.clone();
+        if let Some(object) = filtered.as_object_mut() {
+            object.remove("windowId");
+        }
+        let bounds: WindowBounds = parse_params(&filtered)?;
         self.windows
             .set_bounds(&self.manifest.id, id, bounds)
             .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
@@ -1459,9 +1465,12 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::TrayManage),
             "tray.manage",
         )?;
-        let tray_id: String = parse_params(params)?;
+        let tray_id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `id`".to_owned()))?;
         self.menu_store
-            .destroy_tray(&self.manifest.id, &tray_id)
+            .destroy_tray(&self.manifest.id, tray_id)
             .map(|_| json!({ "destroyed": true }))
             .map_err(|error| ("TRAY_ERROR", error.to_string()))
     }
@@ -1471,9 +1480,12 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::ShortcutRegister),
             "shortcut.register",
         )?;
-        let accelerator: String = parse_params(params)?;
+        let accelerator = params
+            .get("accelerator")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `accelerator`".to_owned()))?;
         self.menu_store
-            .register_shortcut(&self.manifest.id, &accelerator)
+            .register_shortcut(&self.manifest.id, accelerator)
             .map(|_| json!({ "registered": true }))
             .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))
     }
@@ -1483,14 +1495,11 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::ShortcutRegister),
             "shortcut.register",
         )?;
-        // For symmetry with `register`, we just remove the
-        // accelerator from the app's set. The host keeps a
-        // global "last write wins" view, so a previously
-        // registered app's hotkey comes back the moment
-        // this app drops it. We expose the same input
-        // shape as `register`.
-        let accelerator: String = parse_params(params)?;
-        let normalized = crate::menu_tray::normalize_accelerator_public(&accelerator)
+        let accelerator = params
+            .get("accelerator")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `accelerator`".to_owned()))?;
+        let normalized = crate::menu_tray::normalize_accelerator_public(accelerator)
             .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
         let mut state = self
             .menu_store

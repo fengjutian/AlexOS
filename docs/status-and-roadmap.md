@@ -100,25 +100,29 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 已实现：
 
 - `ALEX_NODE` 或 `PATH` 发现；
-- stdin/stdout JSON Lines RPC；
-- stderr 日志环形缓存；
+- **两种 backend 模式**：
+  - `rpc`（默认）：stdin/stdout JSON Lines，单请求，service 接口不暴露；
+  - `service`：长期运行，host 分配 28000-28999 端口 + 注入 `ALEX_SERVICE_PORT` + `ALEX_RUNTIME_TOKEN`，backend 必须 listen `127.0.0.1` 且写 `{"type":"alex.ready","port":N}` 到 stderr，stdout 留作应用日志；
+- 启动握手：`READY_HANDSHAKE_TIMEOUT = 15s`，超时强制 kill；
+- `RuntimeStatus`：`state`（`Running` / `Starting` / `Ready` / `Unhealthy` / `Crashed` / `Stopped`）、`mode`、`port`、`token`、`ready`、`pid`、`restart_count`、`last_error`、`logs`（200 行 stderr 环形）；
+- **数据目录**：host 自动在 `%LOCALAPPDATA%/AlexOS/apps/<id>/{data,cache,logs,runtime}/` 四个子目录 `ensure`（幂等、不删用户文件），env 注入 `ALEX_APP_DATA_DIR` / `ALEX_APP_CACHE_DIR` / `ALEX_APP_LOG_DIR` / `ALEX_APP_ID`；
+- **优雅退出**：service 5s / rpc 2s 宽限，超时 `taskkill /T /F`；backend 收到 `{"type":"shutdown"}` envelope 可走 SIGTERM 优雅路径；
+- **退避重启**：`RestartPolicy.policy`（`never` / `on-failure` 默认 / `always`）× `max_retries`（默认 5），`BACKOFF_SCHEDULE = [0, 1, 2, 4, 8, 16]s`，超限后 RuntimeStatus 报 `Crashed` 不再启动；
+- `restart` 用户命令：跳过 backoff schedule（操作员主动触发），但仍尊重 policy（`never` 仍拒绝）；
+- stderr 日志环形缓存 + 镜像到 `logs/backend.log`（backend 自己写，host 不阻塞启动）；
 - PID、状态、重启次数和最后错误；
-- 崩溃检测和下次调用重启；
-- shutdown 生命周期消息和 2 秒优雅退出窗口；
-- deadline/AbortSignal 取消；
+- deadline/AbortSignal 取消（RPC 模式）；
 - Windows 进程树强制终止。
 
 限制：
 
-- Node 不随 Alex OS 分发；
-- 没有 Node 版本锁定；
-- 没有后端启动握手和启动超时；
-- 没有健康检查；
-- 没有连续崩溃熔断和指数退避；
+- Node 不随 Alex OS 分发；host 不锁定 Node 版本；
 - 没有 CPU、内存、句柄或磁盘配额；
 - 取消粒度是终止整个 Runtime，不是单请求取消；
-- stdout 被协议独占，应用日志必须使用 stderr；
-- Node 可以绕过 Alex 权限直接访问本机能力。
+- stdout 被协议独占（RPC 模式）；service 模式 stdout 留作应用日志，但 host 不读；
+- Node 可以绕过 Alex 权限直接访问本机能力；
+- 健康检查路径只能 `GET`；非 GET health check 暂未支持；
+- WebSocket 升级转发**未实现**（HTTP/1.0 + HTTP/1.1 only，stage 3 MVP）；详见 §3 P1。
 
 ### 2.5 Native API 与 SDK
 
@@ -219,6 +223,47 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - Windows 文件占用时更新只能失败，尚无退出后更新助手。
 - HTTPS 客户端没有真实服务端、代理、证书错误和断网故障注入测试。
 
+### 2.9 Service 反向代理（`alex://app/api/*`）
+
+已实现（stage 3 切片 1）：
+
+- WebView 通过 `fetch('alex://app/api/...')` 调到 service backend，**不暴露端口**；
+- CSP `connect-src 'self'`，同源放行 `alex://app/api/...`；
+- Host 同步 HTTP/1.0 forwarder（`src/proxy.rs::proxy_to_service`）：
+  - 3s connect timeout + 5s read/write timeout；
+  - Body cap 1 MiB（与 WebView → host IPC 限制对齐）；
+  - Header 白名单（`accept` / `accept-language` / `content-type` / `authorization` / `user-agent` / `cache-control`），不转发 `host` / `origin` / `cookie` / `referer` / `sec-fetch-*`；
+  - 自动注入 `X-Alx-App-Id` + `X-Alx-Token`（per-launch shared secret）；
+  - Response header 过滤 `connection` / `transfer-encoding`，保 `content-type` / `content-length` / `cache-control` / `etag` / `last-modified` / `expires` / `vary`；
+  - Backend 不可达返 502，请求 body 过大返 413，路径为空返 404；
+- 非 service 模式 app 调 `/api/*` 返 503 `service_unavailable_response`；
+- `shutdown(Write)` 半关闭让 backend `read_to_end` 立即返；
+- 8 个 unit test + 1 个 e2e 验过 service-hello + notes backend 端到端。
+
+限制：
+
+- 仅 HTTP/1.0 + HTTP/1.1；不支持 HTTP/2 / HTTP/3；
+- WebSocket upgrade **未实现**（设计文档要求，stage 3 MVP 跳过；详见 §3 P1）；
+- **流式响应**未实现 — 大响应 body 一次性 read_to_end 后再返回（阻塞 WebView 主线程）；
+- 没有 per-app 限速、并发限制、QPS 配额；
+- backend 错误状态没有重试（502 / 504 一次性返给 page）。
+
+### 2.10 App Manager Service 状态展示
+
+已实现（stage 4 切片 1）：
+
+- `AppSummary` 加 `runtime: Option<RuntimeSnapshot>` 字段（`skip_serializing_if` 让 offline app 不带 `runtime` key）；
+- `RuntimeSnapshot` 含 `state` / `mode` / `pid` / `port` / `ready` / `lastError` / `recentLogs`（最近 20 行 stderr tail）；
+- `RuntimeSupervisor.snapshot(id) -> Option<RuntimeStatus>`：None 当 app 没在跑（区别于 `status` 永远返 `Stopped`）；
+- Manager plugin frontend `makeRuntimeBadge`：
+  - 标签 `mode · state`（`rpc` / `service`）；
+  - service 模式显示 `:port` 绿色（ready）或 黄色（starting）；
+  - `pid <n>` 小字；
+  - `⚠` lastError tooltip；
+  - `<details>` 折叠的 logs tail；
+  - 按 state 染色（ready/running 绿、starting 黄、crashed 红、offline 灰）；
+- 2 个 unit test 验序列化形态（present / absent 两种 + tail 顺序）。
+
 ## 3. 未开发功能详细清单
 
 以下内容是未完成需求，不是当前能力。
@@ -228,13 +273,14 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 #### 3.1 Runtime 可靠性
 
 - Node 随 Alex OS 安装并固定受支持版本；
-- 启动握手、启动 deadline 和 readiness 状态；
-- 连续崩溃计数、熔断、退避和恢复操作；
 - 单请求并发、响应乱序关联和单请求取消；
 - 结构化日志级别、日志文件轮转和诊断导出；
 - CPU/内存/子进程数量限制；
 - Windows Job Object 管理完整进程树；
 - Shell 异常退出后的孤儿进程回收。
+
+> 注：启动握手 / readiness 状态 / 连续崩溃熔断 / 退避 / 优雅退出 — 已在 0.1 切片
+> 1-2 落地，详见 §2.4。WebSocket 升级转发仍是 P1（见 §3.5）。
 
 验收标准：后端挂起、崩溃、重复崩溃、启动失败和 Shell 异常退出均有确定状态，
 不会遗留进程；取消一个请求不影响其他并发请求。
