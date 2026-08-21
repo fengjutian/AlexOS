@@ -681,19 +681,16 @@ fn stderr_pump(
             Ok(0) => break,
             Ok(_) => {
                 let trimmed = line.trim_end();
-                if !signalled {
-                    if let Ok(value) = serde_json::from_str::<Value>(trimmed) {
-                        if value.get("type").and_then(|v| v.as_str())
-                            == Some("alex.ready")
-                        {
-                            signalled = true;
-                            if let Some(flag) = &ready_flag {
-                                flag.store(true, Ordering::Release);
-                            }
-                            if let Some(tx) = &ready_tx {
-                                let _ = tx.send(());
-                            }
-                        }
+                if !signalled
+                    && let Ok(value) = serde_json::from_str::<Value>(trimmed)
+                    && value.get("type").and_then(|v| v.as_str()) == Some("alex.ready")
+                {
+                    signalled = true;
+                    if let Some(flag) = &ready_flag {
+                        flag.store(true, Ordering::Release);
+                    }
+                    if let Some(tx) = &ready_tx {
+                        let _ = tx.send(());
                     }
                 }
                 if let Ok(mut buffer) = logs.lock() {

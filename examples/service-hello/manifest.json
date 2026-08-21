@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "com.alex.service-hello",
+  "name": "Alex Service Hello",
+  "version": "0.1.0",
+  "description": "Demonstrates a service-mode backend: a long-running node:http server bound to a host-allocated loopback port. The host injects ALEX_SERVICE_PORT and ALEX_RUNTIME_TOKEN and waits for the backend to report `alex.ready` on stderr before marking the runtime Ready. Stage-3 slices will add an `alex://app/api/*` reverse proxy so the frontend can talk to this server.",
+  "frontend": {
+    "entry": "frontend/index.html"
+  },
+  "backend": {
+    "runtime": "node",
+    "entry": "backend/index.js",
+    "mode": "service",
+    "healthCheck": {
+      "path": "/health",
+      "timeoutMs": 5000
+    }
+  },
+  "permissions": [
+    { "name": "window.manage" },
+    { "name": "notification.show" }
+  ]
+}

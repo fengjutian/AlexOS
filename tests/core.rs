@@ -1702,6 +1702,63 @@ fn manager_uninstall_refuses_to_remove_the_running_app_manager() {
 }
 
 #[test]
+fn permission_store_migrates_legacy_ipc_method_name_keys() {
+    // H1 migration: stores written before the manifest-name key
+    // change are still keyed by the runtime IPC method name. On the
+    // next open we should rewrite the file so the keys line up with
+    // what the runtime now checks.
+    let workspace = tempfile::tempdir().unwrap();
+    let root = workspace.path();
+    let app_id = "com.alex.legacy-store";
+
+    // Lay down a legacy store file with IPC method-name keys.
+    let directory = root.join("permissions");
+    fs::create_dir_all(&directory).unwrap();
+    let state_path = directory.join(format!("{app_id}.json"));
+    let legacy = serde_json::json!({
+        "clipboard.readText": "granted",
+        "clipboard.writeText": "denied",
+        "filesystem.readText": "prompt",
+        "totally.unrelated.key": "granted",
+    });
+    fs::write(&state_path, serde_json::to_vec_pretty(&legacy).unwrap()).unwrap();
+
+    // Open the store — migration should run, rewrite the file, and
+    // surface the decisions under their manifest names.
+    let store = PermissionStore::open_at(root, app_id).unwrap();
+    let decisions = store.list();
+    assert_eq!(
+        decisions.get("clipboard.read").copied(),
+        Some(PermissionDecision::Granted),
+        "legacy clipboard.readText must become clipboard.read"
+    );
+    assert_eq!(
+        decisions.get("clipboard.write").copied(),
+        Some(PermissionDecision::Denied)
+    );
+    assert_eq!(
+        decisions.get("filesystem.read").copied(),
+        Some(PermissionDecision::Prompt)
+    );
+    assert_eq!(
+        decisions.get("clipboard.readText").copied(),
+        None,
+        "legacy key should have been removed, not kept alongside"
+    );
+    assert_eq!(
+        decisions.get("totally.unrelated.key").copied(),
+        Some(PermissionDecision::Granted),
+        "unrelated keys must survive migration untouched"
+    );
+
+    // Reopen — migration should be idempotent (no work, no rewrite).
+    let _ = PermissionStore::open_at(root, app_id).unwrap();
+    let second = store.list();
+    assert_eq!(second.get("clipboard.read").copied(), Some(PermissionDecision::Granted));
+    assert_eq!(second.get("filesystem.read").copied(), Some(PermissionDecision::Prompt));
+}
+
+#[test]
 fn api_system_uninstall_refuses_to_remove_the_running_app_manager() {
     // Same self-protection contract on the `system.uninstall` path:
     // a plugin that has been granted `system.uninstall` still cannot

@@ -253,3 +253,81 @@ fn validate_relative_entry(root: &Path, entry: &str, kind: &str) -> Result<(), A
     }
     Ok(())
 }
+
+#[cfg(test)]
+mod backend_mode_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// Pre-0.1 backend blocks (no `mode` / `healthCheck` / `restart`
+    /// / `port` fields) must still parse — the new fields all carry
+    /// per-field `#[serde(default)]`.
+    #[test]
+    fn legacy_backend_block_still_parses_as_rpc() {
+        let value = json!({
+            "runtime": "node",
+            "entry": "backend/index.js",
+        });
+        let backend: Backend = serde_json::from_value(value).expect("legacy backend parses");
+        assert_eq!(backend.mode, BackendMode::Rpc);
+        assert!(backend.health_check.is_none());
+        assert!(backend.restart.is_none());
+        assert!(backend.port.is_none());
+    }
+
+    #[test]
+    fn service_backend_parses_with_health_check_and_restart() {
+        let value = json!({
+            "runtime": "node",
+            "entry": "backend/index.js",
+            "mode": "service",
+            "healthCheck": { "path": "/livez", "timeoutMs": 3000 },
+            "restart": { "policy": "always", "maxRetries": 9 },
+            "port": 28100,
+        });
+        let backend: Backend = serde_json::from_value(value).expect("service backend parses");
+        assert_eq!(backend.mode, BackendMode::Service);
+        let health = backend.health_check.expect("health_check present");
+        assert_eq!(health.path, "/livez");
+        assert_eq!(health.timeout_ms, 3000);
+        let restart = backend.restart.expect("restart present");
+        assert_eq!(restart.policy, "always");
+        assert_eq!(restart.max_retries, 9);
+        assert_eq!(backend.port, Some(28100));
+    }
+
+    #[test]
+    fn health_check_defaults_apply_when_struct_is_partial() {
+        let value = json!({ "path": "/readyz" });
+        let health: HealthCheck = serde_json::from_value(value).expect("partial health parses");
+        assert_eq!(health.path, "/readyz");
+        assert_eq!(health.timeout_ms, 10_000);
+    }
+
+    #[test]
+    fn health_check_rejects_unknown_fields() {
+        let value = json!({ "path": "/health", "method": "POST" });
+        let result = serde_json::from_value::<HealthCheck>(value);
+        assert!(result.is_err(), "unknown fields must be rejected");
+    }
+
+    #[test]
+    fn backend_rejects_unknown_fields() {
+        let value = json!({
+            "runtime": "node",
+            "entry": "backend/index.js",
+            "mystery": true,
+        });
+        let result = serde_json::from_value::<Backend>(value);
+        assert!(result.is_err(), "unknown Backend fields must be rejected");
+    }
+
+    #[test]
+    fn mode_serializes_lowercase() {
+        assert_eq!(serde_json::to_value(BackendMode::Rpc).unwrap(), json!("rpc"));
+        assert_eq!(
+            serde_json::to_value(BackendMode::Service).unwrap(),
+            json!("service")
+        );
+    }
+}

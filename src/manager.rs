@@ -724,20 +724,14 @@ impl RuntimeSupervisor {
             // Idempotent: stopping a non-running app is a no-op, not an error.
             return Ok(RuntimeStatus {
                 state: RuntimeState::Stopped,
-                pid: None,
-                restart_count: 0,
-                last_error: None,
-                logs: Vec::new(),
+                ..Default::default()
             });
         };
         handle.cancel();
         let _ = handle.status(Duration::from_millis(200));
         Ok(RuntimeStatus {
             state: RuntimeState::Stopped,
-            pid: None,
-            restart_count: 0,
-            last_error: None,
-            logs: Vec::new(),
+            ..Default::default()
         })
     }
 
@@ -746,10 +740,7 @@ impl RuntimeSupervisor {
         let Some(handle) = runtimes.get(id) else {
             return Ok(RuntimeStatus {
                 state: RuntimeState::Stopped,
-                pid: None,
-                restart_count: 0,
-                last_error: None,
-                logs: Vec::new(),
+                ..Default::default()
             });
         };
         let status = handle.status(Duration::from_millis(200))?;

@@ -42,6 +42,34 @@ pub enum Permission {
 }
 
 impl Permission {
+    /// Translate a legacy IPC method name (used by stores written
+    /// before H1) to the canonical manifest permission name.
+    /// Returns `None` if the name is not a known legacy key. Used
+    /// by `PermissionStore::open_at` to migrate decisions that
+    /// were stored under the old IPC-method-name keys.
+    pub fn manifest_name_for_ipc_method(method: &str) -> Option<&'static str> {
+        match method {
+            "filesystem.readText" => Some("filesystem.read"),
+            "filesystem.writeText" => Some("filesystem.write"),
+            "dialog.openFile" => Some("dialog.open"),
+            "clipboard.readText" => Some("clipboard.read"),
+            "clipboard.writeText" => Some("clipboard.write"),
+            "system.openExternal" => Some("system.openExternal"),
+            "window.setTitle" => Some("window.manage"),
+            "notification.show" => Some("notification.show"),
+            "runtime.invoke" => Some("runtime.invoke"),
+            "runtime.restart" => Some("runtime.manage"),
+            "media.camera" => Some("media.camera"),
+            "media.microphone" => Some("media.microphone"),
+            "geolocation" => Some("geolocation"),
+            "system.install" => Some("system.install"),
+            "system.uninstall" => Some("system.uninstall"),
+            "system.manageApps" => Some("system.manageApps"),
+            "system.manageExtensions" => Some("system.manageExtensions"),
+            _ => None,
+        }
+    }
+
     /// Return the canonical permission name as written in `manifest.json`
     /// (matches the serde `rename` on each variant, e.g. `"system.manageApps"`).
     /// Used by `plugin::run` to pre-grant `system.*` permissions without
