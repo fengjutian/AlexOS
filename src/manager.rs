@@ -27,7 +27,9 @@ use thiserror::Error;
 
 use crate::{
     authorization::{AuthorizationError, PermissionDecision, PermissionStore},
-    load_app, manifest::AppManifest, package,
+    load_app,
+    manifest::AppManifest,
+    package,
     package::PackageError,
     permission::Permission,
     runtime::{RuntimeHandle, RuntimeState, RuntimeStatus},
@@ -327,9 +329,7 @@ impl LocalAppManager {
     pub fn open(install_root: &Path) -> Result<Self, ManagerError> {
         let permissions_root = std::env::var_os("ALEX_DATA_DIR")
             .map(PathBuf::from)
-            .or_else(|| {
-                std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("AlexOS"))
-            })
+            .or_else(|| std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("AlexOS")))
             .unwrap_or_else(|| install_root.to_path_buf());
         Self::open_with(install_root, permissions_root)
     }
@@ -487,9 +487,10 @@ impl AppManager for LocalAppManager {
     fn launch(&self, id: &str) -> Result<RuntimeStatus, ManagerError> {
         let install_path = self.install_root.join(id);
         let manifest = load_app(&install_path)?;
-        let backend = manifest.backend.as_ref().ok_or_else(|| {
-            ManagerError::Runtime("application has no backend runtime".into())
-        })?;
+        let backend = manifest
+            .backend
+            .as_ref()
+            .ok_or_else(|| ManagerError::Runtime("application has no backend runtime".into()))?;
         Ok(self.runtimes.launch(id, &install_path, backend)?)
     }
 
@@ -607,7 +608,9 @@ impl ManagerRouter {
         }
         match serde_json::from_str::<crate::ipc::Request>(body) {
             Ok(request) => self.dispatch(request),
-            Err(error) => crate::ipc::Response::error("unknown", "INVALID_REQUEST", error.to_string()),
+            Err(error) => {
+                crate::ipc::Response::error("unknown", "INVALID_REQUEST", error.to_string())
+            }
         }
     }
 
@@ -638,14 +641,20 @@ impl ManagerRouter {
             },
             "manager.get_app" => match parse_id(&request.params) {
                 Ok(id) => match self.manager.get_app(&id) {
-                    Ok(details) => json_response(&request.id, &serde_json::to_value(details).unwrap_or_default()),
+                    Ok(details) => json_response(
+                        &request.id,
+                        &serde_json::to_value(details).unwrap_or_default(),
+                    ),
                     Err(error) => manager_error_response(&request.id, error),
                 },
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
             },
             "manager.install" => match parse_install(&request.params) {
                 Ok((path, options)) => match self.manager.install(&path, options) {
-                    Ok(summary) => json_response(&request.id, &serde_json::to_value(summary).unwrap_or_default()),
+                    Ok(summary) => json_response(
+                        &request.id,
+                        &serde_json::to_value(summary).unwrap_or_default(),
+                    ),
                     Err(error) => manager_error_response(&request.id, error),
                 },
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
@@ -659,28 +668,39 @@ impl ManagerRouter {
             },
             "manager.launch" => match parse_id(&request.params) {
                 Ok(id) => match self.manager.launch(&id) {
-                    Ok(status) => json_response(&request.id, &serde_json::to_value(status).unwrap_or_default()),
+                    Ok(status) => json_response(
+                        &request.id,
+                        &serde_json::to_value(status).unwrap_or_default(),
+                    ),
                     Err(error) => manager_error_response(&request.id, error),
                 },
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
             },
             "manager.stop" => match parse_id(&request.params) {
                 Ok(id) => match self.manager.stop(&id) {
-                    Ok(status) => json_response(&request.id, &serde_json::to_value(status).unwrap_or_default()),
+                    Ok(status) => json_response(
+                        &request.id,
+                        &serde_json::to_value(status).unwrap_or_default(),
+                    ),
                     Err(error) => manager_error_response(&request.id, error),
                 },
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
             },
             "manager.runtime_status" => match parse_id(&request.params) {
                 Ok(id) => match self.manager.runtime_status(&id) {
-                    Ok(status) => json_response(&request.id, &serde_json::to_value(status).unwrap_or_default()),
+                    Ok(status) => json_response(
+                        &request.id,
+                        &serde_json::to_value(status).unwrap_or_default(),
+                    ),
                     Err(error) => manager_error_response(&request.id, error),
                 },
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
             },
             "manager.permissions" => match parse_id(&request.params) {
                 Ok(id) => match self.manager.permissions(&id) {
-                    Ok(perms) => json_response(&request.id, &serde_json::json!({ "permissions": perms })),
+                    Ok(perms) => {
+                        json_response(&request.id, &serde_json::json!({ "permissions": perms }))
+                    }
                     Err(error) => manager_error_response(&request.id, error),
                 },
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
@@ -715,9 +735,7 @@ fn parse_id(params: &serde_json::Value) -> Result<String, String> {
         .ok_or_else(|| "missing `id` parameter".to_owned())
 }
 
-fn parse_install(
-    params: &serde_json::Value,
-) -> Result<(PathBuf, InstallOptions), String> {
+fn parse_install(params: &serde_json::Value) -> Result<(PathBuf, InstallOptions), String> {
     let path = params
         .get("packagePath")
         .and_then(|v| v.as_str())
@@ -739,9 +757,7 @@ fn parse_install(
     ))
 }
 
-fn parse_uninstall(
-    params: &serde_json::Value,
-) -> Result<(String, UninstallOptions), String> {
+fn parse_uninstall(params: &serde_json::Value) -> Result<(String, UninstallOptions), String> {
     let id = params
         .get("id")
         .and_then(|v| v.as_str())
@@ -820,5 +836,8 @@ fn permission_method_name(permission: &Permission) -> String {
         Permission::NotificationShow => "notification.show".into(),
         Permission::RuntimeInvoke => "runtime.invoke".into(),
         Permission::RuntimeManage => "runtime.restart".into(),
+        Permission::MediaCamera => "media.camera".into(),
+        Permission::MediaMicrophone => "media.microphone".into(),
+        Permission::Geolocation => "geolocation".into(),
     }
 }

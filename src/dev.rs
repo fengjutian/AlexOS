@@ -94,9 +94,7 @@ mod windows {
         manifest::AppManifest,
         native::HostCommand,
         runtime::RuntimeHandle,
-        shell::windows::{
-            BRIDGE, UserEvent, WindowHost, asset_response, emit_event,
-        },
+        shell::windows::{BRIDGE, UserEvent, WindowHost, asset_response, emit_event},
     };
 
     const DEV_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -115,18 +113,16 @@ mod windows {
         package_root: &Path,
         manifest: AppManifest,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let canonical_root = package_root.canonicalize().unwrap_or_else(|_| package_root.into());
+        let canonical_root = package_root
+            .canonicalize()
+            .unwrap_or_else(|_| package_root.into());
         let frontend_dir = canonical_root.join(
             Path::new(&manifest.frontend.entry)
                 .parent()
                 .unwrap_or(Path::new("")),
         );
         let backend_dir = manifest.backend.as_ref().map(|backend| {
-            canonical_root.join(
-                Path::new(&backend.entry)
-                    .parent()
-                    .unwrap_or(Path::new("")),
-            )
+            canonical_root.join(Path::new(&backend.entry).parent().unwrap_or(Path::new("")))
         });
 
         // Capacity-1 channel: a burst of file events collapses into the most
@@ -134,12 +130,7 @@ mod windows {
         let (dev_tx, dev_rx) = mpsc::sync_channel::<DevCommand>(1);
 
         let matcher = load_alexignore(&canonical_root);
-        spawn_watcher(
-            frontend_dir.clone(),
-            backend_dir.clone(),
-            matcher,
-            dev_tx,
-        );
+        spawn_watcher(frontend_dir.clone(), backend_dir.clone(), matcher, dev_tx);
 
         let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
@@ -284,10 +275,7 @@ mod windows {
             }
         };
         if let Err(error) = watcher.watch(&frontend_dir, RecursiveMode::Recursive) {
-            eprintln!(
-                "alex dev: cannot watch {}: {error}",
-                frontend_dir.display()
-            );
+            eprintln!("alex dev: cannot watch {}: {error}", frontend_dir.display());
             return;
         }
         if let Some(backend) = &backend_dir

@@ -60,7 +60,9 @@ impl ApiRouter {
     /// changes without restarting the shell. Additive — does not change
     /// existing dispatch behavior.
     pub fn restart_runtime(&self, timeout: Duration) -> Option<Result<(), RuntimeError>> {
-        self.runtime.as_ref().map(|handle| handle.restart(timeout).map(|_| ()))
+        self.runtime
+            .as_ref()
+            .map(|handle| handle.restart(timeout).map(|_| ()))
     }
 
     pub fn dispatch_json(&self, input: &str) -> Response {
@@ -115,6 +117,7 @@ impl ApiRouter {
             "window.maximize" => self.window_command(HostCommand::MaximizeWindow),
             "window.close" => self.window_command(HostCommand::CloseWindow),
             "notification.show" => self.notification_show(&request.params),
+            "system.requestPermission" => self.request_permission(&request.params),
             "runtime.invoke" => {
                 self.runtime_invoke(&request.id, &request.params, request.deadline_ms)
             }
@@ -303,6 +306,52 @@ impl ApiRouter {
         native::show_notification(&params.title, &params.body)
             .map(|_| json!({ "shown": true }))
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
+    /// Front-end calls this before invoking `getUserMedia` /
+    /// `getCurrentPosition`. WebView2 does not surface a permission prompt
+    /// for these; we model the gate as an explicit IPC so the user
+    /// always sees a native confirmation tied to the app's manifest.
+    fn request_permission(&self, params: &Value) -> ApiResult {
+        let kind = params
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `kind`".to_owned()))?;
+        let method_name = match kind {
+            "media.camera" => "media.camera",
+            "media.microphone" => "media.microphone",
+            "geolocation" => "geolocation",
+            other => {
+                return Err((
+                    "INVALID_PARAMS",
+                    format!("unknown permission kind: {other}"),
+                ))
+            }
+        };
+        self.require_permission(
+            |permission| match (permission, kind) {
+                (Permission::MediaCamera, "media.camera") => true,
+                (Permission::MediaMicrophone, "media.microphone") => true,
+                (Permission::Geolocation, "geolocation") => true,
+                _ => false,
+            },
+            method_name,
+        )?;
+        let granted = native::confirm_permission(&self.manifest.name, method_name)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        // Persist the user's choice so subsequent calls don't re-prompt
+        // until they explicitly revoke via `alex permissions revoke`.
+        if let Some(store) = &self.permission_store {
+            let decision = if granted {
+                crate::authorization::PermissionDecision::Granted
+            } else {
+                crate::authorization::PermissionDecision::Denied
+            };
+            store
+                .set(method_name, decision)
+                .map_err(|error| ("AUTHORIZATION_ERROR", error.to_string()))?;
+        }
+        Ok(json!({ "granted": granted }))
     }
 
     fn require_permission(

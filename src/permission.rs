@@ -25,6 +25,12 @@ pub enum Permission {
     RuntimeInvoke,
     #[serde(rename = "runtime.manage")]
     RuntimeManage,
+    #[serde(rename = "media.camera")]
+    MediaCamera,
+    #[serde(rename = "media.microphone")]
+    MediaMicrophone,
+    #[serde(rename = "geolocation")]
+    Geolocation,
 }
 
 impl Permission {

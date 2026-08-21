@@ -21,8 +21,9 @@ use wry::{
 };
 
 use crate::{
-    AlexError, manifest::AppManifest,
+    AlexError,
     manager::{ManagerRouter, SYSTEM_IDENTITY},
+    manifest::AppManifest,
 };
 
 const BRIDGE: &str = r#"
@@ -133,10 +134,18 @@ enum ManagerEvent {
 
 fn serve_system_asset(uri_path: &str) -> HttpResponse<std::borrow::Cow<'static, [u8]>> {
     if uri_path == "/" || uri_path.is_empty() {
-        return response(200, "text/html; charset=utf-8", PLACEHOLDER_HTML.as_bytes().to_vec());
+        return response(
+            200,
+            "text/html; charset=utf-8",
+            PLACEHOLDER_HTML.as_bytes().to_vec(),
+        );
     }
     if uri_path == "/placeholder" {
-        return response(200, "text/html; charset=utf-8", PLACEHOLDER_HTML.as_bytes().to_vec());
+        return response(
+            200,
+            "text/html; charset=utf-8",
+            PLACEHOLDER_HTML.as_bytes().to_vec(),
+        );
     }
     response(404, "text/plain", b"Not found".to_vec())
 }

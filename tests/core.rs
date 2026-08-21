@@ -3,11 +3,12 @@ use std::{fs, io::Write, path::Path, sync::Arc};
 use alex::{
     api::ApiRouter,
     authorization::{PermissionDecision, PermissionStore},
-    dev, ipc::{self, Request},
+    dev,
+    ipc::{self, Request},
     load_app,
     manager::{
-        AppManager, InstallOptions, LocalAppManager, ManagerError, ManagerRouter, RuntimeSupervisor,
-        SupervisorError, SYSTEM_IDENTITY, UninstallOptions,
+        AppManager, InstallOptions, LocalAppManager, ManagerError, ManagerRouter,
+        RuntimeSupervisor, SYSTEM_IDENTITY, SupervisorError, UninstallOptions,
     },
     package,
     permission::Permission,
@@ -448,7 +449,9 @@ fn alexignore_filters_watch_paths_with_gitignore_grammar() {
         "*.log should match debug.log"
     );
     assert!(
-        matcher.matched(Path::new("frontend/debug.log"), false).is_ignore(),
+        matcher
+            .matched(Path::new("frontend/debug.log"), false)
+            .is_ignore(),
         "*.log should match nested debug.log"
     );
     assert!(
@@ -456,16 +459,21 @@ fn alexignore_filters_watch_paths_with_gitignore_grammar() {
         "!keep.log should override *.log"
     );
     assert!(
-        !matcher.matched(Path::new("frontend/index.html"), false).is_ignore(),
+        !matcher
+            .matched(Path::new("frontend/index.html"), false)
+            .is_ignore(),
         "unrelated files are not affected"
     );
 
     // Verify the wrapper used by the watcher reaches the same answer.
-    assert!(dev::is_ignored(
-        &m,
-        workspace.path(),
-        &workspace.path().join("node_modules/lodash/index.js")
-    ), "node_modules/ should cover nested files");
+    assert!(
+        dev::is_ignored(
+            &m,
+            workspace.path(),
+            &workspace.path().join("node_modules/lodash/index.js")
+        ),
+        "node_modules/ should cover nested files"
+    );
     assert!(dev::is_ignored(
         &m,
         workspace.path(),
@@ -544,13 +552,22 @@ fn manifest_parses_full_metadata() {
     )
     .unwrap();
     let app = load_app(workspace.path()).expect("full manifest should load");
-    assert_eq!(app.description.as_deref(), Some("A local notes application"));
+    assert_eq!(
+        app.description.as_deref(),
+        Some("A local notes application")
+    );
     let author = app.author.as_ref().expect("author");
     assert_eq!(author.name, "Example Studio");
     assert_eq!(author.url.as_deref(), Some("https://example.com"));
     let icons = app.icons.as_ref().expect("icons");
-    assert_eq!(icons.entries.get("16").map(String::as_str), Some("assets/icon-16.png"));
-    assert_eq!(icons.entries.get("256").map(String::as_str), Some("assets/icon-256.png"));
+    assert_eq!(
+        icons.entries.get("16").map(String::as_str),
+        Some("assets/icon-16.png")
+    );
+    assert_eq!(
+        icons.entries.get("256").map(String::as_str),
+        Some("assets/icon-256.png")
+    );
     assert_eq!(app.homepage.as_deref(), Some("https://example.com/notes"));
     assert_eq!(app.license.as_deref(), Some("MIT"));
 }
@@ -582,7 +599,9 @@ fn install_root() -> (std::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
     let guard = ALEX_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
     let dir = tempfile::tempdir().unwrap();
     // SAFETY: serialised through ALEX_ENV_LOCK; safe per Rust 2024 edition.
-    unsafe { std::env::set_var("ALEX_DATA_DIR", dir.path()); }
+    unsafe {
+        std::env::set_var("ALEX_DATA_DIR", dir.path());
+    }
     (guard, dir)
 }
 
@@ -606,8 +625,14 @@ fn manager_install_then_list_then_uninstall() {
         .unwrap();
     assert_eq!(summary.id, "com.alex.hello");
     assert_eq!(summary.version, "0.1.0");
-    assert!(summary.description.is_none(), "examples/hello has no description");
-    assert!(!summary.signed, "unsigned archive should report signed=false");
+    assert!(
+        summary.description.is_none(),
+        "examples/hello has no description"
+    );
+    assert!(
+        !summary.signed,
+        "unsigned archive should report signed=false"
+    );
 
     let list = manager.list_apps().unwrap();
     assert_eq!(list.len(), 1);
@@ -615,7 +640,10 @@ fn manager_install_then_list_then_uninstall() {
 
     // Registry file was created next to the install root.
     let registry_path = manager.registry_path().to_path_buf();
-    assert!(registry_path.is_file(), "registry file should exist after install");
+    assert!(
+        registry_path.is_file(),
+        "registry file should exist after install"
+    );
 
     manager
         .uninstall("com.alex.hello", UninstallOptions::default())
@@ -633,7 +661,9 @@ fn manager_rebuilds_registry_from_install_root_when_missing() {
     let archive = workspace.path().join("hello.alex");
     package::pack(&source, &archive).unwrap();
     let manager = LocalAppManager::open(workspace.path()).unwrap();
-    manager.install(&archive, InstallOptions::default()).unwrap();
+    manager
+        .install(&archive, InstallOptions::default())
+        .unwrap();
 
     // Wipe registry; manager.open should rebuild it by scanning the dir.
     let registry_path = workspace.path().join(".alex").join("registry.json");
@@ -645,7 +675,10 @@ fn manager_rebuilds_registry_from_install_root_when_missing() {
     let list = manager.list_apps().unwrap();
     assert_eq!(list.len(), 1);
     assert_eq!(list[0].id, "com.alex.hello");
-    assert!(registry_path.is_file(), "registry should be rebuilt on open");
+    assert!(
+        registry_path.is_file(),
+        "registry should be rebuilt on open"
+    );
 }
 
 #[test]
@@ -655,11 +688,15 @@ fn manager_permissions_round_trip() {
     let archive = workspace.path().join("hello.alex");
     package::pack(&source, &archive).unwrap();
     let manager = LocalAppManager::open(workspace.path()).unwrap();
-    manager.install(&archive, InstallOptions::default()).unwrap();
+    manager
+        .install(&archive, InstallOptions::default())
+        .unwrap();
 
     let states = manager.permissions("com.alex.hello").unwrap();
     assert!(
-        states.iter().any(|s| s.name == "filesystem.readText" && s.manifest_declared),
+        states
+            .iter()
+            .any(|s| s.name == "filesystem.readText" && s.manifest_declared),
         "hello declares filesystem.read; should appear in permissions"
     );
 
@@ -694,7 +731,9 @@ fn manager_get_app_returns_manifest_and_permissions() {
     let archive = workspace.path().join("hello.alex");
     package::pack(&source, &archive).unwrap();
     let manager = LocalAppManager::open(workspace.path()).unwrap();
-    manager.install(&archive, InstallOptions::default()).unwrap();
+    manager
+        .install(&archive, InstallOptions::default())
+        .unwrap();
 
     let details = manager.get_app("com.alex.hello").unwrap();
     assert_eq!(details.manifest.id, "com.alex.hello");
@@ -711,7 +750,7 @@ fn manager_router_rejects_wrong_source() {
     let response = router.dispatch(Request {
         protocol: 1,
         id: "r-1".into(),
-        source: "com.alex.hello".into(),  // not system identity
+        source: "com.alex.hello".into(), // not system identity
         method: "manager.list_apps".into(),
         params: json!({}),
         deadline_ms: None,
@@ -730,7 +769,7 @@ fn manager_router_rejects_non_manager_method() {
         protocol: 1,
         id: "r-2".into(),
         source: SYSTEM_IDENTITY.into(),
-        method: "filesystem.readText".into(),  // not a manager.* method
+        method: "filesystem.readText".into(), // not a manager.* method
         params: json!({}),
         deadline_ms: None,
     });
@@ -745,7 +784,9 @@ fn manager_router_dispatches_list_apps() {
     let archive = workspace.path().join("hello.alex");
     package::pack(&source, &archive).unwrap();
     let manager = LocalAppManager::open(workspace.path()).unwrap();
-    manager.install(&archive, InstallOptions::default()).unwrap();
+    manager
+        .install(&archive, InstallOptions::default())
+        .unwrap();
     let router = ManagerRouter::new(Arc::new(manager));
 
     let response = router.dispatch(Request {
@@ -757,7 +798,10 @@ fn manager_router_dispatches_list_apps() {
         deadline_ms: None,
     });
     let result = response.result.expect("result");
-    let apps = result.get("apps").and_then(|v| v.as_array()).expect("apps array");
+    let apps = result
+        .get("apps")
+        .and_then(|v| v.as_array())
+        .expect("apps array");
     assert_eq!(apps.len(), 1);
     assert_eq!(apps[0]["id"], "com.alex.hello");
 }
@@ -775,10 +819,41 @@ fn manager_router_dispatch_json_rejects_oversized_messages() {
 fn runtime_supervisor_stop_is_idempotent() {
     let supervisor = RuntimeSupervisor::default();
     let status = supervisor.stop("never-launched").unwrap();
-    assert!(matches!(
-        status.state,
-        alex::runtime::RuntimeState::Stopped
-    ));
+    assert!(matches!(status.state, alex::runtime::RuntimeState::Stopped));
+}
+
+#[test]
+fn system_request_permission_blocks_undeclared_kind() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    let router = ApiRouter::new(root, app);
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: "media-1".into(),
+        source: "com.alex.hello".into(),
+        method: "system.requestPermission".into(),
+        params: json!({ "kind": "media.camera" }),
+        deadline_ms: None,
+    });
+    // examples/hello does not declare media.camera, so the request is
+    // rejected before any native dialog appears.
+    assert_eq!(response.error.unwrap().code, "PERMISSION_DENIED");
+}
+
+#[test]
+fn system_request_permission_rejects_unknown_kind() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    let router = ApiRouter::new(root, app);
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: "media-2".into(),
+        source: "com.alex.hello".into(),
+        method: "system.requestPermission".into(),
+        params: json!({ "kind": "telepathy.peer" }),
+        deadline_ms: None,
+    });
+    assert_eq!(response.error.unwrap().code, "INVALID_PARAMS");
 }
 
 #[test]
@@ -794,7 +869,11 @@ fn runtime_supervisor_rejects_double_launch() {
     let manifest = load_app(&install_root.join("com.alex.hello")).unwrap();
     let backend = manifest.backend.as_ref().unwrap();
     let _ = supervisor
-        .launch("com.alex.hello", &install_root.join("com.alex.hello"), backend)
+        .launch(
+            "com.alex.hello",
+            &install_root.join("com.alex.hello"),
+            backend,
+        )
         .expect("first launch should succeed");
     let second = supervisor.launch(
         "com.alex.hello",

@@ -1,0 +1,80 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+    branches: [main]
+
+env:
+  CARGO_TERM_COLOR: always
+  RUST_BACKTRACE: short
+
+jobs:
+  linux-check:
+    name: Linux · fmt + clippy + test
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: rustfmt, clippy
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Install Node.js (for SDK tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Format check
+        run: cargo fmt --all -- --check
+      - name: Clippy
+        run: cargo clippy --offline --all-targets -- -D warnings
+      - name: Linux build
+        run: cargo build --offline
+      - name: Linux tests
+        run: cargo test --offline
+      - name: SDK tests
+        run: node --test packages/sdk/test/sdk.test.mjs
+
+  windows-build:
+    name: Windows · build + test
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Install Node.js (for SDK tests)
+        uses: actions/setup-node@v4
+        with:
+          node-version: "20"
+      - name: Windows build
+        run: cargo build --offline
+      - name: Windows tests
+        run: cargo test --offline
+      - name: SDK tests
+        run: node --test packages/sdk/test/sdk.test.mjs
+      - name: Smoke · manager subcommand help
+        # Validates that the CLI surface builds and prints help on Windows;
+        # the actual WebView is not started (it would block the runner).
+        run: cargo run --offline -- manager --help
+      - name: Upload alex.exe
+        uses: actions/upload-artifact@v4
+        with:
+          name: alex-windows
+          path: target/debug/alex.exe
+          if-no-files-found: warn
