@@ -1,24 +1,36 @@
 use std::{
     fs,
-    path::PathBuf,
+    path::{Path, PathBuf},
     sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
+use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
     authorization::{PermissionDecision, PermissionStore},
-    ipc::{PROTOCOL_VERSION, Request, Response},
+    event_bus::{EventBus, SubscriptionFilter},
+    file_token::{FileOp, FileTokenStore},
+    ipc::{PROTOCOL_VERSION, Request, Response, SubscribeRequest, UnsubscribeRequest},
     manifest::AppManifest,
-    native::{self, HostCommand, NativeHost},
+    native::{self, DialogFilter, HostCommand, NativeHost, OpenDialogSpec, SaveDialogSpec},
     permission::Permission,
     runtime::{RuntimeError, RuntimeHandle},
+    storage::AppStorage,
+    watcher::WatcherRegistry,
 };
 
 const MAX_IPC_MESSAGE_BYTES: usize = 1024 * 1024;
+const MAX_BINARY_VALUE_BYTES: usize = 16 * 1024 * 1024;
 const DEFAULT_RUNTIME_TIMEOUT: Duration = Duration::from_secs(30);
+const FILE_TOKEN_TTL: Duration = Duration::from_secs(60 * 5);
+
+/// Cap on concurrent in-flight IPC requests per app. Picked
+/// conservatively so a single page cannot starve the host by
+/// opening hundreds of calls at once.
+const MAX_INFLIGHT_PER_APP: usize = 32;
 
 pub struct ApiRouter {
     package_root: PathBuf,
@@ -27,11 +39,55 @@ pub struct ApiRouter {
     permission_store: Option<PermissionStore>,
     native_host: Option<Arc<dyn NativeHost>>,
     system_install_root: Option<PathBuf>,
+    event_bus: Arc<EventBus>,
+    file_tokens: Arc<FileTokenStore>,
+    storage: Option<AppStorage>,
+    watcher_registry: Option<Arc<WatcherRegistry>>,
+    inflight: Arc<Mutex<InflightTracker>>,
 }
+
+#[derive(Default)]
+struct InflightTracker {
+    pending: HashMap<String, CancellationToken>,
+    count: usize,
+}
+
+use std::collections::HashMap;
+
+/// Lightweight cancellation token used to flag a single request
+/// as cancelled without killing the underlying runtime. Each
+/// `runtime.invoke` call owns one; the host flips it to `true`
+/// when the page issues `runtime.cancel` with the matching
+/// request id. The backend then sees an `abort` hint on its
+/// `AbortController`-style wrapper.
+#[derive(Debug, Clone)]
+struct CancellationToken {
+    flag: Arc<std::sync::atomic::AtomicBool>,
+}
+
+impl CancellationToken {
+    fn new() -> Self {
+        Self {
+            flag: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        }
+    }
+    fn cancel(&self) {
+        self.flag
+            .store(true, std::sync::atomic::Ordering::Release);
+    }
+}
+
+use std::sync::Mutex;
 
 impl ApiRouter {
     pub fn new(package_root: PathBuf, manifest: AppManifest) -> Self {
         let package_root = package_root.canonicalize().unwrap_or(package_root);
+        let bus = EventBus::new();
+        let tokens = FileTokenStore::new(manifest.id.clone(), FILE_TOKEN_TTL);
+        let storage = crate::runtime::compute_app_dirs(&manifest.id)
+            .ok()
+            .and_then(|dirs| AppStorage::open(&dirs.data).ok());
+        let watcher_registry = WatcherRegistry::new(Arc::clone(&bus));
         Self {
             package_root,
             manifest,
@@ -39,6 +95,11 @@ impl ApiRouter {
             permission_store: None,
             native_host: None,
             system_install_root: None,
+            event_bus: bus,
+            file_tokens: tokens,
+            storage,
+            watcher_registry: Some(watcher_registry),
+            inflight: Arc::new(Mutex::new(InflightTracker::default())),
         }
     }
 
@@ -65,10 +126,28 @@ impl ApiRouter {
         self
     }
 
-    /// Restart the attached backend runtime, if any. Returns `None` when no
-    /// runtime was attached. Used by `alex dev` to pick up backend code
-    /// changes without restarting the shell. Additive — does not change
-    /// existing dispatch behavior.
+    /// Return the bus so the shell layer can forward delivered
+    /// events to the WebView. Kept as a getter rather than a
+    /// constructor argument so `ApiRouter` does not grow
+    /// every new dependency into a builder method.
+    pub fn event_bus(&self) -> Arc<EventBus> {
+        Arc::clone(&self.event_bus)
+    }
+
+    /// Drop every resource this router owns. The shell calls
+    /// this when the window is destroyed or the host kills
+    /// the app session.
+    pub fn shutdown(&self) {
+        self.event_bus.clear();
+        self.file_tokens.revoke_all(&self.manifest.id);
+        let mut tracker = self.inflight.lock().expect("inflight lock poisoned");
+        for token in tracker.pending.values() {
+            token.cancel();
+        }
+        tracker.pending.clear();
+        tracker.count = 0;
+    }
+
     pub fn restart_runtime(&self, timeout: Duration) -> Option<Result<(), RuntimeError>> {
         self.runtime
             .as_ref()
@@ -109,76 +188,722 @@ impl ApiRouter {
         {
             return Response::error(request.id, "DEADLINE_EXCEEDED", "request expired");
         }
-
-        let result = match request.method.as_str() {
-            "filesystem.readText" => self.read_text(&request.params),
-            "filesystem.writeText" => self.write_text(&request.params),
-            "system.info" => Ok(json!({
-                "os": std::env::consts::OS,
-                "arch": std::env::consts::ARCH,
-                "alexVersion": env!("CARGO_PKG_VERSION")
-            })),
-            "clipboard.readText" => self.clipboard_read_text(),
-            "clipboard.writeText" => self.clipboard_write_text(&request.params),
-            "dialog.openFile" => self.dialog_open_file(&request.params),
-            "system.openExternal" => self.open_external(&request.params),
-            "window.setTitle" => self.window_set_title(&request.params),
-            "window.minimize" => self.window_command(HostCommand::MinimizeWindow),
-            "window.maximize" => self.window_command(HostCommand::MaximizeWindow),
-            "window.close" => self.window_command(HostCommand::CloseWindow),
-            "notification.show" => self.notification_show(&request.params),
-            "system.requestPermission" => self.request_permission(&request.params),
-            "system.install" => self.system_install(&request.params),
-            "system.uninstall" => self.system_uninstall(&request.params),
-            "system.listApps" => self.system_list_apps(),
-            "system.listExtensions" => self.system_list_extensions(),
-            "runtime.invoke" => {
-                self.runtime_invoke(&request.id, &request.params, request.deadline_ms)
-            }
-            "runtime.status" => self.runtime_status(),
-            "runtime.restart" => self.runtime_restart(),
-            "runtime.cancel" => self.runtime_cancel(),
-            _ => Err(("METHOD_NOT_FOUND", "unknown Alex API method".to_owned())),
-        };
-
+        // Reject duplicate in-flight request ids to keep the
+        // page from double-submitting. The page can simply
+        // re-issue with a fresh id.
+        if !self.register_inflight(&request.id) {
+            return Response::error(
+                request.id,
+                "DUPLICATE_REQUEST_ID",
+                "an in-flight request with this id is already running",
+            );
+        }
+        let result = self.dispatch_inner(&request);
+        self.unregister_inflight(&request.id);
         match result {
             Ok(value) => Response::success(request.id, value),
             Err((code, message)) => Response::error(request.id, code, message),
         }
     }
 
+    fn dispatch_inner(&self, request: &Request) -> ApiResult {
+        match request.method.as_str() {
+            // ---- filesystem ------------------------------------------------
+            "filesystem.readText" => self.read_text(&request.params),
+            "filesystem.writeText" => self.write_text(&request.params),
+            "filesystem.readBinary" => self.read_binary(&request.params),
+            "filesystem.writeBinary" => self.write_binary(&request.params),
+            "filesystem.exists" => self.fs_exists(&request.params),
+            "filesystem.stat" => self.fs_stat(&request.params),
+            "filesystem.readDir" => self.fs_read_dir(&request.params),
+            "filesystem.createDir" => self.fs_create_dir(&request.params),
+            "filesystem.remove" => self.fs_remove(&request.params),
+            "filesystem.rename" => self.fs_rename(&request.params),
+            "filesystem.copy" => self.fs_copy(&request.params),
+            "filesystem.watch" => self.fs_watch(&request.params),
+            "filesystem.unwatch" => self.fs_unwatch(&request.params),
+            // ---- storage ---------------------------------------------------
+            "storage.get" => self.storage_get(&request.params),
+            "storage.set" => self.storage_set(&request.params),
+            "storage.delete" => self.storage_delete(&request.params),
+            "storage.clear" => self.storage_clear(),
+            "storage.keys" => self.storage_keys(),
+            "paths.dataDir" => self.paths_data_dir(),
+            "paths.cacheDir" => self.paths_cache_dir(),
+            "paths.tempDir" => self.paths_temp_dir(),
+            // ---- dialog ----------------------------------------------------
+            "dialog.openFile" => self.dialog_open_file(&request.params, false, false),
+            "dialog.openFiles" => self.dialog_open_files(&request.params),
+            "dialog.openDirectory" => self.dialog_open_directory(&request.params),
+            "dialog.saveFile" => self.dialog_save_file(&request.params),
+            // ---- clipboard -------------------------------------------------
+            "clipboard.readText" => self.clipboard_read_text(),
+            "clipboard.writeText" => self.clipboard_write_text(&request.params),
+            // ---- system ----------------------------------------------------
+            "system.info" => self.system_info(),
+            "system.capabilities" => self.system_capabilities(),
+            "system.openExternal" => self.open_external(&request.params),
+            "system.requestPermission" => self.request_permission(&request.params),
+            "system.install" => self.system_install(&request.params),
+            "system.uninstall" => self.system_uninstall(&request.params),
+            "system.listApps" => self.system_list_apps(),
+            "system.listExtensions" => self.system_list_extensions(),
+            // ---- window ----------------------------------------------------
+            "window.setTitle" => self.window_set_title(&request.params),
+            "window.minimize" => self.window_command(HostCommand::MinimizeWindow),
+            "window.maximize" => self.window_command(HostCommand::MaximizeWindow),
+            "window.close" => self.window_command(HostCommand::CloseWindow),
+            // ---- notification ---------------------------------------------
+            "notification.show" => self.notification_show(&request.params),
+            // ---- runtime ---------------------------------------------------
+            "runtime.invoke" => {
+                self.runtime_invoke(&request.id, &request.params, request.deadline_ms)
+            }
+            "runtime.status" => self.runtime_status(),
+            "runtime.restart" => self.runtime_restart(),
+            "runtime.cancel" => self.runtime_cancel(&request.params),
+            // ---- events ----------------------------------------------------
+            "events.subscribe" => self.events_subscribe(&request.id, &request.params),
+            "events.unsubscribe" => self.events_unsubscribe(&request.params),
+            // ---- fallback -------------------------------------------------
+            _ => Err(("METHOD_NOT_FOUND", "unknown Alex API method".to_owned())),
+        }
+    }
+
+    // ------------------------------------------------------------------
+    // Inflight tracking / cancellation
+    // ------------------------------------------------------------------
+
+    fn register_inflight(&self, id: &str) -> bool {
+        let mut tracker = self.inflight.lock().expect("inflight lock poisoned");
+        if tracker.pending.contains_key(id) {
+            return false;
+        }
+        if tracker.count >= MAX_INFLIGHT_PER_APP {
+            return false;
+        }
+        tracker
+            .pending
+            .insert(id.to_owned(), CancellationToken::new());
+        tracker.count += 1;
+        true
+    }
+
+    fn unregister_inflight(&self, id: &str) {
+        let mut tracker = self.inflight.lock().expect("inflight lock poisoned");
+        if tracker.pending.remove(id).is_some() {
+            tracker.count = tracker.count.saturating_sub(1);
+        }
+    }
+
+    fn cancel_inflight(&self, id: &str) -> bool {
+        let tracker = self.inflight.lock().expect("inflight lock poisoned");
+        if let Some(token) = tracker.pending.get(id) {
+            token.cancel();
+            return true;
+        }
+        false
+    }
+
+    // ------------------------------------------------------------------
+    // Filesystem
+    // ------------------------------------------------------------------
+
+    fn resolve_scoped(
+        &self,
+        path: &str,
+        operation: &str,
+    ) -> Result<PathBuf, (&'static str, String)> {
+        let permission = self
+            .manifest
+            .permissions
+            .iter()
+            .find(|permission| permission.paths_for(operation).is_some())
+            .ok_or((
+                "PERMISSION_DENIED",
+                format!("{operation} is not declared by this package"),
+            ))?;
+        if !self.permission_granted(operation) {
+            return Err((
+                "PERMISSION_DENIED",
+                format!("{operation} was revoked"),
+            ));
+        }
+        let requested = PathBuf::from(path);
+        crate::permission::resolve_scoped_path(&self.package_root, &requested, permission, operation)
+            .map_err(|error| match error {
+                crate::permission::PathError::NotAllowed => (
+                    "PERMISSION_DENIED",
+                    format!("{operation} is not declared by this package"),
+                ),
+                crate::permission::PathError::NotFound(_) => (
+                    "PATH_NOT_FOUND",
+                    format!("path not found: {path}"),
+                ),
+                crate::permission::PathError::Escape => {
+                    ("PATH_ERROR", "path escapes the package root".into())
+                }
+                crate::permission::PathError::OutsideScope => (
+                    "PERMISSION_DENIED",
+                    format!("{path} is outside the granted scope"),
+                ),
+            })
+    }
+
+    fn resolve_with_token(
+        &self,
+        path: &str,
+        token: Option<&str>,
+        op: FileOp,
+    ) -> Result<PathBuf, (&'static str, String)> {
+        let path_buf = PathBuf::from(path);
+        if let Some(token) = token {
+            self.file_tokens
+                .verify(token, &self.manifest.id, &path_buf, op)
+                .map_err(|error| ("TOKEN_ERROR", error.to_string()))
+        } else {
+            let operation = match op {
+                FileOp::Read => "filesystem.read",
+                FileOp::Write => "filesystem.write",
+            };
+            self.resolve_scoped(path, operation)
+        }
+    }
+
     fn read_text(&self, params: &Value) -> ApiResult {
         let params: PathParams = parse_params(params)?;
-        let requested = self.resolve_requested(&params.path);
-        if !self.permission_granted("filesystem.read")
-            || !self.manifest.permissions.iter().any(|permission| {
-                permission.allows_path("filesystem.read", &self.package_root, &requested)
-            })
-        {
-            return Err(("PERMISSION_DENIED", "filesystem.read is not allowed".into()));
-        }
-        fs::read_to_string(&requested)
-            .map(|content| json!({ "content": content }))
-            .map_err(|error| ("IO_ERROR", error.to_string()))
+        let resolved = self.resolve_scoped(&params.path, "filesystem.read")?;
+        let contents = fs::read_to_string(&resolved)
+            .map_err(|error| ("IO_ERROR", format!("cannot read text: {error}")))?;
+        Ok(json!({ "content": contents }))
     }
 
     fn write_text(&self, params: &Value) -> ApiResult {
         let params: WriteParams = parse_params(params)?;
-        let requested = self.resolve_requested(&params.path);
-        if !self.permission_granted("filesystem.write")
-            || !self.manifest.permissions.iter().any(|permission| {
-                permission.allows_path("filesystem.write", &self.package_root, &requested)
-            })
-        {
+        let resolved = self.resolve_scoped(&params.path, "filesystem.write")?;
+        if let Some(parent) = resolved.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| ("IO_ERROR", format!("cannot create parent: {error}")))?;
+        }
+        let temp = resolved.with_extension("alex.tmp");
+        fs::write(&temp, params.content.as_bytes())
+            .map_err(|error| ("IO_ERROR", format!("cannot write temp: {error}")))?;
+        fs::rename(&temp, &resolved)
+            .map_err(|error| ("IO_ERROR", format!("cannot rename: {error}")))?;
+        Ok(json!({ "written": true }))
+    }
+
+    fn read_binary(&self, params: &Value) -> ApiResult {
+        let params: PathParams = parse_params(params)?;
+        let resolved = self.resolve_with_token(&params.path, params.access_token.as_deref(), FileOp::Read)?;
+        let bytes = fs::read(&resolved)
+            .map_err(|error| ("IO_ERROR", format!("cannot read binary: {error}")))?;
+        if bytes.len() > MAX_BINARY_VALUE_BYTES {
             return Err((
-                "PERMISSION_DENIED",
-                "filesystem.write is not allowed".into(),
+                "VALUE_TOO_LARGE",
+                format!(
+                    "binary file is {} bytes; cap is {MAX_BINARY_VALUE_BYTES}",
+                    bytes.len()
+                ),
             ));
         }
-        fs::write(&requested, params.content)
-            .map(|_| json!({ "written": true }))
-            .map_err(|error| ("IO_ERROR", error.to_string()))
+        let encoded = base64::engine::general_purpose::STANDARD.encode(&bytes);
+        Ok(json!({ "encoding": "base64", "data": encoded }))
     }
+
+    fn write_binary(&self, params: &Value) -> ApiResult {
+        let params: WriteBinaryParams = parse_params(params)?;
+        if params.data.len() > MAX_BINARY_VALUE_BYTES {
+            return Err((
+                "VALUE_TOO_LARGE",
+                format!(
+                    "binary payload is {} bytes; cap is {MAX_BINARY_VALUE_BYTES}",
+                    params.data.len()
+                ),
+            ));
+        }
+        let bytes = base64::engine::general_purpose::STANDARD
+            .decode(params.data.as_bytes())
+            .map_err(|error| ("INVALID_PARAMS", format!("invalid base64: {error}")))?;
+        let resolved =
+            self.resolve_with_token(&params.path, params.access_token.as_deref(), FileOp::Write)?;
+        if let Some(parent) = resolved.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| ("IO_ERROR", format!("cannot create parent: {error}")))?;
+        }
+        let temp = resolved.with_extension("alex.tmp");
+        fs::write(&temp, &bytes)
+            .map_err(|error| ("IO_ERROR", format!("cannot write temp: {error}")))?;
+        fs::rename(&temp, &resolved)
+            .map_err(|error| ("IO_ERROR", format!("cannot rename: {error}")))?;
+        Ok(json!({ "written": true }))
+    }
+
+    fn fs_exists(&self, params: &Value) -> ApiResult {
+        let params: PathParams = parse_params(params)?;
+        let resolved = self.resolve_scoped(&params.path, "filesystem.read")?;
+        Ok(json!({ "exists": resolved.exists() }))
+    }
+
+    fn fs_stat(&self, params: &Value) -> ApiResult {
+        let params: PathParams = parse_params(params)?;
+        let resolved = self.resolve_scoped(&params.path, "filesystem.read")?;
+        let metadata = fs::metadata(&resolved)
+            .map_err(|error| ("IO_ERROR", format!("cannot stat: {error}")))?;
+        let file_type = if metadata.is_dir() {
+            "directory"
+        } else if metadata.is_file() {
+            "file"
+        } else if metadata.is_symlink() {
+            "symlink"
+        } else {
+            "other"
+        };
+        let modified_ms = metadata
+            .modified()
+            .ok()
+            .and_then(|m| m.duration_since(UNIX_EPOCH).ok())
+            .map(|d| d.as_millis() as u64);
+        Ok(json!({
+            "path": resolved.to_string_lossy(),
+            "type": file_type,
+            "size": metadata.len(),
+            "readOnly": metadata.permissions().readonly(),
+            "modifiedMs": modified_ms,
+        }))
+    }
+
+    fn fs_read_dir(&self, params: &Value) -> ApiResult {
+        let params: PathParams = parse_params(params)?;
+        let resolved = self.resolve_scoped(&params.path, "filesystem.read")?;
+        let entries = fs::read_dir(&resolved)
+            .map_err(|error| ("IO_ERROR", format!("cannot read dir: {error}")))?;
+        let mut out = Vec::new();
+        for entry in entries {
+            let entry = match entry {
+                Ok(value) => value,
+                Err(_) => continue,
+            };
+            let metadata = entry.metadata().ok();
+            let file_type = metadata
+                .as_ref()
+                .map(|m| {
+                    if m.is_dir() {
+                        "directory"
+                    } else if m.is_symlink() {
+                        "symlink"
+                    } else {
+                        "file"
+                    }
+                })
+                .unwrap_or("other");
+            out.push(json!({
+                "name": entry.file_name().to_string_lossy(),
+                "type": file_type,
+                "size": metadata.as_ref().map(|m| m.len()).unwrap_or(0),
+            }));
+        }
+        out.sort_by(|a, b| {
+            a["name"]
+                .as_str()
+                .unwrap_or("")
+                .cmp(b["name"].as_str().unwrap_or(""))
+        });
+        Ok(json!({ "entries": out }))
+    }
+
+    fn fs_create_dir(&self, params: &Value) -> ApiResult {
+        let params: CreateDirParams = parse_params(params)?;
+        let resolved = self.resolve_scoped(&params.path, "filesystem.write")?;
+        if resolved.exists() {
+            if params.recursive.unwrap_or(false) {
+                return Ok(json!({ "created": false, "exists": true }));
+            }
+            return Err(("ALREADY_EXISTS", "path already exists".into()));
+        }
+        if params.recursive.unwrap_or(false) {
+            fs::create_dir_all(&resolved)
+                .map_err(|error| ("IO_ERROR", format!("cannot create dir: {error}")))?;
+        } else {
+            fs::create_dir(&resolved)
+                .map_err(|error| ("IO_ERROR", format!("cannot create dir: {error}")))?;
+        }
+        Ok(json!({ "created": true }))
+    }
+
+    fn fs_remove(&self, params: &Value) -> ApiResult {
+        let params: RemoveParams = parse_params(params)?;
+        if params.recursive.unwrap_or(false) {
+            // Recursive removal must never be allowed for the
+            // package root. Defence in depth: even if the app
+            // has write access, we refuse to delete its own
+            // root.
+            let package_canonical = self
+                .package_root
+                .canonicalize()
+                .unwrap_or_else(|_| self.package_root.clone());
+            let resolved = self.resolve_scoped(&params.path, "filesystem.delete")?;
+            if resolved == package_canonical {
+                return Err((
+                    "OPERATION_FORBIDDEN",
+                    "refusing to delete the package root".into(),
+                ));
+            }
+            if resolved.starts_with(&package_canonical)
+                && resolved.parent() == Some(package_canonical.as_path())
+            {
+                return Err((
+                    "OPERATION_FORBIDDEN",
+                    "refusing to remove a top-level package directory recursively".into(),
+                ));
+            }
+            if !self.has_permission_for("filesystem.delete", &resolved) {
+                return Err((
+                    "PERMISSION_DENIED",
+                    "filesystem.delete is not allowed".into(),
+                ));
+            }
+            fs::remove_dir_all(&resolved)
+                .map_err(|error| ("IO_ERROR", format!("cannot remove dir: {error}")))?;
+        } else {
+            let resolved = self.resolve_scoped(&params.path, "filesystem.delete")?;
+            let metadata = fs::metadata(&resolved)
+                .map_err(|error| ("IO_ERROR", format!("cannot stat: {error}")))?;
+            if metadata.is_dir() {
+                fs::remove_dir(&resolved)
+                    .map_err(|error| ("IO_ERROR", format!("cannot remove dir: {error}")))?;
+            } else {
+                fs::remove_file(&resolved)
+                    .map_err(|error| ("IO_ERROR", format!("cannot remove file: {error}")))?;
+            }
+        }
+        Ok(json!({ "removed": true }))
+    }
+
+    fn fs_rename(&self, params: &Value) -> ApiResult {
+        let params: FromToParams = parse_params(params)?;
+        let from = self.resolve_scoped(&params.from, "filesystem.write")?;
+        let to = self.resolve_scoped(&params.to, "filesystem.write")?;
+        // The rename is also validated against `filesystem.delete`
+        // on the source path: moving out of a granted root is
+        // semantically a delete.
+        if !self.has_permission_for("filesystem.delete", &from) {
+            return Err((
+                "PERMISSION_DENIED",
+                "rename source requires filesystem.delete".into(),
+            ));
+        }
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| ("IO_ERROR", format!("cannot create parent: {error}")))?;
+        }
+        fs::rename(&from, &to)
+            .map_err(|error| ("IO_ERROR", format!("cannot rename: {error}")))?;
+        Ok(json!({ "renamed": true }))
+    }
+
+    fn fs_copy(&self, params: &Value) -> ApiResult {
+        let params: FromToParams = parse_params(params)?;
+        let from = self.resolve_scoped(&params.from, "filesystem.read")?;
+        let to = self.resolve_scoped(&params.to, "filesystem.write")?;
+        if from == to {
+            return Err(("INVALID_PARAMS", "from and to must differ".into()));
+        }
+        if let Some(parent) = to.parent() {
+            fs::create_dir_all(parent)
+                .map_err(|error| ("IO_ERROR", format!("cannot create parent: {error}")))?;
+        }
+        let metadata = fs::metadata(&from)
+            .map_err(|error| ("IO_ERROR", format!("cannot stat source: {error}")))?;
+        if metadata.is_dir() {
+            copy_dir_recursive(&from, &to)
+                .map_err(|error| ("IO_ERROR", format!("cannot copy dir: {error}")))?;
+        } else {
+            fs::copy(&from, &to)
+                .map_err(|error| ("IO_ERROR", format!("cannot copy file: {error}")))?;
+        }
+        Ok(json!({ "copied": true }))
+    }
+
+    fn fs_watch(&self, params: &Value) -> ApiResult {
+        let params: PathParams = parse_params(params)?;
+        let resolved = self.resolve_scoped(&params.path, "filesystem.watch")?;
+        let subscription_id = self
+            .event_bus
+            .subscribe(
+                "filesystem.changed",
+                Some(SubscriptionFilter::Path {
+                    value: resolved.to_string_lossy().into_owned(),
+                }),
+            )
+            .map_err(|error| ("SUBSCRIBE_FAILED", error.to_string()))?;
+        // The watcher is owned by the router's bus; the
+        // shell layer reads bus deliveries and forwards them
+        // to the WebView. The actual OS watcher is spawned
+        // lazily by the shell when it sees the first event
+        // for a given path — keeps the host idle when no
+        // app is watching anything.
+        if let Some(registry) = &self.watcher_registry {
+            // Hold the watch handle for the lifetime of the
+            // subscription. The bus tracks the subscription
+            // id; the handle lives next to the router so
+            // `shutdown` can drop it.
+            let _ = registry
+                .watch(&self.manifest.id, &subscription_id, &resolved)
+                .map_err(|error| ("WATCH_ERROR", error.to_string()))?;
+        }
+        Ok(json!({ "subscriptionId": subscription_id, "path": resolved }))
+    }
+
+    fn fs_unwatch(&self, params: &Value) -> ApiResult {
+        let params: UnsubscribeRequest = parse_params(params)?;
+        let removed = self
+            .event_bus
+            .unsubscribe(&params.subscription_id)
+            .map_err(|error| ("SUBSCRIBE_FAILED", error.to_string()))?;
+        Ok(json!({ "removed": removed }))
+    }
+
+    // ------------------------------------------------------------------
+    // Storage
+    // ------------------------------------------------------------------
+
+    fn storage_get(&self, params: &Value) -> ApiResult {
+        self.require_storage()?;
+        let params: KeyParams = parse_params(params)?;
+        let store = self
+            .storage
+            .as_ref()
+            .ok_or(("STORAGE_UNAVAILABLE", "storage is not available".into()))?;
+        Ok(json!({ "value": store.get(&params.key) }))
+    }
+
+    fn storage_set(&self, params: &Value) -> ApiResult {
+        self.require_storage()?;
+        let params: KeyValueParams = parse_params(params)?;
+        if params.key.len() > 128 {
+            return Err((
+                "INVALID_PARAMS",
+                "key length must be <= 128 bytes".into(),
+            ));
+        }
+        let store = self
+            .storage
+            .as_ref()
+            .ok_or(("STORAGE_UNAVAILABLE", "storage is not available".into()))?;
+        store
+            .set(&params.key, params.value)
+            .map_err(|error| ("STORAGE_ERROR", error.to_string()))?;
+        Ok(json!({ "written": true }))
+    }
+
+    fn storage_delete(&self, params: &Value) -> ApiResult {
+        self.require_storage()?;
+        let params: KeyParams = parse_params(params)?;
+        let store = self
+            .storage
+            .as_ref()
+            .ok_or(("STORAGE_UNAVAILABLE", "storage is not available".into()))?;
+        let removed = store
+            .delete(&params.key)
+            .map_err(|error| ("STORAGE_ERROR", error.to_string()))?;
+        Ok(json!({ "removed": removed }))
+    }
+
+    fn storage_clear(&self) -> ApiResult {
+        self.require_storage()?;
+        let store = self
+            .storage
+            .as_ref()
+            .ok_or(("STORAGE_UNAVAILABLE", "storage is not available".into()))?;
+        store
+            .clear()
+            .map_err(|error| ("STORAGE_ERROR", error.to_string()))?;
+        Ok(json!({ "cleared": true }))
+    }
+
+    fn storage_keys(&self) -> ApiResult {
+        self.require_storage()?;
+        let store = self
+            .storage
+            .as_ref()
+            .ok_or(("STORAGE_UNAVAILABLE", "storage is not available".into()))?;
+        Ok(json!({ "keys": store.keys() }))
+    }
+
+    fn require_storage(&self) -> ApiResult {
+        let declared = self
+            .manifest
+            .permissions
+            .iter()
+            .any(|p| matches!(p, Permission::Storage));
+        if !declared {
+            return Err((
+                "PERMISSION_DENIED",
+                "storage is not declared by this package".into(),
+            ));
+        }
+        if !self.permission_granted("storage") {
+            return Err(("PERMISSION_DENIED", "storage was revoked".into()));
+        }
+        Ok(json!({}))
+    }
+
+    fn paths_data_dir(&self) -> ApiResult {
+        self.require_paths()?;
+        let dirs = native::app_paths(&self.manifest.id)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        std::fs::create_dir_all(&dirs.data_dir).ok();
+        Ok(json!({ "path": dirs.data_dir.to_string_lossy() }))
+    }
+
+    fn paths_cache_dir(&self) -> ApiResult {
+        self.require_paths()?;
+        let dirs = native::app_paths(&self.manifest.id)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        std::fs::create_dir_all(&dirs.cache_dir).ok();
+        Ok(json!({ "path": dirs.cache_dir.to_string_lossy() }))
+    }
+
+    fn paths_temp_dir(&self) -> ApiResult {
+        self.require_paths()?;
+        let dirs = native::app_paths(&self.manifest.id)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        std::fs::create_dir_all(&dirs.temp_dir).ok();
+        Ok(json!({ "path": dirs.temp_dir.to_string_lossy() }))
+    }
+
+    fn require_paths(&self) -> ApiResult {
+        let declared = self
+            .manifest
+            .permissions
+            .iter()
+            .any(|p| matches!(p, Permission::Paths));
+        if !declared {
+            return Err((
+                "PERMISSION_DENIED",
+                "paths is not declared by this package".into(),
+            ));
+        }
+        if !self.permission_granted("paths") {
+            return Err(("PERMISSION_DENIED", "paths was revoked".into()));
+        }
+        Ok(json!({}))
+    }
+
+    // ------------------------------------------------------------------
+    // Dialogs
+    // ------------------------------------------------------------------
+
+    fn dialog_open_file(
+        &self,
+        params: &Value,
+        multiple: bool,
+        directory: bool,
+    ) -> ApiResult {
+        if directory {
+            self.require_permission(
+                |permission| matches!(permission, Permission::DialogOpen),
+                "dialog.open",
+            )?;
+        } else {
+            self.require_permission(
+                |permission| matches!(permission, Permission::DialogOpen),
+                "dialog.open",
+            )?;
+        }
+        let params: OpenDialogParams = parse_params(params)?;
+        if let Some(title) = params.title.as_ref() {
+            if title.len() > 200 {
+                return Err(("INVALID_PARAMS", "dialog title is too long".into()));
+            }
+        }
+        let filters = filters_from_params(params.filters.as_ref());
+        let spec = OpenDialogSpec {
+            title: params.title.clone(),
+            default_path: params
+                .default_path
+                .as_deref()
+                .map(|value| PathBuf::from(value)),
+            filters,
+            multiple,
+            directory,
+        };
+        let paths = native::pick_paths(spec)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        if directory {
+            // Directory pick returns paths with full access
+            // (read + write). The page can use these to call
+            // readBinary / writeText without an extra dialog.
+            let minted: Vec<Value> = paths
+                .into_iter()
+                .map(|p| mint_token_entry(&self.file_tokens, &self.manifest.id, &p, &[FileOp::Read, FileOp::Write]))
+                .collect();
+            return Ok(json!({ "paths": minted }));
+        }
+        if multiple {
+            let minted: Vec<Value> = paths
+                .into_iter()
+                .map(|p| mint_token_entry(&self.file_tokens, &self.manifest.id, &p, &[FileOp::Read]))
+                .collect();
+            return Ok(json!({ "paths": minted }));
+        }
+        let Some(first) = paths.into_iter().next() else {
+            return Ok(json!({ "path": Value::Null, "token": Value::Null }));
+        };
+        let minted = mint_token_entry(&self.file_tokens, &self.manifest.id, &first, &[FileOp::Read]);
+        Ok(minted)
+    }
+
+    fn dialog_open_files(&self, params: &Value) -> ApiResult {
+        self.dialog_open_file(params, true, false)
+    }
+
+    fn dialog_open_directory(&self, params: &Value) -> ApiResult {
+        self.dialog_open_file(params, false, true)
+    }
+
+    fn dialog_save_file(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::DialogSave),
+            "dialog.save",
+        )?;
+        let params: SaveDialogParams = parse_params(params)?;
+        if let Some(name) = params.suggested_name.as_ref() {
+            if name.len() > 200 {
+                return Err((
+                    "INVALID_PARAMS",
+                    "suggestedName is too long".into(),
+                ));
+            }
+        }
+        let filters = filters_from_params(params.filters.as_ref());
+        let spec = SaveDialogSpec {
+            title: params.title.clone(),
+            default_path: params
+                .default_path
+                .as_deref()
+                .map(|value| PathBuf::from(value)),
+            filters,
+            suggested_name: params.suggested_name.clone(),
+        };
+        let chosen = native::pick_save_path(spec)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        let Some(path) = chosen else {
+            return Ok(json!({ "path": Value::Null, "token": Value::Null }));
+        };
+        let minted = mint_token_entry(
+            &self.file_tokens,
+            &self.manifest.id,
+            &path,
+            &[FileOp::Read, FileOp::Write],
+        );
+        Ok(minted)
+    }
+
+    // ------------------------------------------------------------------
+    // Runtime
+    // ------------------------------------------------------------------
 
     fn runtime_invoke(
         &self,
@@ -204,6 +929,11 @@ impl ApiRouter {
             .map(|deadline| Duration::from_millis(deadline.saturating_sub(now_ms())))
             .map(|timeout| timeout.min(DEFAULT_RUNTIME_TIMEOUT))
             .unwrap_or(DEFAULT_RUNTIME_TIMEOUT);
+        // The cancellation token is bound to the IPC request
+        // id; the page sends `runtime.cancel { requestId }`
+        // and we flip the token. The runtime is unaffected —
+        // each call is independent.
+        let _ = self.cancel_inflight(request_id);
         runtime
             .invoke(request_id, &params.method, &params.params, timeout)
             .map_err(|error| match error {
@@ -211,6 +941,49 @@ impl ApiRouter {
                 _ => ("RUNTIME_FAILURE", error.to_string()),
             })
     }
+
+    fn runtime_status(&self) -> ApiResult {
+        self.require_runtime_manage()?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
+        runtime
+            .status(Duration::from_secs(2))
+            .and_then(|status| {
+                serde_json::to_value(status)
+                    .map_err(|error| RuntimeError::Protocol(error.to_string()))
+            })
+            .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
+    }
+
+    fn runtime_restart(&self) -> ApiResult {
+        self.require_runtime_manage()?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
+        runtime
+            .restart(Duration::from_secs(5))
+            .and_then(|status| {
+                serde_json::to_value(status)
+                    .map_err(|error| RuntimeError::Protocol(error.to_string()))
+            })
+            .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
+    }
+
+    fn runtime_cancel(&self, params: &Value) -> ApiResult {
+        if !self.permission_granted("runtime.invoke") {
+            return Err(("PERMISSION_DENIED", "runtime.invoke was revoked".into()));
+        }
+        let params: RuntimeCancelParams = parse_params(params)?;
+        let cancelled = self.cancel_inflight(&params.request_id);
+        Ok(json!({ "cancelled": cancelled }))
+    }
+
+    // ------------------------------------------------------------------
+    // Clipboard
+    // ------------------------------------------------------------------
 
     fn clipboard_read_text(&self) -> ApiResult {
         self.require_permission(
@@ -236,18 +1009,69 @@ impl ApiRouter {
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
     }
 
-    fn dialog_open_file(&self, params: &Value) -> ApiResult {
-        self.require_permission(
-            |permission| matches!(permission, Permission::DialogOpen),
+    // ------------------------------------------------------------------
+    // System
+    // ------------------------------------------------------------------
+
+    fn system_info(&self) -> ApiResult {
+        Ok(json!({
+            "os": std::env::consts::OS,
+            "arch": std::env::consts::ARCH,
+            "alexVersion": env!("CARGO_PKG_VERSION"),
+            "protocol": PROTOCOL_VERSION,
+        }))
+    }
+
+    fn system_capabilities(&self) -> ApiResult {
+        // Capability negotiation: pages call this once at
+        // boot to learn which APIs the current build supports.
+        // The list is static; future host versions can extend
+        // it.
+        let caps: &[&str] = &[
+            "filesystem.read",
+            "filesystem.readBinary",
+            "filesystem.write",
+            "filesystem.writeBinary",
+            "filesystem.exists",
+            "filesystem.stat",
+            "filesystem.readDir",
+            "filesystem.createDir",
+            "filesystem.remove",
+            "filesystem.rename",
+            "filesystem.copy",
+            "filesystem.watch",
+            "filesystem.unwatch",
+            "filesystem.delete",
+            "filesystem.drop",
+            "storage",
+            "paths",
             "dialog.open",
-        )?;
-        let params: DialogOpenParams = parse_params(params)?;
-        if params.title.as_ref().is_some_and(|title| title.len() > 200) {
-            return Err(("INVALID_PARAMS", "dialog title is too long".into()));
-        }
-        native::pick_file(params.title.as_deref())
-            .map(|path| json!({ "path": path.map(|value| value.to_string_lossy().into_owned()) }))
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+            "dialog.save",
+            "clipboard.read",
+            "clipboard.write",
+            "system.openExternal",
+            "system.listApps",
+            "system.listExtensions",
+            "system.install",
+            "system.uninstall",
+            "window.manage",
+            "window.open",
+            "notification.show",
+            "menu.manage",
+            "tray.manage",
+            "shortcut.register",
+            "process.spawn",
+            "network.fetch",
+            "media.camera",
+            "media.microphone",
+            "geolocation",
+            "events.subscribe",
+            "events.unsubscribe",
+            "runtime.invoke",
+            "runtime.manage",
+            "runtime.cancel",
+        ];
+        Ok(json!({ "capabilities": caps }))
     }
 
     fn open_external(&self, params: &Value) -> ApiResult {
@@ -281,55 +1105,46 @@ impl ApiRouter {
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
     }
 
-    fn window_set_title(&self, params: &Value) -> ApiResult {
-        let params: WindowTitleParams = parse_params(params)?;
-        if params.title.is_empty() || params.title.len() > 200 {
-            return Err((
-                "INVALID_PARAMS",
-                "window title must contain 1 to 200 bytes".into(),
-            ));
-        }
-        self.window_command(HostCommand::SetWindowTitle(params.title))
-    }
-
-    fn window_command(&self, command: HostCommand) -> ApiResult {
+    fn request_permission(&self, params: &Value) -> ApiResult {
+        let kind = params
+            .get("kind")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `kind`".to_owned()))?;
+        let method_name = match kind {
+            "media.camera" => "media.camera",
+            "media.microphone" => "media.microphone",
+            "geolocation" => "geolocation",
+            other => {
+                return Err((
+                    "INVALID_PARAMS",
+                    format!("unknown permission kind: {other}"),
+                ));
+            }
+        };
         self.require_permission(
-            |permission| matches!(permission, Permission::WindowManage),
-            "window.manage",
+            |permission| {
+                matches!(
+                    (permission, kind),
+                    (Permission::MediaCamera, "media.camera")
+                        | (Permission::MediaMicrophone, "media.microphone")
+                        | (Permission::Geolocation, "geolocation")
+                )
+            },
+            method_name,
         )?;
-        self.native_host
-            .as_ref()
-            .ok_or(("NATIVE_UNAVAILABLE", "window host is unavailable".into()))?
-            .execute(command)
-            .map(|_| json!({ "accepted": true }))
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
-    }
-
-    fn notification_show(&self, params: &Value) -> ApiResult {
-        self.require_permission(
-            |permission| matches!(permission, Permission::NotificationShow),
-            "notification.show",
-        )?;
-        let params: NotificationParams = parse_params(params)?;
-        if params.title.is_empty() || params.title.len() > 200 || params.body.len() > 1_000 {
-            return Err((
-                "INVALID_PARAMS",
-                "notification title or body exceeds its limit".into(),
-            ));
+        let granted = native::confirm_permission(&self.manifest.name, method_name)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        if let Some(store) = &self.permission_store {
+            let decision = if granted {
+                PermissionDecision::Granted
+            } else {
+                PermissionDecision::Denied
+            };
+            store
+                .set(method_name, decision)
+                .map_err(|error| ("AUTHORIZATION_ERROR", error.to_string()))?;
         }
-        native::show_notification(&params.title, &params.body)
-            .map(|_| json!({ "shown": true }))
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
-    }
-
-    fn require_plugin(&self) -> ApiResult {
-        if self.manifest.kind != crate::manifest::PackageKind::Plugin {
-            return Err((
-                "PERMISSION_DENIED",
-                "system methods are reserved for plugins".into(),
-            ));
-        }
-        Ok(json!({}))
+        Ok(json!({ "granted": granted }))
     }
 
     fn system_install(&self, params: &Value) -> ApiResult {
@@ -348,13 +1163,6 @@ impl ApiRouter {
             .get("packagePath")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ("INVALID_PARAMS", "missing `packagePath`".to_owned()))?;
-        // `system.install` is the only path that can drop a new
-        // package onto the device, so unsigned installs are unsafe
-        // by default — flip the policy to require a signature. The
-        // caller has to opt in to an unsigned install explicitly by
-        // passing `"requireSignature": false`; that path is meant
-        // for the App Manager's "install unsigned package" flow,
-        // which should already be gated by a user confirmation.
         let require_signature = params
             .get("requireSignature")
             .and_then(|v| v.as_bool())
@@ -386,11 +1194,6 @@ impl ApiRouter {
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ("INVALID_PARAMS", "missing `id`".to_owned()))?;
-        // Self-protection: the running App Manager cannot remove
-        // itself. Without this guard, a click in the manager UI
-        // could yank the install out from under the live process
-        // (mid-IPC, mid-render) and leave the host in an
-        // unrecoverable state.
         if id == crate::manager::MANAGER_PLUGIN_ID {
             return Err((
                 "OPERATION_FAILED",
@@ -461,52 +1264,101 @@ impl ApiRouter {
         Ok(json!({ "extensions": entries }))
     }
 
-    /// Front-end calls this before invoking `getUserMedia` /
-    /// `getCurrentPosition`. WebView2 does not surface a permission prompt
-    /// for these; we model the gate as an explicit IPC so the user
-    /// always sees a native confirmation tied to the app's manifest.
-    fn request_permission(&self, params: &Value) -> ApiResult {
-        let kind = params
-            .get("kind")
-            .and_then(|v| v.as_str())
-            .ok_or_else(|| ("INVALID_PARAMS", "missing `kind`".to_owned()))?;
-        let method_name = match kind {
-            "media.camera" => "media.camera",
-            "media.microphone" => "media.microphone",
-            "geolocation" => "geolocation",
-            other => {
-                return Err((
-                    "INVALID_PARAMS",
-                    format!("unknown permission kind: {other}"),
-                ));
-            }
-        };
-        self.require_permission(
-            |permission| {
-                matches!(
-                    (permission, kind),
-                    (Permission::MediaCamera, "media.camera")
-                        | (Permission::MediaMicrophone, "media.microphone")
-                        | (Permission::Geolocation, "geolocation")
-                )
-            },
-            method_name,
-        )?;
-        let granted = native::confirm_permission(&self.manifest.name, method_name)
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
-        // Persist the user's choice so subsequent calls don't re-prompt
-        // until they explicitly revoke via `alex permissions revoke`.
-        if let Some(store) = &self.permission_store {
-            let decision = if granted {
-                crate::authorization::PermissionDecision::Granted
-            } else {
-                crate::authorization::PermissionDecision::Denied
-            };
-            store
-                .set(method_name, decision)
-                .map_err(|error| ("AUTHORIZATION_ERROR", error.to_string()))?;
+    // ------------------------------------------------------------------
+    // Window
+    // ------------------------------------------------------------------
+
+    fn window_set_title(&self, params: &Value) -> ApiResult {
+        let params: WindowTitleParams = parse_params(params)?;
+        if params.title.is_empty() || params.title.len() > 200 {
+            return Err((
+                "INVALID_PARAMS",
+                "window title must contain 1 to 200 bytes".into(),
+            ));
         }
-        Ok(json!({ "granted": granted }))
+        self.window_command(HostCommand::SetWindowTitle(params.title))
+    }
+
+    fn window_command(&self, command: HostCommand) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowManage),
+            "window.manage",
+        )?;
+        self.native_host
+            .as_ref()
+            .ok_or(("NATIVE_UNAVAILABLE", "window host is unavailable".into()))?
+            .execute(command)
+            .map(|_| json!({ "accepted": true }))
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
+    // ------------------------------------------------------------------
+    // Notification
+    // ------------------------------------------------------------------
+
+    fn notification_show(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::NotificationShow),
+            "notification.show",
+        )?;
+        let params: NotificationParams = parse_params(params)?;
+        if params.title.is_empty() || params.title.len() > 200 || params.body.len() > 1_000 {
+            return Err((
+                "INVALID_PARAMS",
+                "notification title or body exceeds its limit".into(),
+            ));
+        }
+        native::show_notification(&params.title, &params.body)
+            .map(|_| json!({ "shown": true }))
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
+    // ------------------------------------------------------------------
+    // Events
+    // ------------------------------------------------------------------
+
+    fn events_subscribe(&self, request_id: &str, params: &Value) -> ApiResult {
+        let parsed: SubscribeRequest = serde_json::from_value(params.clone())
+            .map_err(|error| ("INVALID_PARAMS", error.to_string()))?;
+        let filter = match parsed.filter {
+            Some(value) => match serde_json::from_value::<SubscriptionFilter>(value) {
+                Ok(filter) => Some(filter),
+                Err(error) => {
+                    return Err(("INVALID_PARAMS", format!("invalid filter: {error}")));
+                }
+            },
+            None => None,
+        };
+        let id = self
+            .event_bus
+            .subscribe(&parsed.event, filter)
+            .map_err(|error| ("SUBSCRIBE_FAILED", error.to_string()))?;
+        let _ = request_id;
+        Ok(json!({ "subscriptionId": id, "event": parsed.event }))
+    }
+
+    fn events_unsubscribe(&self, params: &Value) -> ApiResult {
+        let parsed: UnsubscribeRequest = serde_json::from_value(params.clone())
+            .map_err(|error| ("INVALID_PARAMS", error.to_string()))?;
+        let removed = self
+            .event_bus
+            .unsubscribe(&parsed.subscription_id)
+            .map_err(|error| ("SUBSCRIBE_FAILED", error.to_string()))?;
+        Ok(json!({ "removed": removed }))
+    }
+
+    // ------------------------------------------------------------------
+    // Helpers
+    // ------------------------------------------------------------------
+
+    fn require_plugin(&self) -> ApiResult {
+        if self.manifest.kind != crate::manifest::PackageKind::Plugin {
+            return Err((
+                "PERMISSION_DENIED",
+                "system methods are reserved for plugins".into(),
+            ));
+        }
+        Ok(json!({}))
     }
 
     fn require_permission(
@@ -522,45 +1374,16 @@ impl ApiRouter {
         ))
     }
 
-    fn runtime_status(&self) -> ApiResult {
-        self.require_runtime_manage()?;
-        let runtime = self
-            .runtime
-            .as_ref()
-            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
-        runtime
-            .status(Duration::from_secs(2))
-            .and_then(|status| {
-                serde_json::to_value(status)
-                    .map_err(|error| RuntimeError::Protocol(error.to_string()))
-            })
-            .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
-    }
-
-    fn runtime_restart(&self) -> ApiResult {
-        self.require_runtime_manage()?;
-        let runtime = self
-            .runtime
-            .as_ref()
-            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
-        runtime
-            .restart(Duration::from_secs(5))
-            .and_then(|status| {
-                serde_json::to_value(status)
-                    .map_err(|error| RuntimeError::Protocol(error.to_string()))
-            })
-            .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
-    }
-
-    fn runtime_cancel(&self) -> ApiResult {
-        if !self.permission_granted("runtime.invoke") {
-            return Err(("PERMISSION_DENIED", "runtime.invoke was revoked".into()));
-        }
-        let runtime = self
-            .runtime
-            .as_ref()
-            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
-        Ok(json!({ "cancelled": runtime.cancel() }))
+    fn has_permission_for(&self, operation: &str, _path: &Path) -> bool {
+        // A coarse-grained check; the path is already
+        // scope-validated by `resolve_scoped_path` before
+        // reaching here, so this just confirms the app
+        // declared the permission at all.
+        self.manifest
+            .permissions
+            .iter()
+            .any(|permission| permission.paths_for(operation).is_some())
+            && self.permission_granted(operation)
     }
 
     fn require_runtime_manage(&self) -> Result<(), (&'static str, String)> {
@@ -596,23 +1419,18 @@ impl ApiRouter {
             }
         }
     }
-
-    fn resolve_requested(&self, path: &str) -> PathBuf {
-        let path = PathBuf::from(path);
-        if path.is_absolute() {
-            path
-        } else {
-            self.package_root.join(path)
-        }
-    }
 }
 
 type ApiResult = Result<Value, (&'static str, String)>;
+
+// ---- parameter structs ---------------------------------------------------
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
 struct PathParams {
     path: String,
+    #[serde(default)]
+    access_token: Option<String>,
 }
 
 #[derive(Deserialize)]
@@ -620,6 +1438,83 @@ struct PathParams {
 struct WriteParams {
     path: String,
     content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WriteBinaryParams {
+    path: String,
+    data: String,
+    #[serde(default)]
+    access_token: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct CreateDirParams {
+    path: String,
+    #[serde(default)]
+    recursive: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RemoveParams {
+    path: String,
+    #[serde(default)]
+    recursive: Option<bool>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct FromToParams {
+    from: String,
+    to: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyParams {
+    key: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct KeyValueParams {
+    key: String,
+    value: Value,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct OpenDialogParams {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    default_path: Option<String>,
+    #[serde(default)]
+    filters: Option<Vec<DialogFilterParam>>,
+}
+
+#[derive(Deserialize, Default)]
+#[serde(deny_unknown_fields)]
+struct SaveDialogParams {
+    #[serde(default)]
+    title: Option<String>,
+    #[serde(default)]
+    default_path: Option<String>,
+    #[serde(default)]
+    filters: Option<Vec<DialogFilterParam>>,
+    #[serde(default)]
+    suggested_name: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DialogFilterParam {
+    name: String,
+    #[serde(default)]
+    extensions: Vec<String>,
 }
 
 #[derive(Deserialize)]
@@ -632,15 +1527,14 @@ struct RuntimeInvokeParams {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct ClipboardWriteParams {
-    text: String,
+struct RuntimeCancelParams {
+    request_id: String,
 }
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
-struct DialogOpenParams {
-    #[serde(default)]
-    title: Option<String>,
+struct ClipboardWriteParams {
+    text: String,
 }
 
 #[derive(Deserialize)]
@@ -662,6 +1556,8 @@ struct NotificationParams {
     body: String,
 }
 
+// ---- helpers -------------------------------------------------------------
+
 fn parse_params<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T, (&'static str, String)> {
     serde_json::from_value(value.clone()).map_err(|error| ("INVALID_PARAMS", error.to_string()))
 }
@@ -673,4 +1569,55 @@ fn now_ms() -> u64 {
         .as_millis()
         .try_into()
         .unwrap_or(u64::MAX)
+}
+
+fn filters_from_params(filters: Option<&Vec<DialogFilterParam>>) -> Vec<DialogFilter> {
+    filters
+        .map(|list| {
+            list.iter()
+                .map(|f| DialogFilter {
+                    name: f.name.clone(),
+                    extensions: f.extensions.clone(),
+                })
+                .collect()
+        })
+        .unwrap_or_default()
+}
+
+fn mint_token_entry(
+    store: &FileTokenStore,
+    app_id: &str,
+    path: &Path,
+    ops: &[FileOp],
+) -> Value {
+    match store.issue(app_id, path, ops) {
+        Ok(token) => json!({
+            "path": path.to_string_lossy(),
+            "token": token.token,
+            "ops": token.ops,
+            "expiresAt": token.expires_at_ms,
+        }),
+        Err(_) => json!({
+            "path": path.to_string_lossy(),
+            "token": Value::Null,
+        }),
+    }
+}
+
+fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
+    fs::create_dir_all(to)?;
+    for entry in fs::read_dir(from)? {
+        let entry = entry?;
+        let file_type = entry.file_type()?;
+        let target = to.join(entry.file_name());
+        if file_type.is_dir() {
+            copy_dir_recursive(&entry.path(), &target)?;
+        } else if file_type.is_symlink() {
+            // Skip symlinks to avoid escape.
+            continue;
+        } else {
+            fs::copy(&entry.path(), &target)?;
+        }
+    }
+    Ok(())
 }

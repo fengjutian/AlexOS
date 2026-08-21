@@ -69,6 +69,41 @@ pub fn clipboard_write_text(_text: String) -> Result<(), NativeError> {
     Err(NativeError::Unsupported)
 }
 
+/// Per-app storage layout: the host exposes the canonical
+/// `data`, `cache`, and `temp` paths so the app can ask the user
+/// for them or use them as defaults. The paths are created
+/// lazily on first access and live under the host's local
+/// data root.
+#[derive(Debug, Clone)]
+pub struct AppPaths {
+    pub data_dir: PathBuf,
+    pub cache_dir: PathBuf,
+    pub temp_dir: PathBuf,
+}
+
+#[cfg(windows)]
+pub fn app_paths(app_id: &str) -> Result<AppPaths, NativeError> {
+    use std::env;
+    let local = env::var_os("LOCALAPPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| NativeError::Failed("LOCALAPPDATA is not set".into()))?;
+    let base = local.join("AlexOS").join("apps").join(app_id);
+    let temp_root = env::var_os("TEMP")
+        .or_else(|| env::var_os("TMP"))
+        .map(PathBuf::from)
+        .ok_or_else(|| NativeError::Failed("TEMP is not set".into()))?;
+    Ok(AppPaths {
+        data_dir: base.join("data"),
+        cache_dir: base.join("cache"),
+        temp_dir: temp_root.join("AlexOS").join(app_id),
+    })
+}
+
+#[cfg(not(windows))]
+pub fn app_paths(_app_id: &str) -> Result<AppPaths, NativeError> {
+    Err(NativeError::Unsupported)
+}
+
 #[cfg(windows)]
 pub fn pick_file(title: Option<&str>) -> Result<Option<PathBuf>, NativeError> {
     let mut dialog = rfd::FileDialog::new();
@@ -80,6 +115,84 @@ pub fn pick_file(title: Option<&str>) -> Result<Option<PathBuf>, NativeError> {
 
 #[cfg(not(windows))]
 pub fn pick_file(_title: Option<&str>) -> Result<Option<PathBuf>, NativeError> {
+    Err(NativeError::Unsupported)
+}
+
+/// Filter set passed to the native dialog. Extension entries are
+/// matched case-insensitively; the host does not validate them
+/// further.
+#[derive(Debug, Clone, Default)]
+pub struct DialogFilter {
+    pub name: String,
+    pub extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OpenDialogSpec {
+    pub title: Option<String>,
+    pub default_path: Option<PathBuf>,
+    pub filters: Vec<DialogFilter>,
+    pub multiple: bool,
+    pub directory: bool,
+}
+
+#[cfg(windows)]
+pub fn pick_paths(spec: OpenDialogSpec) -> Result<Vec<PathBuf>, NativeError> {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(title) = spec.title.as_deref() {
+        dialog = dialog.set_title(title);
+    }
+    if let Some(default) = spec.default_path.as_deref() {
+        dialog = dialog.set_directory(default);
+    }
+    for filter in &spec.filters {
+        dialog = dialog.add_filter(&filter.name, &filter.extensions);
+    }
+    if spec.directory {
+        let chosen = dialog.pick_folder();
+        return Ok(chosen.into_iter().collect());
+    }
+    if spec.multiple {
+        let chosen = dialog.pick_files();
+        return Ok(chosen.unwrap_or_default());
+    }
+    let chosen = dialog.pick_file();
+    Ok(chosen.into_iter().collect())
+}
+
+#[cfg(not(windows))]
+pub fn pick_paths(_spec: OpenDialogSpec) -> Result<Vec<PathBuf>, NativeError> {
+    Err(NativeError::Unsupported)
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SaveDialogSpec {
+    pub title: Option<String>,
+    pub default_path: Option<PathBuf>,
+    pub filters: Vec<DialogFilter>,
+    pub suggested_name: Option<String>,
+}
+
+#[cfg(windows)]
+pub fn pick_save_path(spec: SaveDialogSpec) -> Result<Option<PathBuf>, NativeError> {
+    let mut dialog = rfd::FileDialog::new();
+    if let Some(title) = spec.title.as_deref() {
+        dialog = dialog.set_title(title);
+    }
+    if let Some(default) = spec.default_path.as_deref() {
+        dialog = dialog.set_directory(default);
+    }
+    for filter in &spec.filters {
+        dialog = dialog.add_filter(&filter.name, &filter.extensions);
+    }
+    if let Some(name) = spec.suggested_name.as_deref() {
+        dialog = dialog.set_file_name(name);
+    }
+    Ok(dialog.save_file())
+}
+
+#[cfg(not(windows))]
+pub fn pick_save_path(_spec: SaveDialogSpec) -> Result<Option<PathBuf>, NativeError> {
     Err(NativeError::Unsupported)
 }
 

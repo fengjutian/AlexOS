@@ -264,7 +264,7 @@ pub fn resolve_scoped_path(
                 let Some(parent) = ancestor.parent() else {
                     return Err(PathError::NotFound(joined.clone()));
                 };
-                suffix_components.insert(0, ancestor.components().last().unwrap());
+                suffix_components.insert(0, ancestor.components().next_back().unwrap());
                 if parent == ancestor {
                     // We walked past the root; give up.
                     return Err(PathError::NotFound(joined.clone()));

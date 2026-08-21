@@ -21,6 +21,7 @@ const WATCHER_EVENT: &str = "filesystem.changed";
 
 /// RAII handle for a single active file watch. Drop it to stop
 /// the underlying OS-level watcher.
+#[derive(Debug)]
 pub struct WatchHandle {
     inner: Arc<WatcherEntry>,
 }
@@ -39,6 +40,15 @@ struct WatcherEntry {
     /// sender is dropped and the pump thread's `recv()` returns
     /// an error, ending the thread.
     _bridge_tx: mpsc::Sender<()>,
+}
+
+impl std::fmt::Debug for WatcherEntry {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("WatcherEntry")
+            .field("path", &self.path)
+            .finish()
+    }
 }
 
 impl Drop for WatcherEntry {

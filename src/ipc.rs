@@ -55,3 +55,48 @@ impl Response {
         }
     }
 }
+
+/// A page-facing wire envelope for a delivered event. The shell
+/// turns bus deliveries into this struct and writes it through
+/// the WebView's `__alexResolve` shim.
+#[derive(Debug, Clone, Serialize)]
+pub struct EventEnvelope {
+    pub protocol: u32,
+    pub kind: &'static str,
+    pub event: String,
+    pub subscription_id: String,
+    pub sequence: u64,
+    pub payload: Value,
+}
+
+impl EventEnvelope {
+    pub fn new(event: impl Into<String>, subscription_id: impl Into<String>, sequence: u64, payload: Value) -> Self {
+        Self {
+            protocol: PROTOCOL_VERSION,
+            kind: "event",
+            event: event.into(),
+            subscription_id: subscription_id.into(),
+            sequence,
+            payload,
+        }
+    }
+}
+
+/// Subscribe/unsubscribe envelopes accepted over the same IPC
+/// channel as calls. The page prefers the SDK wrappers, which
+/// generate these for them.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubscribeRequest {
+    pub id: String,
+    pub event: String,
+    #[serde(default)]
+    pub filter: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UnsubscribeRequest {
+    pub id: String,
+    pub subscription_id: String,
+}

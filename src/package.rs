@@ -11,6 +11,7 @@ use rand_core::OsRng;
 use semver::Version;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
+use tempfile::Builder as TempDirBuilder;
 use thiserror::Error;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
@@ -249,7 +250,7 @@ pub fn install_verified(
     trusted_key: Option<&str>,
 ) -> Result<PathBuf, PackageError> {
     fs::create_dir_all(install_root)?;
-    let temporary = tempfile::Builder::new()
+    let temporary = TempDirBuilder::new()
         .prefix(".alex-install-")
         .tempdir_in(install_root)?;
     let mut archive = ZipArchive::new(File::open(archive_path)?)?;
@@ -407,7 +408,7 @@ pub fn update_verified(
     allow_downgrade: bool,
 ) -> Result<UpdateResult, PackageError> {
     fs::create_dir_all(install_root)?;
-    let staging = tempfile::Builder::new()
+    let staging = TempDirBuilder::new()
         .prefix(".alex-update-")
         .tempdir_in(install_root)?;
     let staged_path =
