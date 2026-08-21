@@ -1,4 +1,4 @@
-use std::fs;
+use std::{fs, io::Write};
 
 use alex::{
     api::ApiRouter,
@@ -152,4 +152,30 @@ fn uninstall_rejects_a_path_like_package_id() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("invalid package id"));
+}
+
+#[test]
+fn install_rejects_a_tampered_package() {
+    let workspace = tempfile::tempdir().unwrap();
+    let archive_path = workspace.path().join("tampered.alex");
+    let file = fs::File::create(&archive_path).unwrap();
+    let mut archive = zip::ZipWriter::new(file);
+    let options = zip::write::SimpleFileOptions::default();
+    let manifest = r#"{"schemaVersion":1,"id":"com.alex.tampered","name":"Tampered","version":"0.1.0","frontend":{"entry":"frontend/index.html"}}"#;
+    archive.start_file("manifest.json", options).unwrap();
+    archive.write_all(manifest.as_bytes()).unwrap();
+    archive.start_file("frontend/index.html", options).unwrap();
+    archive.write_all(b"<h1>changed</h1>").unwrap();
+    archive.start_file(".alex/integrity.json", options).unwrap();
+    archive
+        .write_all(
+            br#"{"algorithm":"sha256","files":{"frontend/index.html":"0000","manifest.json":"0000"}}"#,
+        )
+        .unwrap();
+    archive.finish().unwrap();
+
+    let error = package::install(&archive_path, &workspace.path().join("apps"))
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("hash mismatch"));
 }
