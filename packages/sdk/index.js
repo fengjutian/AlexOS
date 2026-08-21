@@ -202,10 +202,73 @@ export function createAlexClient(transport = browserTransport()) {
       async close(options) {
         await invoke("window.close", {}, options);
       },
+      async create(spec, options) {
+        return invoke("window.create", spec, options);
+      },
+      async list(options) {
+        const result = await invoke("window.list", {}, options);
+        return result.windows ?? [];
+      },
+      async getBounds(windowId, options) {
+        return invoke("window.getBounds", { windowId }, options);
+      },
+      async setBounds(windowId, bounds, options) {
+        return invoke("window.setBounds", { windowId, ...bounds }, options);
+      },
+      async setFullscreen(windowId, fullscreen, options) {
+        return invoke("window.setFullscreen", { windowId, fullscreen }, options);
+      },
+      async isFullscreen(windowId, options) {
+        return invoke("window.isFullscreen", { windowId }, options);
+      },
+      async destroy(windowId, options) {
+        return invoke("window.destroy", { windowId }, options);
+      },
+    }),
+    menu: Object.freeze({
+      async setApplicationMenu(template, options) {
+        await invoke("menu.setApplicationMenu", template, options);
+      },
+      async setContextMenu(template, options) {
+        await invoke("menu.setContextMenu", template, options);
+      },
+    }),
+    tray: Object.freeze({
+      async create(spec, options) {
+        return invoke("tray.create", spec, options);
+      },
+      async destroy(id, options) {
+        return invoke("tray.destroy", { id }, options);
+      },
+    }),
+    shortcuts: Object.freeze({
+      async register(accelerator, options) {
+        return invoke("shortcuts.register", { accelerator }, options);
+      },
+      async unregister(accelerator, options) {
+        return invoke("shortcuts.unregister", { accelerator }, options);
+      },
+      async list(options) {
+        const result = await invoke("shortcuts.list", {}, options);
+        return result.shortcuts ?? [];
+      },
     }),
     notification: Object.freeze({
       async show({ title, body }, options) {
         await invoke("notification.show", { title, body }, options);
+      },
+    }),
+    process: Object.freeze({
+      async spawn(spec, options) {
+        return invoke("process.spawn", spec, options);
+      },
+      async kill(pid, options) {
+        return invoke("process.kill", { pid }, options);
+      },
+    }),
+    net: Object.freeze({
+      async fetch(input, options) {
+        return invoke("net.fetch", input, options);
       },
     }),
     system: Object.freeze({

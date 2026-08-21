@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "id": "window-1",
+  "source": "com.alex.full",
+  "method": "window.create",
+  "params": {
+    "url": "editor.html",
+    "title": "Editor",
+    "width": 1024,
+    "height": 768
+  }
+}

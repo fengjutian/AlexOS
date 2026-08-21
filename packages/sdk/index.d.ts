@@ -15,11 +15,6 @@ export interface SaveFileOptions extends OpenFileOptions {
   suggestedName?: string;
 }
 
-export interface FileFilter {
-  name: string;
-  extensions: string[];
-}
-
 export interface FileStat {
   path: string;
   type: "file" | "directory" | "symlink" | "other";
@@ -56,6 +51,100 @@ export interface WatchOptions {
 export interface ReadBinaryResult {
   encoding: "base64";
   data: string;
+}
+
+export interface FileFilter {
+  name: string;
+  extensions: string[];
+}
+
+export interface WindowSpec {
+  url: string;
+  title?: string;
+  width?: number;
+  height?: number;
+  x?: number;
+  y?: number;
+}
+
+export interface WindowInfo {
+  id: number;
+  url: string;
+  title: string;
+  width: number;
+  height: number;
+  x: number | null;
+  y: number | null;
+  fullscreen: boolean;
+}
+
+export interface WindowBoundsInput {
+  x?: number;
+  y?: number;
+  width?: number;
+  height?: number;
+}
+
+export type MenuItemType = "normal" | "separator" | "submenu" | "checkbox";
+
+export interface NormalMenuItem {
+  type: "normal";
+  id: string;
+  label: string;
+  accelerator?: string;
+  enabled?: boolean;
+}
+
+export interface SeparatorMenuItem {
+  type: "separator";
+}
+
+export interface SubmenuMenuItem {
+  type: "submenu";
+  id: string;
+  label: string;
+  items: MenuItem[];
+}
+
+export interface CheckboxMenuItem {
+  type: "checkbox";
+  id: string;
+  label: string;
+  checked?: boolean;
+  accelerator?: string;
+}
+
+export type MenuItem = NormalMenuItem | SeparatorMenuItem | SubmenuMenuItem | CheckboxMenuItem;
+
+export interface MenuTemplate {
+  items: MenuItem[];
+}
+
+export interface TraySpec {
+  icon: string;
+  tooltip?: string;
+  menu?: MenuTemplate;
+}
+
+export interface TrayInfo {
+  id: string;
+  icon: string;
+  tooltip: string | null;
+}
+
+export interface ProcessSpawnSpec {
+  executable: string;
+  args?: string[];
+  cwd?: string;
+  timeoutMs?: number;
+}
+
+export interface NetFetchInput {
+  url: string;
+  method?: string;
+  headers?: Record<string, string>;
+  body?: string;
+  timeoutMs?: number;
 }
 
 export interface SystemCapabilities {
@@ -219,9 +308,44 @@ export interface AlexClient {
     minimize(options?: InvokeOptions): Promise<void>;
     maximize(options?: InvokeOptions): Promise<void>;
     close(options?: InvokeOptions): Promise<void>;
+    create(spec: WindowSpec, options?: InvokeOptions): Promise<WindowInfo>;
+    list(options?: InvokeOptions): Promise<WindowInfo[]>;
+    getBounds(windowId: number, options?: InvokeOptions): Promise<WindowBoundsInput>;
+    setBounds(
+      windowId: number,
+      bounds: WindowBoundsInput,
+      options?: InvokeOptions,
+    ): Promise<WindowInfo>;
+    setFullscreen(
+      windowId: number,
+      fullscreen: boolean,
+      options?: InvokeOptions,
+    ): Promise<WindowInfo>;
+    isFullscreen(windowId: number, options?: InvokeOptions): Promise<{ fullscreen: boolean }>;
+    destroy(windowId: number, options?: InvokeOptions): Promise<{ destroyed: boolean }>;
+  };
+  readonly menu: {
+    setApplicationMenu(template: MenuTemplate, options?: InvokeOptions): Promise<void>;
+    setContextMenu(template: MenuTemplate, options?: InvokeOptions): Promise<void>;
+  };
+  readonly tray: {
+    create(spec: TraySpec, options?: InvokeOptions): Promise<TrayInfo>;
+    destroy(id: string, options?: InvokeOptions): Promise<{ destroyed: boolean }>;
+  };
+  readonly shortcuts: {
+    register(accelerator: string, options?: InvokeOptions): Promise<{ registered: boolean }>;
+    unregister(accelerator: string, options?: InvokeOptions): Promise<{ unregistered: boolean }>;
+    list(options?: InvokeOptions): Promise<string[]>;
   };
   readonly notification: {
     show(notification: { title: string; body: string }, options?: InvokeOptions): Promise<void>;
+  };
+  readonly process: {
+    spawn(spec: ProcessSpawnSpec, options?: InvokeOptions): Promise<{ pid: string }>;
+    kill(pid: string, options?: InvokeOptions): Promise<{ killed: boolean }>;
+  };
+  readonly net: {
+    fetch(input: NetFetchInput, options?: InvokeOptions): Promise<{ queued: boolean }>;
   };
   readonly system: {
     info(options?: InvokeOptions): Promise<SystemInfo>;

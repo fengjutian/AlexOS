@@ -1,0 +1,7 @@
+{
+  "protocol": 1,
+  "id": "shortcut-1",
+  "source": "com.alex.full",
+  "method": "shortcuts.register",
+  "params": { "accelerator": "Ctrl+Shift+P" }
+}

@@ -1,0 +1,14 @@
+{
+  "protocol": 1,
+  "id": "menu-1",
+  "source": "com.alex.full",
+  "method": "menu.setApplicationMenu",
+  "params": {
+    "items": [
+      { "type": "normal", "id": "open", "label": "Open" },
+      { "type": "normal", "id": "save", "label": "Save", "accelerator": "Ctrl+S" },
+      { "type": "separator" },
+      { "type": "normal", "id": "quit", "label": "Quit" }
+    ]
+  }
+}
