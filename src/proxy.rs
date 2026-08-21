@@ -94,6 +94,7 @@ pub fn proxy_to_service(
     let Some(addr) = resolve_loopback(endpoint.port) else {
         return text_response(StatusCode::BAD_GATEWAY, "cannot resolve backend address");
     };
+    // (kept to preserve clippy suggestion shape — single-use helper)
     let mut stream = match TcpStream::connect_timeout(&addr, CONNECT_TIMEOUT) {
         Ok(s) => s,
         Err(error) => {
@@ -113,13 +114,13 @@ pub fn proxy_to_service(
             &format!("write to backend failed: {error}"),
         );
     }
-    if !body.is_empty() {
-        if let Err(error) = stream.write_all(body) {
-            return text_response(
-                StatusCode::BAD_GATEWAY,
-                &format!("write body to backend failed: {error}"),
-            );
-        }
+    if !body.is_empty()
+        && let Err(error) = stream.write_all(body)
+    {
+        return text_response(
+            StatusCode::BAD_GATEWAY,
+            &format!("write body to backend failed: {error}"),
+        );
     }
     let _ = stream.flush();
     // Half-close the write side so the backend's read_to_end
@@ -166,10 +167,10 @@ fn build_upstream_request(
         body_len = body_len,
     );
     for (name, value) in request.headers() {
-        if let Ok(value_str) = value.to_str() {
-            if FORWARDED_REQUEST_HEADERS.contains(&name.as_str()) {
-                let _ = write!(head, "{}: {}\r\n", name.as_str(), value_str);
-            }
+        if let Ok(value_str) = value.to_str()
+            && FORWARDED_REQUEST_HEADERS.contains(&name.as_str())
+        {
+            let _ = write!(head, "{}: {}\r\n", name.as_str(), value_str);
         }
     }
     // Token is appended last and on its own line so that an
