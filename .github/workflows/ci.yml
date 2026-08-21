@@ -73,7 +73,7 @@ jobs:
         # the actual WebView is not started (it would block the runner).
         run: cargo run --offline -- manager --help
       - name: Upload alex.exe
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: alex-windows
           path: target/debug/alex.exe
