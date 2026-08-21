@@ -36,6 +36,17 @@ enum Commands {
         #[arg(long)]
         root: PathBuf,
     },
+    /// List valid applications in an installation directory.
+    List {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    /// Uninstall an application after validating its identity and path.
+    Uninstall {
+        id: String,
+        #[arg(long)]
+        root: PathBuf,
+    },
 }
 
 fn main() {
@@ -104,6 +115,26 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Install { archive, root } => {
             let installed = package::install(&archive, &root)?;
             println!("installed {}", installed.display());
+        }
+        Commands::List { root } => {
+            let applications = package::list_installed(&root)?;
+            if applications.is_empty() {
+                println!("no applications installed");
+            } else {
+                for app in applications {
+                    println!(
+                        "{}\t{}\t{}\t{}",
+                        app.id,
+                        app.version,
+                        app.name,
+                        app.path.display()
+                    );
+                }
+            }
+        }
+        Commands::Uninstall { id, root } => {
+            let removed = package::uninstall(&id, &root)?;
+            println!("uninstalled {} ({})", id, removed.display());
         }
     }
     Ok(())

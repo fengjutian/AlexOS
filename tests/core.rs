@@ -126,3 +126,30 @@ fn project_scaffolding_creates_a_valid_application() {
     package::create_project(&project, "com.alex.new_app").unwrap();
     assert_eq!(load_app(&project).unwrap().id, "com.alex.new_app");
 }
+
+#[test]
+fn installed_applications_can_be_listed_and_safely_uninstalled() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    let apps = workspace.path().join("apps");
+    package::pack(&source, &archive).unwrap();
+    package::install(&archive, &apps).unwrap();
+
+    let installed = package::list_installed(&apps).unwrap();
+    assert_eq!(installed.len(), 1);
+    assert_eq!(installed[0].id, "com.alex.hello");
+
+    let removed = package::uninstall("com.alex.hello", &apps).unwrap();
+    assert!(!removed.exists());
+    assert!(package::list_installed(&apps).unwrap().is_empty());
+}
+
+#[test]
+fn uninstall_rejects_a_path_like_package_id() {
+    let workspace = tempfile::tempdir().unwrap();
+    let error = package::uninstall("../outside", workspace.path())
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("invalid package id"));
+}

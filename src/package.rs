@@ -23,6 +23,18 @@ pub enum PackageError {
     AlreadyInstalled(PathBuf),
     #[error("invalid project name: {0}")]
     InvalidName(String),
+    #[error("invalid package id: {0}")]
+    InvalidPackageId(String),
+    #[error("application is not installed: {0}")]
+    NotInstalled(String),
+}
+
+#[derive(Debug)]
+pub struct InstalledApp {
+    pub id: String,
+    pub name: String,
+    pub version: String,
+    pub path: PathBuf,
 }
 
 pub fn create_project(destination: &Path, package_id: &str) -> Result<(), PackageError> {
@@ -111,6 +123,60 @@ pub fn install(archive_path: &Path, install_root: &Path) -> Result<PathBuf, Pack
     Ok(destination)
 }
 
+pub fn list_installed(install_root: &Path) -> Result<Vec<InstalledApp>, PackageError> {
+    if !install_root.exists() {
+        return Ok(Vec::new());
+    }
+    let mut applications = Vec::new();
+    for entry in fs::read_dir(install_root)? {
+        let entry = entry?;
+        let path = entry.path();
+        if !path.is_dir()
+            || path
+                .file_name()
+                .and_then(|name| name.to_str())
+                .is_some_and(|name| name.starts_with('.'))
+        {
+            continue;
+        }
+        if let Ok(manifest) = load_app(&path) {
+            applications.push(InstalledApp {
+                id: manifest.id,
+                name: manifest.name,
+                version: manifest.version,
+                path,
+            });
+        }
+    }
+    applications.sort_by(|left, right| left.id.cmp(&right.id));
+    Ok(applications)
+}
+
+pub fn uninstall(package_id: &str, install_root: &Path) -> Result<PathBuf, PackageError> {
+    if !valid_package_id(package_id) {
+        return Err(PackageError::InvalidPackageId(package_id.to_owned()));
+    }
+    let root = install_root
+        .canonicalize()
+        .map_err(|_| PackageError::NotInstalled(package_id.to_owned()))?;
+    let requested = root.join(package_id);
+    let destination = requested
+        .canonicalize()
+        .map_err(|_| PackageError::NotInstalled(package_id.to_owned()))?;
+    if destination.parent() != Some(root.as_path()) {
+        return Err(PackageError::UnsafeEntry(destination.display().to_string()));
+    }
+    let manifest = load_app(&destination)?;
+    if manifest.id != package_id {
+        return Err(PackageError::InvalidPackageId(format!(
+            "directory contains {}, not {package_id}",
+            manifest.id
+        )));
+    }
+    fs::remove_dir_all(&destination)?;
+    Ok(destination)
+}
+
 fn add_directory(
     writer: &mut ZipWriter<File>,
     root: &Path,
@@ -152,4 +218,14 @@ fn valid_name(name: &str) -> bool {
         && name
             .chars()
             .all(|character| character.is_ascii_alphanumeric() || matches!(character, '-' | '_'))
+}
+
+fn valid_package_id(id: &str) -> bool {
+    id.contains('.')
+        && id.split('.').all(|component| {
+            !component.is_empty()
+                && component.chars().all(|character| {
+                    character.is_ascii_alphanumeric() || matches!(character, '-' | '_')
+                })
+        })
 }
