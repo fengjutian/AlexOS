@@ -43,12 +43,18 @@ mod windows {
     const BRIDGE: &str = r#"
       (() => {
         const pending = new Map();
+        const listeners = new Map();
         let sequence = 0;
         window.__alexResolve = (response) => {
           const item = pending.get(response.id);
           if (!item) return;
           pending.delete(response.id);
           response.error ? item.reject(response.error) : item.resolve(response.result);
+        };
+        window.__alexEmit = (event, data) => {
+          for (const listener of listeners.get(event) ?? []) {
+            try { listener(data); } catch (error) { queueMicrotask(() => { throw error; }); }
+          }
         };
         window.alex = Object.freeze({
           invoke(method, params = {}, options = {}) {
@@ -85,6 +91,18 @@ mod windows {
               });
               window.ipc.postMessage(JSON.stringify(request));
             });
+          },
+          on(event, listener) {
+            if (typeof event !== "string" || typeof listener !== "function") {
+              throw new TypeError("alex.on requires an event name and listener");
+            }
+            const eventListeners = listeners.get(event) ?? new Set();
+            eventListeners.add(listener);
+            listeners.set(event, eventListeners);
+            return () => {
+              eventListeners.delete(listener);
+              if (eventListeners.size === 0) listeners.delete(event);
+            };
           }
         });
       })();
@@ -173,12 +191,25 @@ mod windows {
                     HostCommand::MaximizeWindow => window.set_maximized(true),
                     HostCommand::CloseWindow => *control_flow = ControlFlow::Exit,
                 },
-                Event::WindowEvent {
-                    event: WindowEvent::CloseRequested,
-                    ..
-                } => {
-                    *control_flow = ControlFlow::Exit;
-                }
+                Event::WindowEvent { event, .. } => match event {
+                    WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                    WindowEvent::Focused(focused) => emit_event(
+                        &webview,
+                        "window.focusChanged",
+                        serde_json::json!({ "focused": focused }),
+                    ),
+                    WindowEvent::Resized(size) => emit_event(
+                        &webview,
+                        "window.resized",
+                        serde_json::json!({ "width": size.width, "height": size.height }),
+                    ),
+                    WindowEvent::Moved(position) => emit_event(
+                        &webview,
+                        "window.moved",
+                        serde_json::json!({ "x": position.x, "y": position.y }),
+                    ),
+                    _ => {}
+                },
                 _ => {}
             }
         })
@@ -233,5 +264,11 @@ mod windows {
             Some("jpg" | "jpeg") => "image/jpeg",
             _ => "application/octet-stream",
         }
+    }
+
+    fn emit_event(webview: &wry::WebView, event: &str, data: serde_json::Value) {
+        let event = serde_json::to_string(event).expect("event name is valid JSON");
+        let script = format!("window.__alexEmit?.({event},{data})");
+        let _ = webview.evaluate_script(&script);
     }
 }

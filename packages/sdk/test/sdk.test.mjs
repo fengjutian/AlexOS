@@ -48,3 +48,20 @@ test("requests support timeout and cancellation", async () => {
   controller.abort("test cancellation");
   await assert.rejects(request, { code: "ABORTED" });
 });
+
+test("event subscriptions can be removed", () => {
+  const listeners = new Map();
+  const client = createAlexClient({
+    invoke: async () => ({}),
+    on(event, listener) {
+      listeners.set(event, listener);
+      return () => listeners.delete(event);
+    },
+  });
+  const received = [];
+  const unsubscribe = client.events.on("window.resized", (event) => received.push(event));
+  listeners.get("window.resized")({ width: 800, height: 600 });
+  unsubscribe();
+  assert.deepEqual(received, [{ width: 800, height: 600 }]);
+  assert.equal(listeners.has("window.resized"), false);
+});

@@ -9,6 +9,13 @@ export interface OpenFileOptions extends InvokeOptions {
 
 export interface AlexTransport {
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
+  on?<T = unknown>(event: string, listener: (data: T) => void): () => void;
+}
+
+export interface AlexEventMap {
+  "window.focusChanged": { focused: boolean };
+  "window.resized": { width: number; height: number };
+  "window.moved": { x: number; y: number };
 }
 
 export interface SystemInfo {
@@ -33,6 +40,9 @@ export class AlexError extends Error {
 
 export interface AlexClient {
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
+  readonly events: {
+    on<K extends keyof AlexEventMap>(event: K, listener: (data: AlexEventMap[K]) => void): () => void;
+  };
   readonly fs: {
     readText(path: string, options?: InvokeOptions): Promise<string>;
     writeText(path: string, content: string, options?: InvokeOptions): Promise<void>;

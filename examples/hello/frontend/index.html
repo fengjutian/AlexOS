@@ -24,6 +24,9 @@
       document.querySelector("#rename").addEventListener("click", async () => {
         await window.alex.invoke("window.setTitle", { title: "Alex OS Native Window" });
       });
+      window.alex.on("window.focusChanged", ({ focused }) => {
+        document.querySelector("#status").textContent = focused ? "Window focused" : "Window blurred";
+      });
     </script>
   </body>
 </html>

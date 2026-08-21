@@ -14,6 +14,14 @@ export function createAlexClient(transport = browserTransport()) {
 
   return Object.freeze({
     invoke,
+    events: Object.freeze({
+      on(event, listener) {
+        if (typeof transport.on !== "function") {
+          throw new AlexError("EVENTS_UNAVAILABLE", "Alex event transport is unavailable");
+        }
+        return transport.on(event, listener);
+      },
+    }),
     fs: Object.freeze({
       async readText(path, options) {
         const result = await invoke("filesystem.readText", { path }, options);
