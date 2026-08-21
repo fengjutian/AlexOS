@@ -248,7 +248,7 @@ pub mod windows {
             .status(status)
             .header(CONTENT_TYPE, content_type)
             .header("X-Content-Type-Options", "nosniff")
-            .header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'")
+            .header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'")
             .body(body.into())
             .expect("static response is valid")
     }

@@ -69,6 +69,7 @@ const BRIDGE: &str = r#"
 "#;
 
 const PLACEHOLDER_HTML: &str = include_str!("manager_placeholder.html");
+const PLACEHOLDER_CSS: &str = include_str!("manager_placeholder.css");
 
 pub fn run(manager: Arc<ManagerRouter>) -> Result<(), AlexError> {
     let event_loop = EventLoopBuilder::<ManagerEvent>::with_user_event().build();
@@ -147,6 +148,13 @@ fn serve_system_asset(uri_path: &str) -> HttpResponse<std::borrow::Cow<'static, 
             PLACEHOLDER_HTML.as_bytes().to_vec(),
         );
     }
+    if uri_path == "/manager_placeholder.css" {
+        return response(
+            200,
+            "text/css; charset=utf-8",
+            PLACEHOLDER_CSS.as_bytes().to_vec(),
+        );
+    }
     response(404, "text/plain", b"Not found".to_vec())
 }
 
@@ -161,7 +169,7 @@ fn response(
         .header("X-Content-Type-Options", "nosniff")
         .header(
             "Content-Security-Policy",
-            "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
+            "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
         )
         .body(body.into())
         .expect("static response is valid")

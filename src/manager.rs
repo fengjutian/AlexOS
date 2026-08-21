@@ -839,5 +839,9 @@ fn permission_method_name(permission: &Permission) -> String {
         Permission::MediaCamera => "media.camera".into(),
         Permission::MediaMicrophone => "media.microphone".into(),
         Permission::Geolocation => "geolocation".into(),
+        Permission::SystemInstall => "system.install".into(),
+        Permission::SystemUninstall => "system.uninstall".into(),
+        Permission::SystemManageApps => "system.manageApps".into(),
+        Permission::SystemManageExtensions => "system.manageExtensions".into(),
     }
 }

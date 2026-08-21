@@ -12,20 +12,46 @@ WebView2、安全边界和应用生命周期，使用受管理的 Node.js 子进
 应用管理 UI 的产品范围、页面结构和技术方案见
 [docs/app-manager-ui-design.md](docs/app-manager-ui-design.md)。
 
+## Self-hosting (自举)
+
+0.1 实现了最小自举闭环:Alex OS 可以用 Alex OS 自己写一个 `system.*`
+插件并通过 host 桥接调用底层能力。完整链路:
+
+```powershell
+# 1. 用 Alex 包一个 manager plugin
+cargo run -- pack plugins\manager target\manager.alex
+
+# 2. 装到 install root
+cargo run -- install target\manager.alex --root target\apps
+
+# 3. alex manager 检测到 plugin,自动走自举路径
+cargo run -- manager --install-root target\apps
+# → "alex manager: launching self-hosted plugin com.alex.manager 0.1.0"
+```
+
+未装 manager plugin 时 `alex manager` 仍然可用内置 fallback(0.1
+行为不变)。当前阶段 plugin 走 system.* IPC 受权限约束,跟普通
+app 走同一套 dispatch 校验。
+
 ## 当前已实现
 
 - Windows WebView2 Shell 与 `alex://app/` 应用资源协议；
 - 版本化 Manifest、应用身份和入口路径校验；
+- Manifest 元数据(description / author / icons / homepage / license / extensionPoints);
 - WebView → Rust → Node JSON Lines RPC；
 - Node 状态、PID、日志、崩溃检测、重启、优雅退出和超时取消；
-- 文件、剪贴板、文件选择、外链、窗口控制和 WinRT Toast API；
-- 首次授权、权限持久化、撤销和 JSONL 审计；
-- WebView 导航、新窗口、下载、CSP、DevTools 和会话限制；
-- 无依赖的 `@alex/sdk` JavaScript 包与 TypeScript 声明；
+- 文件、剪贴板、文件选择、外链、窗口控制、WinRT Toast API、媒体权限(摄像头 / 麦克风 / 地理位置)；
+- 首次授权、权限持久化、撤销和 JSONL 审计;
+- WebView 导航、新窗口、下载、CSP(去 `unsafe-inline`)、DevTools 和会话限制;
+- 无依赖的 `@alex/sdk` JavaScript 包与 TypeScript 声明;
 - `.alex` 创建、打包、安装、列出、卸载和原子更新；
 - SHA-256 文件清单、Ed25519 包签名和发布者 Trust Store；
 - Stable/Beta/Dev 签名更新清单和 HTTPS 远程更新；
-- 窗口焦点、尺寸和位置事件。
+- 窗口焦点、尺寸和位置事件;
+- `alex dev` 开发模式:Frontend 热重载 + Backend 自动重启 + `.alexignore`;
+- `alex plugin` 加载已安装 plugin,通过 stdin/stdout 桥接到 plugin 自己的 ApiRouter;
+- `alex manager` 内置 App Manager 中心(可选自举为 plugin);
+- Plugin 系统(`kind: "plugin"`):Extension points + System permission + 自举闭环.
 
 “已实现”表示代码路径存在并通过当前测试，不表示已经完成生产级兼容性、安全审计、
 GUI 自动化或大规模稳定性验证。

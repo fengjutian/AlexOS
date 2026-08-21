@@ -12,6 +12,7 @@ use alex::{
     },
     package,
     permission::Permission,
+    plugin,
     trust::TrustStore,
     update::{self, UpdateChannel},
 };
@@ -882,4 +883,387 @@ fn runtime_supervisor_rejects_double_launch() {
     );
     assert!(matches!(second, Err(SupervisorError::AlreadyRunning(_))));
     let _ = supervisor.stop("com.alex.hello");
+}
+
+#[test]
+fn manifest_parses_plugin_kind_and_defaults_to_app() {
+    // Backward compat: legacy manifests without `kind` must still parse as App.
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir_all(workspace.path().join("frontend")).unwrap();
+    fs::write(workspace.path().join("frontend/index.html"), "<h1>x</h1>").unwrap();
+    fs::write(
+        workspace.path().join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "id": "com.alex.legacy",
+          "name": "Legacy",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" }
+        }"#,
+    )
+    .unwrap();
+    let manifest = load_app(workspace.path()).unwrap();
+    assert_eq!(manifest.kind, alex::manifest::PackageKind::App);
+}
+
+#[test]
+fn manifest_parses_plugin_kind_explicitly() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir_all(workspace.path().join("backend")).unwrap();
+    fs::create_dir_all(workspace.path().join("frontend")).unwrap();
+    fs::write(
+        workspace.path().join("backend/index.js"),
+        "// minimal plugin backend",
+    )
+    .unwrap();
+    fs::write(
+        workspace.path().join("frontend/index.html"),
+        "<h1>stub</h1>",
+    )
+    .unwrap();
+    fs::write(
+        workspace.path().join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.example.plugin",
+          "name": "Example Plugin",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" }
+        }"#,
+    )
+    .unwrap();
+    let manifest = load_app(workspace.path()).unwrap();
+    assert_eq!(manifest.kind, alex::manifest::PackageKind::Plugin);
+    plugin::validate_plugin_manifest(&manifest).unwrap();
+}
+
+#[test]
+fn plugin_discover_finds_only_plugin_kind() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app_archive = workspace.path().join("hello.alex");
+    package::pack(&source, &app_archive).unwrap();
+    let apps_root = workspace.path().join("apps");
+    package::install(&app_archive, &apps_root).unwrap();
+
+    // Build a fake plugin by hand.
+    let plugin_dir = apps_root.join("com.example.fake-plugin");
+    fs::create_dir_all(plugin_dir.join("backend")).unwrap();
+    fs::write(plugin_dir.join("backend/index.js"), "// plugin").unwrap();
+    fs::write(
+        plugin_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.example.fake-plugin",
+          "name": "Fake Plugin",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" }
+        }"#,
+    )
+    .unwrap();
+    fs::create_dir_all(plugin_dir.join("frontend")).unwrap();
+    fs::write(
+        plugin_dir.join("frontend/index.html"),
+        "<h1>plugin stub</h1>",
+    )
+    .unwrap();
+
+    let plugins = plugin::discover(&apps_root).unwrap();
+    assert_eq!(plugins.len(), 1);
+    assert_eq!(plugins[0].id, "com.example.fake-plugin");
+    assert_eq!(plugins[0].kind, alex::manifest::PackageKind::Plugin);
+}
+
+#[test]
+fn system_methods_are_blocked_for_apps() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    // examples/hello is `kind: "app"`; system.* must be unreachable even
+    // if a permission manifest declared it (we don't here, but kind check
+    // runs first so the rejection is unambiguous).
+    let router = ApiRouter::new(root, app);
+    for method in ["system.install", "system.uninstall", "system.listApps"] {
+        let params = if method == "system.listApps" {
+            json!({})
+        } else if method == "system.install" {
+            json!({ "packagePath": "C:/nope.alex" })
+        } else {
+            json!({ "id": "com.alex.hello" })
+        };
+        let response = router.dispatch(Request {
+            protocol: 1,
+            id: format!("{method}-1"),
+            source: "com.alex.hello".into(),
+            method: method.into(),
+            params,
+            deadline_ms: None,
+        });
+        let error = response.error.expect("error");
+        assert_eq!(
+            error.code, "PERMISSION_DENIED",
+            "{method}: {}",
+            error.message
+        );
+        assert!(
+            error.message.contains("reserved for plugins"),
+            "{method}: {}",
+            error.message
+        );
+    }
+}
+
+#[test]
+fn system_list_apps_returns_installed_apps_for_plugins() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+    let install_root = workspace.path().join("apps");
+    package::install(&archive, &install_root).unwrap();
+
+    // Build a plugin manifest declaring system.manageApps.
+    let plugin_dir = workspace.path().join("plugin");
+    fs::create_dir_all(plugin_dir.join("backend")).unwrap();
+    fs::create_dir_all(plugin_dir.join("frontend")).unwrap();
+    fs::write(plugin_dir.join("backend/index.js"), "// plugin").unwrap();
+    fs::write(plugin_dir.join("frontend/index.html"), "<h1>p</h1>").unwrap();
+    fs::write(
+        plugin_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.example.listing-plugin",
+          "name": "Listing Plugin",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" },
+          "permissions": [{ "name": "system.manageApps" }]
+        }"#,
+    )
+    .unwrap();
+    let manifest = load_app(&plugin_dir).unwrap();
+    let router = ApiRouter::new(plugin_dir, manifest).with_system_install_root(install_root);
+
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: "list-1".into(),
+        source: "com.example.listing-plugin".into(),
+        method: "system.listApps".into(),
+        params: json!({}),
+        deadline_ms: None,
+    });
+    let result = response.result.expect("result");
+    let apps = result.get("apps").and_then(|v| v.as_array()).expect("apps");
+    assert_eq!(apps.len(), 1);
+    assert_eq!(apps[0]["id"], "com.alex.hello");
+}
+
+#[test]
+fn plugin_find_in_install_rejects_apps() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+    let install_root = workspace.path().join("apps");
+    package::install(&archive, &install_root).unwrap();
+
+    // examples/hello is `kind: "app"`; `find_in_install` must return None
+    // for it so `alex plugin <id>` cannot start a non-plugin by accident.
+    let found = plugin::find_in_install(&install_root, "com.alex.hello").unwrap();
+    assert!(
+        found.is_none(),
+        "an app must not be discoverable as a plugin"
+    );
+
+    let missing = plugin::find_in_install(&install_root, "com.does.not.exist").unwrap();
+    assert!(missing.is_none());
+}
+
+#[test]
+fn self_host_manager_plugin_can_be_packed_and_installed() {
+    let workspace = tempfile::tempdir().unwrap();
+    let plugin_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("plugins")
+        .join("manager");
+    let archive = workspace.path().join("manager.alex");
+    let install_root = workspace.path().join("apps");
+
+    // Same commands a developer would run by hand.
+    package::pack(&plugin_src, &archive).unwrap();
+    package::install(&archive, &install_root).unwrap();
+
+    // The plugin is discoverable by both the manager helper and the
+    // plugin discovery entry point.
+    let found = plugin::find_in_install(&install_root, "com.alex.manager")
+        .unwrap()
+        .expect("manager plugin should be installed");
+    assert!(found.join("manifest.json").is_file());
+    assert!(found.join("backend/index.js").is_file());
+    assert!(found.join("frontend/index.html").is_file());
+
+    let discovered = plugin::discover(&install_root).unwrap();
+    assert_eq!(discovered.len(), 1);
+    assert_eq!(discovered[0].id, "com.alex.manager");
+    assert_eq!(discovered[0].kind, alex::manifest::PackageKind::Plugin);
+}
+
+#[test]
+fn app_manager_html_does_not_use_unsafe_inline_csp() {
+    // P0.3.2 acceptance: production apps run under a CSP that does not
+    // allow inline scripts or styles. Validate the live header string
+    // that the shell would emit (we cannot exercise the WebView in a
+    // headless test, but the CSP source-of-truth is a string literal).
+    let csp = std::include_str!("../src/shell.rs");
+    let header = csp
+        .lines()
+        .find(|line| line.contains("Content-Security-Policy"))
+        .expect("shell.rs must set a CSP header");
+    assert!(
+        !header.contains("'unsafe-inline'"),
+        "shell CSP still allows unsafe-inline: {header}"
+    );
+    assert!(header.contains("script-src 'self'"), "{header}");
+    assert!(header.contains("style-src 'self'"), "{header}");
+}
+
+#[test]
+fn manager_webview_does_not_use_unsafe_inline_csp() {
+    let csp = std::include_str!("../src/manager_webview.rs");
+    let header = csp
+        .lines()
+        .find(|line| line.contains("Content-Security-Policy"))
+        .expect("manager_webview.rs must set a CSP header");
+    assert!(
+        !header.contains("'unsafe-inline'"),
+        "manager CSP still allows unsafe-inline: {header}"
+    );
+}
+
+#[test]
+fn hello_frontend_does_not_use_inline_script() {
+    let html = std::include_str!("../examples/hello/frontend/index.html");
+    assert!(
+        !html.contains("<script>"),
+        "hello frontend must not contain an inline <script> block"
+    );
+    assert!(html.contains("app.js"), "must reference external app.js");
+}
+
+#[test]
+fn self_host_manager_plugin_is_discoverable_after_install() {
+    // End-to-end self-hosting smoke: pack the manager plugin, install it,
+    // and verify it shows up as the discoverable plugin form. This is
+    // the data path `alex manager` checks to decide between plugin and
+    // built-in fallback.
+    let workspace = tempfile::tempdir().unwrap();
+    let plugin_src = std::path::Path::new(env!("CARGO_MANIFEST_DIR"))
+        .join("plugins")
+        .join("manager");
+    let archive = workspace.path().join("manager.alex");
+    let install_root = workspace.path().join("apps");
+    package::pack(&plugin_src, &archive).unwrap();
+    package::install(&archive, &install_root).unwrap();
+
+    // 1. The plugin is discoverable by id.
+    let found = plugin::find_in_install(&install_root, "com.alex.manager")
+        .unwrap()
+        .expect("manager plugin should be present after install");
+    assert!(found.join("manifest.json").is_file());
+
+    // 2. The manifest is recognised as a plugin.
+    let manifest = load_app(&found).unwrap();
+    assert_eq!(manifest.kind, alex::manifest::PackageKind::Plugin);
+    plugin::validate_plugin_manifest(&manifest).unwrap();
+
+    // 3. The plugin manifest declares the system permissions the
+    //    self-hosted manager needs.
+    let system_perms: Vec<&str> = manifest
+        .permissions
+        .iter()
+        .filter_map(|p| match p {
+            alex::permission::Permission::SystemInstall => Some("system.install"),
+            alex::permission::Permission::SystemUninstall => Some("system.uninstall"),
+            alex::permission::Permission::SystemManageApps => Some("system.manageApps"),
+            _ => None,
+        })
+        .collect();
+    assert!(system_perms.contains(&"system.manageApps"));
+    assert!(system_perms.contains(&"system.install"));
+    assert!(system_perms.contains(&"system.uninstall"));
+}
+
+#[test]
+fn manifest_parses_extension_points() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir_all(workspace.path().join("backend")).unwrap();
+    fs::create_dir_all(workspace.path().join("frontend")).unwrap();
+    fs::write(workspace.path().join("backend/index.js"), "// stub").unwrap();
+    fs::write(workspace.path().join("frontend/index.html"), "<h1>p</h1>").unwrap();
+    fs::write(
+        workspace.path().join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.example.with-ext",
+          "name": "Ext",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" },
+          "extensionPoints": [
+            { "kind": "command", "id": "open-docs", "label": "Open Docs", "entry": "openDocs" },
+            { "kind": "panel",   "id": "status",    "label": "Status",    "entry": "status" }
+          ]
+        }"#,
+    )
+    .unwrap();
+    let manifest = load_app(workspace.path()).unwrap();
+    let exts = manifest.extension_points.expect("extension_points present");
+    assert_eq!(exts.len(), 2);
+    assert_eq!(exts[0].id, "open-docs");
+    assert_eq!(exts[0].kind, alex::manifest::ExtensionKind::Command);
+    assert_eq!(exts[1].kind, alex::manifest::ExtensionKind::Panel);
+}
+
+#[test]
+fn discover_extensions_aggregates_across_plugins() {
+    // Two plugins, each with a command. Result must surface both.
+    let workspace = tempfile::tempdir().unwrap();
+    let install_root = workspace.path().join("apps");
+    for (id, ext_id) in [
+        ("com.example.alpha", "alpha.run"),
+        ("com.example.beta", "beta.status"),
+    ] {
+        let dir = install_root.join(id);
+        fs::create_dir_all(dir.join("backend")).unwrap();
+        fs::create_dir_all(dir.join("frontend")).unwrap();
+        fs::write(dir.join("backend/index.js"), "//").unwrap();
+        fs::write(dir.join("frontend/index.html"), "<h1>").unwrap();
+        fs::write(
+            dir.join("manifest.json"),
+            format!(
+                r#"{{
+                  "schemaVersion": 1,
+                  "kind": "plugin",
+                  "id": "{id}",
+                  "name": "X",
+                  "version": "0.1.0",
+                  "frontend": {{ "entry": "frontend/index.html" }},
+                  "backend": {{ "runtime": "node", "entry": "backend/index.js" }},
+                  "extensionPoints": [
+                    {{ "kind": "command", "id": "{ext_id}", "label": "Run", "entry": "run" }}
+                  ]
+                }}"#
+            ),
+        )
+        .unwrap();
+    }
+    let exts = plugin::discover_extensions(&install_root).unwrap();
+    assert_eq!(exts.len(), 2);
+    let ids: Vec<_> = exts.iter().map(|b| b.extension.id.as_str()).collect();
+    assert!(ids.contains(&"alpha.run"));
+    assert!(ids.contains(&"beta.status"));
 }

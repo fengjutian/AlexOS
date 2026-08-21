@@ -9,7 +9,7 @@ use alex::{
     ipc::Request,
     load_app,
     manager::{LocalAppManager, ManagerRouter},
-    manager_webview, package,
+    manager_webview, package, plugin,
     runtime::{RuntimeHandle, RuntimeProcess},
     shell,
     trust::TrustStore,
@@ -44,6 +44,12 @@ enum Commands {
     Dev { path: PathBuf },
     /// Open the system App Manager (install, list, uninstall, permissions).
     Manager {
+        #[arg(long, default_value = "./target/apps")]
+        install_root: PathBuf,
+    },
+    /// Run an installed plugin's backend (no webview).
+    Plugin {
+        id: String,
         #[arg(long, default_value = "./target/apps")]
         install_root: PathBuf,
     },
@@ -247,9 +253,34 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             dev::run(&path, app)?;
         }
         Commands::Manager { install_root } => {
-            let manager = LocalAppManager::open(&install_root)?;
-            let router = Arc::new(ManagerRouter::new(Arc::new(manager)));
-            manager_webview::run(router)?;
+            // Self-hosting path: if `com.alex.manager` is installed as a
+            // plugin, prefer it. The plugin's backend then drives
+            // `system.*` calls through the host's permission pipeline.
+            // Fallback: built-in `ManagerRouter` keeps 0.1 working
+            // before users have installed the manager plugin.
+            if let Ok(Some(plugin_path)) =
+                plugin::find_in_install(&install_root, "com.alex.manager")
+            {
+                let manifest = load_app(&plugin_path)?;
+                eprintln!(
+                    "alex manager: launching self-hosted plugin {} {}",
+                    manifest.id, manifest.version
+                );
+                plugin::run(&plugin_path, &manifest, &install_root)?;
+            } else {
+                let manager = LocalAppManager::open(&install_root)?;
+                let router = Arc::new(ManagerRouter::new(Arc::new(manager)));
+                manager_webview::run(router)?;
+            }
+        }
+        Commands::Plugin { id, install_root } => {
+            let install_path = plugin::find_in_install(&install_root, &id)?.ok_or_else(|| {
+                package::PackageError::NotInstalled(format!(
+                    "plugin {id} not found or not a plugin"
+                ))
+            })?;
+            let manifest = load_app(&install_path)?;
+            plugin::run(&install_path, &manifest, &install_root)?;
         }
         Commands::Invoke {
             path,

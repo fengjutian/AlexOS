@@ -1,0 +1,28 @@
+{
+  "schemaVersion": 1,
+  "kind": "plugin",
+  "id": "com.alex.manager",
+  "name": "Alex OS Manager (plugin form)",
+  "version": "0.1.0",
+  "description": "Self-hosted version of the App Manager. Demonstrates that Alex OS can manage itself via plugins.",
+  "author": {
+    "name": "Alex OS Project"
+  },
+  "frontend": {
+    "entry": "frontend/index.html"
+  },
+  "backend": {
+    "runtime": "node",
+    "entry": "backend/index.js"
+  },
+  "permissions": [
+    { "name": "system.manageApps" },
+    { "name": "system.install" },
+    { "name": "system.uninstall" },
+    { "name": "system.manageExtensions" }
+  ],
+  "extensionPoints": [
+    { "kind": "command", "id": "manager.refresh", "label": "Refresh apps", "entry": "managerRefresh" },
+    { "kind": "panel", "id": "manager.summary", "label": "App Manager", "entry": "managerSummary" }
+  ]
+}

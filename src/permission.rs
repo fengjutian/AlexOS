@@ -31,6 +31,14 @@ pub enum Permission {
     MediaMicrophone,
     #[serde(rename = "geolocation")]
     Geolocation,
+    #[serde(rename = "system.install")]
+    SystemInstall,
+    #[serde(rename = "system.uninstall")]
+    SystemUninstall,
+    #[serde(rename = "system.manageApps")]
+    SystemManageApps,
+    #[serde(rename = "system.manageExtensions")]
+    SystemManageExtensions,
 }
 
 impl Permission {

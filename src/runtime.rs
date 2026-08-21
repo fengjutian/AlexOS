@@ -60,7 +60,7 @@ pub enum RuntimeState {
 pub struct RuntimeProcess {
     child: Child,
     stdin: ChildStdin,
-    stdout: BufReader<ChildStdout>,
+    stdout: Option<BufReader<ChildStdout>>,
 }
 
 #[derive(Clone)]
@@ -336,6 +336,10 @@ impl RuntimeProcess {
             .arg(&backend.entry)
             .current_dir(root)
             .env("ALEX_PACKAGE_ROOT", root)
+            .env(
+                "ALEX_INSTALL_ROOT",
+                std::env::var_os("ALEX_INSTALL_ROOT").unwrap_or_default(),
+            )
             .stdin(Stdio::piped())
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
@@ -366,12 +370,19 @@ impl RuntimeProcess {
         Ok(Self {
             child,
             stdin,
-            stdout: BufReader::new(stdout),
+            stdout: Some(BufReader::new(stdout)),
         })
     }
 
     pub fn id(&self) -> u32 {
         self.child.id()
+    }
+    /// Take ownership of the child's stdout. The caller (e.g.
+    /// `plugin::run`) uses this to forward backend output to the host
+    /// terminal. Once taken, `RuntimeProcess::invoke` cannot be used
+    /// on this process.
+    pub fn take_stdout(&mut self) -> Option<BufReader<ChildStdout>> {
+        self.stdout.take()
     }
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, RuntimeError> {
         Ok(self.child.try_wait()?)
@@ -401,7 +412,11 @@ impl RuntimeProcess {
         self.stdin.write_all(b"\n")?;
         self.stdin.flush()?;
         let mut line = String::new();
-        if self.stdout.read_line(&mut line)? == 0 {
+        let stdout = self
+            .stdout
+            .as_mut()
+            .ok_or_else(|| RuntimeError::Protocol("runtime stdout already taken".into()))?;
+        if stdout.read_line(&mut line)? == 0 {
             return Err(RuntimeError::Protocol(
                 "runtime closed stdout without a response".into(),
             ));
