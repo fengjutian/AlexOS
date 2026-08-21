@@ -1898,6 +1898,7 @@ struct NotificationParams {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 struct ProcessSpawnParams {
     executable: String,
     #[serde(default)]
@@ -1910,6 +1911,7 @@ struct ProcessSpawnParams {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+#[allow(dead_code)]
 struct NetFetchParams {
     url: String,
     #[serde(default)]

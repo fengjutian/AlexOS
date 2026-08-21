@@ -606,7 +606,20 @@ fn runtime_manager(
                 if let Some(mut value) = process.take() {
                     let _ = value.stop_gracefully(shutdown_grace_for(&endpoint));
                 }
-                sleep_for_backoff(restart_count, &last_exit_at);
+                // User-initiated restart skips the backoff schedule
+                // and the `max_retries` cap — the operator is
+                // explicitly asking for a fresh process. The
+                // `policy` is still consulted, so a `never` policy
+                // still refuses the restart.
+                let policy = effective_policy(&spec);
+                if !policy_allows_restart(&policy, last_exit_code) {
+                    last_error = Some(format!(
+                        "restart denied by policy ({})",
+                        policy.policy
+                    ));
+                    let _ = response.send(Err(last_error.clone().unwrap()));
+                    continue;
+                }
                 let result = RuntimeProcess::start_with_spec(
                     &spec,
                     spec.data_dir.as_deref(),
@@ -643,11 +656,15 @@ fn runtime_manager(
     current_pid.store(0, Ordering::Release);
 }
 
-fn sleep_for_backoff(_restart_count: u32, _last_exit_at: &Option<Instant>) {
-    // Replaced by `compute_backoff` (which now also honours the
-    // manifest's `restart` policy). Kept as a stub so old call
-    // sites compile while the migration is in flight; remove once
-    // nothing references it any more.
+fn sleep_for_backoff(restart_count: u32, last_exit_at: &Option<Instant>) {
+    let Some(last) = last_exit_at else {
+        return;
+    };
+    let wait = backoff_for(restart_count);
+    let elapsed = last.elapsed();
+    if elapsed < wait {
+        thread::sleep(wait - elapsed);
+    }
 }
 
 
@@ -1119,29 +1136,113 @@ mod lifecycle_tests {
     }
 
     #[test]
-    fn sleep_for_backoff_is_noop_without_prior_exit() {
-        // No last_exit_at → first restart must not sleep at all.
-        let start = Instant::now();
-        sleep_for_backoff(0, &None);
-        sleep_for_backoff(5, &None);
-        assert!(start.elapsed() < Duration::from_millis(50));
+    fn compute_backoff_uses_default_policy_when_manifest_omits_one() {
+        // Manifest with no `restart` block should fall back to the
+        // host default: `on-failure` with 5 retries.
+        let spec = RuntimeSpec {
+            app_id: "com.example".into(),
+            package_root: PathBuf::from("."),
+            backend: Backend {
+                runtime: RuntimeKind::Node,
+                entry: "index.js".into(),
+                mode: BackendMode::Rpc,
+                health_check: None,
+                restart: None,
+                port: None,
+            },
+            data_dir: None,
+            cache_dir: None,
+        };
+        let policy = effective_policy(&spec);
+        assert_eq!(policy.policy, "on-failure");
+        assert_eq!(policy.max_retries, 5);
     }
 
     #[test]
-    fn sleep_for_backoff_respects_elapsed_time() {
-        // Pretend the previous exit happened 100ms ago. With a
-        // 1s backoff, the caller should still wait ~900ms before
-        // being allowed to restart.
-        let last = Instant::now() - Duration::from_millis(100);
-        let start = Instant::now();
-        sleep_for_backoff(1, &Some(last));
-        let elapsed = start.elapsed();
-        assert!(
-            elapsed >= Duration::from_millis(800),
-            "expected ~900ms sleep, was {elapsed:?}"
-        );
-        // And it must not run away.
-        assert!(elapsed < Duration::from_millis(1500));
+    fn policy_never_blocks_restart_after_crash() {
+        let policy = crate::manifest::RestartPolicy {
+            policy: "never".into(),
+            max_retries: 5,
+        };
+        assert!(!policy_allows_restart(&policy, Some(1)));
+        assert!(!policy_allows_restart(&policy, Some(0)));
+        assert!(!policy_allows_restart(&policy, None));
+    }
+
+    #[test]
+    fn policy_on_failure_skips_restart_on_clean_exit() {
+        let policy = crate::manifest::RestartPolicy {
+            policy: "on-failure".into(),
+            max_retries: 5,
+        };
+        assert!(!policy_allows_restart(&policy, Some(0)));
+        assert!(policy_allows_restart(&policy, Some(1)));
+        assert!(policy_allows_restart(&policy, None));
+    }
+
+    #[test]
+    fn policy_always_restarts_regardless_of_exit_code() {
+        let policy = crate::manifest::RestartPolicy {
+            policy: "always".into(),
+            max_retries: 5,
+        };
+        assert!(policy_allows_restart(&policy, Some(0)));
+        assert!(policy_allows_restart(&policy, Some(1)));
+    }
+
+    #[test]
+    fn compute_backoff_returns_err_when_max_retries_exceeded() {
+        let policy = crate::manifest::RestartPolicy {
+            policy: "on-failure".into(),
+            max_retries: 3,
+        };
+        let result = compute_backoff(&policy, 3, &None, Some(1));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("max retries"));
+        // 5 > 3 should also fail.
+        assert!(compute_backoff(&policy, 5, &None, Some(1)).is_err());
+        // But count == max_retries - 1 should still allow.
+        assert!(compute_backoff(&policy, 2, &None, Some(1)).is_ok());
+    }
+
+    #[test]
+    fn compute_backoff_returns_err_when_policy_denies() {
+        let policy = crate::manifest::RestartPolicy {
+            policy: "never".into(),
+            max_retries: 5,
+        };
+        let result = compute_backoff(&policy, 0, &None, Some(1));
+        assert!(result.is_err());
+        assert!(result.unwrap_err().contains("denied by policy"));
+    }
+
+    #[test]
+    fn compute_backoff_returns_zero_for_cold_start() {
+        // No prior exit → no backoff; the supervisor should start
+        // the process immediately.
+        let policy = crate::manifest::RestartPolicy {
+            policy: "on-failure".into(),
+            max_retries: 5,
+        };
+        let wait = compute_backoff(&policy, 0, &None, Some(1))
+            .expect("cold start allowed");
+        assert_eq!(wait, Duration::ZERO);
+    }
+
+    #[test]
+    fn compute_backoff_collapses_to_zero_after_grace_period() {
+        // If 30 seconds have passed since the last crash, even the
+        // longest backoff in the schedule (16s) should collapse to
+        // zero — there's no value in sleeping when the user
+        // already waited.
+        let policy = crate::manifest::RestartPolicy {
+            policy: "on-failure".into(),
+            max_retries: 5,
+        };
+        let long_ago = Instant::now() - Duration::from_secs(30);
+        let wait = compute_backoff(&policy, 3, &Some(long_ago), Some(1))
+            .expect("policy allows restart");
+        assert_eq!(wait, Duration::ZERO);
     }
 }
 
