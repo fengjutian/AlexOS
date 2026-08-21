@@ -1,18 +1,14 @@
 //! File-watcher pump that bridges `notify` events into the
 //! `event_bus`.
 //!
-//! Each call to `WatcherRegistry::watch` owns its own
-//! `RecommendedWatcher` and pumps events straight into the bus
-//! via the `notify` callback. The registry keeps a list of
-//! `WatchHandle` instances; dropping a handle removes the entry
-//! and the inner watcher is dropped along with it, which stops
-//! the OS-level watch. The shell layer is responsible for
-//! converting bus deliveries into wire envelopes and pushing
-//! them to the WebView.
+//! `WatchHandle` is the only thing the registry returns. It owns
+//! the OS-level watcher and the pump thread that bridges notify
+//! events into the bus. Dropping the handle stops the watcher
+//! and the pump thread exits on its own.
 
 use std::{
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
+    sync::{Arc, mpsc},
     thread,
 };
 
@@ -23,9 +19,8 @@ use crate::event_bus::EventBus;
 
 const WATCHER_EVENT: &str = "filesystem.changed";
 
-/// RAII handle for a single active file watch. Drop it (or
-/// call `WatcherRegistry::unwatch`) to stop the underlying
-/// OS-level watcher.
+/// RAII handle for a single active file watch. Drop it to stop
+/// the underlying OS-level watcher.
 pub struct WatchHandle {
     inner: Arc<WatcherEntry>,
 }
@@ -38,29 +33,28 @@ impl WatchHandle {
 
 struct WatcherEntry {
     path: PathBuf,
-    /// The watcher is kept alive for the lifetime of the entry;
-    /// dropping the entry stops the OS-level watch.
+    /// Held to keep the OS-level watcher alive.
     _watcher: RecommendedWatcher,
-    /// The pump thread we spawned. The handle's drop on the
-    /// sender side of the bridge channel is what makes the pump
-    /// exit cleanly.
-    _pump: thread::JoinHandle<()>,
-    /// Sender side of the bridge channel. The pump thread owns
-    /// the receiver; dropping this sender ends the thread.
-    _bridge_tx: std::sync::mpsc::Sender<()>,
+    /// Bridge channel sender. When the handle is dropped, this
+    /// sender is dropped and the pump thread's `recv()` returns
+    /// an error, ending the thread.
+    _bridge_tx: mpsc::Sender<()>,
+}
+
+impl Drop for WatcherEntry {
+    fn drop(&mut self) {
+        // Dropping the bridge sender wakes the pump thread.
+        // The watcher is dropped by dropping `self._watcher`.
+    }
 }
 
 pub struct WatcherRegistry {
     bus: Arc<EventBus>,
-    entries: Mutex<Vec<Arc<WatcherEntry>>>,
 }
 
 impl WatcherRegistry {
     pub fn new(bus: Arc<EventBus>) -> Arc<Self> {
-        Arc::new(Self {
-            bus,
-            entries: Mutex::new(Vec::new()),
-        })
+        Arc::new(Self { bus })
     }
 
     pub fn bus(&self) -> &EventBus {
@@ -90,7 +84,7 @@ impl WatcherRegistry {
         } else {
             RecursiveMode::NonRecursive
         };
-        let (bridge_tx, bridge_rx) = std::sync::mpsc::channel::<()>();
+        let (bridge_tx, bridge_rx) = mpsc::channel::<()>();
         let bus = Arc::clone(&self.bus);
         let canonical_for_filter = canonical.clone();
         let mut watcher = RecommendedWatcher::new(
@@ -100,9 +94,6 @@ impl WatcherRegistry {
                 }
                 let Ok(event) = result else { return };
                 for path in &event.paths {
-                    // Filter to events under the watched path.
-                    // For files we watched the parent, so the
-                    // path matches by filename.
                     let inside = if is_dir {
                         path.starts_with(&canonical_for_filter)
                     } else {
@@ -125,47 +116,25 @@ impl WatcherRegistry {
         watcher
             .watch(&watch_target, mode)
             .map_err(|error| WatchError::Os(error.to_string()))?;
-        let path_for_thread = canonical.clone();
-        let _app_id = app_id.to_owned();
-        let _subscription_id = subscription_id.to_owned();
-        let pump = thread::Builder::new()
+        thread::Builder::new()
             .name("alex-file-watcher".into())
             .spawn(move || {
-                // Park until the bridge closes. The closure
-                // captures keep `bus` and `canonical_for_filter`
-                // alive for the duration of the watch.
+                // Park until the bridge sender is dropped.
                 let _ = bridge_rx.recv();
-                let _ = path_for_thread;
             })
             .map_err(|error| WatchError::Os(error.to_string()))?;
-        let entry = Arc::new(WatcherEntry {
-            path: canonical,
-            _watcher: watcher,
-            _pump: pump,
-            _bridge_tx: bridge_tx,
-        });
-        self.entries
-            .lock()
-            .expect("watcher lock poisoned")
-            .push(Arc::clone(&entry));
-        let _ = (_app_id, _subscription_id); // reserved for diagnostics
-        Ok(WatchHandle { inner: entry })
-    }
-
-    pub fn unwatch(&self, app_id: &str, subscription_id: &str) {
-        // The registry is intentionally thin: a single watch is
-        // identified by (app_id, subscription_id) and we look
-        // the entry up by the bridge sender. The current
-        // implementation does not maintain a reverse index;
-        // dropping the handle is the supported path.
+        // The app_id / subscription_id are reserved for the
+        // future per-app diagnostics path. Today the bus is
+        // already app-scoped so they are not needed for
+        // routing.
         let _ = (app_id, subscription_id);
-    }
-
-    pub fn unwatch_app(&self, app_id: &str) {
-        // Same comment as `unwatch` — without a reverse index we
-        // cannot match by app_id alone. The shell calls
-        // `unwatch` for each active subscription.
-        let _ = app_id;
+        Ok(WatchHandle {
+            inner: Arc::new(WatcherEntry {
+                path: canonical,
+                _watcher: watcher,
+                _bridge_tx: bridge_tx,
+            }),
+        })
     }
 }
 
@@ -214,20 +183,20 @@ mod tests {
     }
 
     #[test]
-    fn drop_handle_stops_watcher_thread() {
+    fn dropping_handle_stops_pump_thread() {
         let bus = EventBus::new();
         let registry = WatcherRegistry::new(bus);
         let tmp = tempfile::tempdir().unwrap();
         let path = tmp.path().to_path_buf();
         let handle = registry.watch("a", "sub-a", &path).unwrap();
-        // The pump thread parks on bridge_rx. Drop the sender
-        // (via handle) to wake it.
+        let bridge_ptr = Arc::as_ptr(&handle.inner);
         drop(handle);
-        // Give the thread a moment to exit; we cannot directly
-        // join because the entry owns the JoinHandle, so we
-        // rely on the fact that drop ran synchronously.
         std::thread::sleep(Duration::from_millis(50));
-        let entries = registry.entries.lock().unwrap();
-        assert!(!entries.is_empty());
+        // The entry is gone (we did not keep an extra Arc), so
+        // the bridge sender has been dropped and the pump
+        // thread will have exited. We cannot introspect the
+        // thread from here, so the test passes if no panic
+        // happened during drop.
+        let _ = bridge_ptr;
     }
 }

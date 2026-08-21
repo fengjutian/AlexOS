@@ -1,6 +1,8 @@
 pub mod api;
 pub mod authorization;
 pub mod dev;
+pub mod event_bus;
+pub mod file_token;
 pub mod ipc;
 pub mod manager;
 pub mod manager_webview;
@@ -12,8 +14,10 @@ pub mod plugin;
 pub mod proxy;
 pub mod runtime;
 pub mod shell;
+pub mod storage;
 pub mod trust;
 pub mod update;
+pub mod watcher;
 
 use std::path::{Path, PathBuf};
 
