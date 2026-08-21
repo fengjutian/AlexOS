@@ -1,11 +1,15 @@
 use std::{path::PathBuf, thread, time::Duration};
 
+use std::sync::Arc;
+
 use alex::{
     api::ApiRouter,
     authorization::{PermissionDecision, PermissionStore},
     dev,
     ipc::Request,
-    load_app, package,
+    load_app, manager::{LocalAppManager, ManagerRouter},
+    manager_webview,
+    package,
     runtime::{RuntimeHandle, RuntimeProcess},
     shell,
     trust::TrustStore,
@@ -38,6 +42,11 @@ enum Commands {
     Shell { path: PathBuf },
     /// Run the application in development mode with file watching and hot reload.
     Dev { path: PathBuf },
+    /// Open the system App Manager (install, list, uninstall, permissions).
+    Manager {
+        #[arg(long, default_value = "./target/apps")]
+        install_root: PathBuf,
+    },
     /// Invoke an Alex API request from a JSON file (diagnostic command).
     Invoke {
         path: PathBuf,
@@ -236,6 +245,11 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Dev { path } => {
             let app = load_app(&path)?;
             dev::run(&path, app)?;
+        }
+        Commands::Manager { install_root } => {
+            let manager = LocalAppManager::open(&install_root)?;
+            let router = Arc::new(ManagerRouter::new(Arc::new(manager)));
+            manager_webview::run(router)?;
         }
         Commands::Invoke {
             path,

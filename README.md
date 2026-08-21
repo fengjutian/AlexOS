@@ -9,6 +9,8 @@ WebView2、安全边界和应用生命周期，使用受管理的 Node.js 子进
 
 详细的实现状态、限制和未开发功能见
 [docs/status-and-roadmap.md](docs/status-and-roadmap.md)。
+应用管理 UI 的产品范围、页面结构和技术方案见
+[docs/app-manager-ui-design.md](docs/app-manager-ui-design.md)。
 
 ## 当前已实现
 

@@ -1,15 +1,24 @@
-use std::{fs, io::Write, path::Path};
+use std::{fs, io::Write, path::Path, sync::Arc};
 
 use alex::{
     api::ApiRouter,
     authorization::{PermissionDecision, PermissionStore},
     dev, ipc::{self, Request},
-    load_app, package,
+    load_app,
+    manager::{
+        AppManager, InstallOptions, LocalAppManager, ManagerError, ManagerRouter, RuntimeSupervisor,
+        SupervisorError, SYSTEM_IDENTITY, UninstallOptions,
+    },
+    package,
     permission::Permission,
     trust::TrustStore,
     update::{self, UpdateChannel},
 };
 use serde_json::json;
+
+// Tests below manage the global ALEX_DATA_DIR. Hold this lock to keep
+// `PermissionStore` writes from racing between parallel tests.
+static ALEX_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
 
 #[test]
 fn loads_the_example_application() {
@@ -482,4 +491,316 @@ fn alexignore_malformed_file_falls_back_to_no_filtering() {
     // callable, non-panicking result. Either None (strict) or Some (lenient)
     // is acceptable — the contract is "watcher must not panic".
     let _ = dev::load_alexignore(workspace.path());
+}
+
+#[test]
+fn manifest_parses_minimal_form_without_metadata() {
+    // Schema 1 manifests written before Phase 1.1 must keep working
+    // because every new field is optional.
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir_all(workspace.path().join("frontend")).unwrap();
+    fs::write(workspace.path().join("frontend/index.html"), "<h1>hi</h1>").unwrap();
+    fs::write(
+        workspace.path().join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "id": "com.alex.legacy",
+          "name": "Legacy",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" }
+        }"#,
+    )
+    .unwrap();
+    let app = load_app(workspace.path()).expect("legacy manifest should load");
+    assert_eq!(app.id, "com.alex.legacy");
+    assert!(app.description.is_none());
+    assert!(app.author.is_none());
+    assert!(app.icons.is_none());
+    assert!(app.homepage.is_none());
+    assert!(app.license.is_none());
+}
+
+#[test]
+fn manifest_parses_full_metadata() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir_all(workspace.path().join("frontend")).unwrap();
+    fs::create_dir_all(workspace.path().join("assets")).unwrap();
+    fs::write(workspace.path().join("frontend/index.html"), "<h1>hi</h1>").unwrap();
+    fs::write(workspace.path().join("assets/icon-256.png"), [0u8; 4]).unwrap();
+    fs::write(
+        workspace.path().join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "id": "com.example.notes",
+          "name": "Notes",
+          "version": "1.2.0",
+          "description": "A local notes application",
+          "author": { "name": "Example Studio", "url": "https://example.com" },
+          "icons": { "16": "assets/icon-16.png", "256": "assets/icon-256.png" },
+          "homepage": "https://example.com/notes",
+          "license": "MIT",
+          "frontend": { "entry": "frontend/index.html" }
+        }"#,
+    )
+    .unwrap();
+    let app = load_app(workspace.path()).expect("full manifest should load");
+    assert_eq!(app.description.as_deref(), Some("A local notes application"));
+    let author = app.author.as_ref().expect("author");
+    assert_eq!(author.name, "Example Studio");
+    assert_eq!(author.url.as_deref(), Some("https://example.com"));
+    let icons = app.icons.as_ref().expect("icons");
+    assert_eq!(icons.entries.get("16").map(String::as_str), Some("assets/icon-16.png"));
+    assert_eq!(icons.entries.get("256").map(String::as_str), Some("assets/icon-256.png"));
+    assert_eq!(app.homepage.as_deref(), Some("https://example.com/notes"));
+    assert_eq!(app.license.as_deref(), Some("MIT"));
+}
+
+#[test]
+fn manifest_rejects_unknown_top_level_fields() {
+    // deny_unknown_fields must still fire on the new shape.
+    let workspace = tempfile::tempdir().unwrap();
+    fs::create_dir_all(workspace.path().join("frontend")).unwrap();
+    fs::write(workspace.path().join("frontend/index.html"), "<h1>hi</h1>").unwrap();
+    fs::write(
+        workspace.path().join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "id": "com.alex.typo",
+          "name": "Typo",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "descriptoin": "misspelled"
+        }"#,
+    )
+    .unwrap();
+    assert!(load_app(workspace.path()).is_err());
+}
+
+fn install_root() -> (std::sync::MutexGuard<'static, ()>, tempfile::TempDir) {
+    // ALEX_DATA_DIR points the permission store at the same root so tests
+    // can read permissions from the install root, not %LOCALAPPDATA%.
+    let guard = ALEX_ENV_LOCK.lock().unwrap_or_else(|err| err.into_inner());
+    let dir = tempfile::tempdir().unwrap();
+    // SAFETY: serialised through ALEX_ENV_LOCK; safe per Rust 2024 edition.
+    unsafe { std::env::set_var("ALEX_DATA_DIR", dir.path()); }
+    (guard, dir)
+}
+
+#[test]
+fn manager_list_is_empty_for_a_fresh_install_root() {
+    let (_lock, workspace) = install_root();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    assert!(manager.list_apps().unwrap().is_empty());
+}
+
+#[test]
+fn manager_install_then_list_then_uninstall() {
+    let (_lock, workspace) = install_root();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    let summary = manager
+        .install(&archive, InstallOptions::default())
+        .unwrap();
+    assert_eq!(summary.id, "com.alex.hello");
+    assert_eq!(summary.version, "0.1.0");
+    assert!(summary.description.is_none(), "examples/hello has no description");
+    assert!(!summary.signed, "unsigned archive should report signed=false");
+
+    let list = manager.list_apps().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, "com.alex.hello");
+
+    // Registry file was created next to the install root.
+    let registry_path = manager.registry_path().to_path_buf();
+    assert!(registry_path.is_file(), "registry file should exist after install");
+
+    manager
+        .uninstall("com.alex.hello", UninstallOptions::default())
+        .unwrap();
+    assert!(manager.list_apps().unwrap().is_empty());
+    // Registry rebuild should drop the entry too.
+    let manager2 = LocalAppManager::open(workspace.path()).unwrap();
+    assert!(manager2.list_apps().unwrap().is_empty());
+}
+
+#[test]
+fn manager_rebuilds_registry_from_install_root_when_missing() {
+    let (_lock, workspace) = install_root();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    manager.install(&archive, InstallOptions::default()).unwrap();
+
+    // Wipe registry; manager.open should rebuild it by scanning the dir.
+    let registry_path = workspace.path().join(".alex").join("registry.json");
+    assert!(registry_path.is_file());
+    fs::remove_file(&registry_path).unwrap();
+    assert!(!registry_path.exists());
+
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    let list = manager.list_apps().unwrap();
+    assert_eq!(list.len(), 1);
+    assert_eq!(list[0].id, "com.alex.hello");
+    assert!(registry_path.is_file(), "registry should be rebuilt on open");
+}
+
+#[test]
+fn manager_permissions_round_trip() {
+    let (_lock, workspace) = install_root();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    manager.install(&archive, InstallOptions::default()).unwrap();
+
+    let states = manager.permissions("com.alex.hello").unwrap();
+    assert!(
+        states.iter().any(|s| s.name == "filesystem.readText" && s.manifest_declared),
+        "hello declares filesystem.read; should appear in permissions"
+    );
+
+    manager
+        .set_permission(
+            "com.alex.hello",
+            "filesystem.readText",
+            PermissionDecision::Denied,
+        )
+        .unwrap();
+    let after = manager.permissions("com.alex.hello").unwrap();
+    let read = after
+        .iter()
+        .find(|s| s.name == "filesystem.readText")
+        .unwrap();
+    assert_eq!(read.decision, PermissionDecision::Denied);
+
+    let error = manager
+        .set_permission(
+            "com.alex.hello",
+            "network.connect",
+            PermissionDecision::Granted,
+        )
+        .unwrap_err();
+    assert!(matches!(error, ManagerError::UndeclaredPermission(_)));
+}
+
+#[test]
+fn manager_get_app_returns_manifest_and_permissions() {
+    let (_lock, workspace) = install_root();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    manager.install(&archive, InstallOptions::default()).unwrap();
+
+    let details = manager.get_app("com.alex.hello").unwrap();
+    assert_eq!(details.manifest.id, "com.alex.hello");
+    assert!(!details.permissions.is_empty());
+    assert!(details.install_path.is_dir());
+}
+
+#[test]
+fn manager_router_rejects_wrong_source() {
+    let (_lock, workspace) = install_root();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    let router = ManagerRouter::new(Arc::new(manager));
+
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: "r-1".into(),
+        source: "com.alex.hello".into(),  // not system identity
+        method: "manager.list_apps".into(),
+        params: json!({}),
+        deadline_ms: None,
+    });
+    let error = response.error.expect("error");
+    assert_eq!(error.code, "SOURCE_MISMATCH");
+}
+
+#[test]
+fn manager_router_rejects_non_manager_method() {
+    let (_lock, workspace) = install_root();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    let router = ManagerRouter::new(Arc::new(manager));
+
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: "r-2".into(),
+        source: SYSTEM_IDENTITY.into(),
+        method: "filesystem.readText".into(),  // not a manager.* method
+        params: json!({}),
+        deadline_ms: None,
+    });
+    let error = response.error.expect("error");
+    assert_eq!(error.code, "UNKNOWN_METHOD");
+}
+
+#[test]
+fn manager_router_dispatches_list_apps() {
+    let (_lock, workspace) = install_root();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    manager.install(&archive, InstallOptions::default()).unwrap();
+    let router = ManagerRouter::new(Arc::new(manager));
+
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: "r-3".into(),
+        source: SYSTEM_IDENTITY.into(),
+        method: "manager.list_apps".into(),
+        params: json!({}),
+        deadline_ms: None,
+    });
+    let result = response.result.expect("result");
+    let apps = result.get("apps").and_then(|v| v.as_array()).expect("apps array");
+    assert_eq!(apps.len(), 1);
+    assert_eq!(apps[0]["id"], "com.alex.hello");
+}
+
+#[test]
+fn manager_router_dispatch_json_rejects_oversized_messages() {
+    let (_lock, workspace) = install_root();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    let router = ManagerRouter::new(Arc::new(manager));
+    let response = router.dispatch_json(&"x".repeat(1024 * 1024 + 1));
+    assert_eq!(response.error.unwrap().code, "MESSAGE_TOO_LARGE");
+}
+
+#[test]
+fn runtime_supervisor_stop_is_idempotent() {
+    let supervisor = RuntimeSupervisor::default();
+    let status = supervisor.stop("never-launched").unwrap();
+    assert!(matches!(
+        status.state,
+        alex::runtime::RuntimeState::Stopped
+    ));
+}
+
+#[test]
+fn runtime_supervisor_rejects_double_launch() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("hello.alex");
+    package::pack(&source, &archive).unwrap();
+    let install_root = workspace.path().join("apps");
+    package::install(&archive, &install_root).unwrap();
+
+    let supervisor = RuntimeSupervisor::default();
+    let manifest = load_app(&install_root.join("com.alex.hello")).unwrap();
+    let backend = manifest.backend.as_ref().unwrap();
+    let _ = supervisor
+        .launch("com.alex.hello", &install_root.join("com.alex.hello"), backend)
+        .expect("first launch should succeed");
+    let second = supervisor.launch(
+        "com.alex.hello",
+        &install_root.join("com.alex.hello"),
+        backend,
+    );
+    assert!(matches!(second, Err(SupervisorError::AlreadyRunning(_))));
+    let _ = supervisor.stop("com.alex.hello");
 }

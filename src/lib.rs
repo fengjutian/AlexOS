@@ -2,6 +2,8 @@ pub mod api;
 pub mod authorization;
 pub mod dev;
 pub mod ipc;
+pub mod manager;
+pub mod manager_webview;
 pub mod manifest;
 pub mod native;
 pub mod package;
