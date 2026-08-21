@@ -226,7 +226,7 @@ pub fn run(
     let router_for_dispatch = Arc::clone(&router);
     let stdin_for_dispatch = Arc::clone(&stdin);
     let manifest_id_for_dispatch = manifest.id.clone();
-    let _dispatch_thread = thread::Builder::new()
+    let dispatch_thread = thread::Builder::new()
         .name(format!("alex-plugin-dispatch-{}", manifest.id))
         .spawn(move || {
             run_unified_dispatch(
@@ -240,17 +240,30 @@ pub fn run(
 
     // Wait for the backend to exit. When it does, the child's stdout
     // closes, the dispatch thread sees EOF and exits on its own.
+    let mut ticks: u32 = 0;
     loop {
         if let Some(status) = process.try_wait()? {
-            if !status.success() {
-                eprintln!("alex plugin: backend exited with {status}");
-            } else {
-                eprintln!("alex plugin: backend exited cleanly");
+            eprintln!(
+                "alex plugin: backend {} after {} ticks ({} ms)",
+                if status.success() { "exited cleanly" } else { "exited with non-zero status" },
+                ticks,
+                ticks as u64 * 100,
+            );
+            if let Some(code) = status.code() {
+                eprintln!("alex plugin: backend exit code = {code}");
+            }
+            #[cfg(unix)]
+            if let Some(signal) = status.signal() {
+                eprintln!("alex plugin: backend killed by signal {signal}");
             }
             break;
         }
+        ticks += 1;
         thread::sleep(Duration::from_millis(100));
     }
+    eprintln!("alex plugin: dispatch thread join start");
+    let _ = dispatch_thread.join();
+    eprintln!("alex plugin: dispatch thread joined");
     Ok(())
 }
 
