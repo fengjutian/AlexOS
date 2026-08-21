@@ -18,6 +18,7 @@
 //!    process when it elapses.
 
 use std::{
+    collections::HashMap,
     path::{Path, PathBuf},
     process::{Child, Command, Stdio},
     sync::{Arc, Mutex},

@@ -129,11 +129,15 @@ fn compute_backoff(
     })
 }
 
-fn shutdown_grace_for(endpoint: &Option<ServiceEndpoint>) -> Duration {
+/// Pick the right (mode, grace) pair for the given endpoint, so the
+/// supervisor can both pick the right shutdown channel (stdin
+/// envelope for RPC, OS-level signal for service) and the right
+/// grace window (2s for RPC, 5s for service).
+fn shutdown_grace_for(endpoint: &Option<ServiceEndpoint>) -> (BackendMode, Duration) {
     if endpoint.is_some() {
-        SERVICE_SHUTDOWN_GRACE
+        (BackendMode::Service, SERVICE_SHUTDOWN_GRACE)
     } else {
-        SHUTDOWN_GRACE
+        (BackendMode::Rpc, SHUTDOWN_GRACE)
     }
 }
 
@@ -612,7 +616,8 @@ fn runtime_manager(
             }
             RuntimeCommand::Restart { response } => {
                 if let Some(mut value) = process.take() {
-                    let _ = value.stop_gracefully(shutdown_grace_for(&endpoint));
+                    let (mode, grace) = shutdown_grace_for(&endpoint);
+                    let _ = value.stop_gracefully(mode, grace);
                 }
                 // User-initiated restart skips the backoff schedule
                 // and the `max_retries` cap — the operator is
@@ -659,7 +664,8 @@ fn runtime_manager(
         }
     }
     if let Some(mut value) = process {
-        let _ = value.stop_gracefully(shutdown_grace_for(&endpoint));
+        let (mode, grace) = shutdown_grace_for(&endpoint);
+        let _ = value.stop_gracefully(mode, grace);
     }
     current_pid.store(0, Ordering::Release);
 }
@@ -1004,13 +1010,54 @@ impl RuntimeProcess {
         Ok(())
     }
 
-    pub fn stop_gracefully(&mut self, timeout: Duration) -> Result<(), RuntimeError> {
+    /// Gracefully shut the child down. `mode` selects the shutdown
+    /// channel:
+    ///   - `rpc` writes a `{type:"shutdown"}` envelope to the child's
+    ///     stdin and waits for the child to close its end.
+    ///   - `service` cannot use stdin (it is `Stdio::null()` for
+    ///     service backends). The host instead sends a graceful
+    ///     termination signal — on Windows that is `taskkill /T`
+    ///     *without* `/F`, which Node maps to `SIGTERM`; on Unix it
+    ///     is `kill -TERM`. The child's own `SIGTERM` handler
+    ///     (`server.close()` + SQLite flush + `process.exit`) then
+    ///     runs to completion. If the child is still alive after
+    ///     `timeout`, the host falls back to a hard kill.
+    pub fn stop_gracefully(
+        &mut self,
+        mode: BackendMode,
+        timeout: Duration,
+    ) -> Result<(), RuntimeError> {
         if self.child.try_wait()?.is_some() {
             return Ok(());
         }
-        if let Some(stdin) = self.stdin.as_mut() {
-            stdin.write_all(b"{\"protocol\":1,\"type\":\"shutdown\"}\n")?;
-            stdin.flush()?;
+        match mode {
+            BackendMode::Rpc => {
+                if let Some(stdin) = self.stdin.as_mut() {
+                    let _ = stdin.write_all(b"{\"protocol\":1,\"type\":\"shutdown\"}\n");
+                    let _ = stdin.flush();
+                }
+            }
+            BackendMode::Service => {
+                let pid = self.child.id();
+                #[cfg(windows)]
+                {
+                    use std::process::Command;
+                    let _ = Command::new("taskkill.exe")
+                        .args(["/PID", &pid.to_string(), "/T"])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+                #[cfg(unix)]
+                {
+                    use std::process::Command;
+                    let _ = Command::new("kill")
+                        .args(["-TERM", &pid.to_string()])
+                        .stdout(Stdio::null())
+                        .stderr(Stdio::null())
+                        .status();
+                }
+            }
         }
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
@@ -1078,6 +1125,145 @@ fn stderr_pump(
     }
 }
 
+/// Drain a service-mode backend's stdout into the shared log buffer.
+/// Each line is tagged `[stdout]` so the App Manager can show the
+/// stream a log line came from. EOF (or any read error) terminates
+/// the pump and the child holds onto the other end until it exits.
+fn stdout_pump(
+    stdout: std::process::ChildStdout,
+    logs: Arc<Mutex<VecDeque<String>>>,
+) {
+    let mut reader = BufReader::new(stdout);
+    let mut line = String::new();
+    loop {
+        line.clear();
+        match reader.read_line(&mut line) {
+            Ok(0) | Err(_) => break,
+            Ok(_) => {
+                let trimmed = line.trim_end();
+                if let Ok(mut buffer) = logs.lock() {
+                    if buffer.len() == MAX_LOG_LINES {
+                        buffer.pop_front();
+                    }
+                    buffer.push_back(format!("[stdout] {trimmed}"));
+                }
+            }
+        }
+    }
+}
+
+/// Probe a service backend's health check over loopback HTTP. Uses
+/// raw `TcpStream` + HTTP/1.0 to keep the runtime path free of an
+/// HTTP client dependency (ureq 3.x has no per-call timeout, and
+/// pulling in reqwest would bloat the runtime crate for one tiny
+/// call).
+///
+/// On success returns once the server has sent a response with
+/// `2xx` status. On timeout, refused connection, parse failure, or
+/// non-2xx, returns a `Protocol` error that the caller turns into a
+/// hard kill + `RuntimeError::ServiceReadyTimeout`-shaped failure.
+fn probe_health(port: u16, health: &crate::manifest::HealthCheck) -> Result<(), RuntimeError> {
+    use std::io::{Read, Write};
+    use std::net::{TcpStream, ToSocketAddrs};
+
+    let timeout = Duration::from_millis(health.timeout_ms);
+    let addr = ("127.0.0.1", port)
+        .to_socket_addrs()
+        .map_err(|error| RuntimeError::Protocol(format!("resolve health probe target: {error}")))?
+        .next()
+        .ok_or_else(|| RuntimeError::Protocol("empty resolve for health probe".into()))?;
+
+    let mut stream = TcpStream::connect_timeout(&addr, timeout)
+        .map_err(|error| RuntimeError::Protocol(format!("health probe connect: {error}")))?;
+    stream
+        .set_read_timeout(Some(timeout))
+        .map_err(|error| RuntimeError::Protocol(format!("health probe set_read_timeout: {error}")))?;
+    stream
+        .set_write_timeout(Some(timeout))
+        .map_err(|error| RuntimeError::Protocol(format!("health probe set_write_timeout: {error}")))?;
+
+    // HTTP/1.0 with `Connection: close` so the server's response
+    // terminates the stream after the body. `health.path` is
+    // controlled by the manifest author, so we keep it terse and
+    // require it to start with `/` and contain no whitespace or
+    // control bytes — anything else would let a malicious manifest
+    // smuggle CRLF into the request line.
+    if health.path.is_empty()
+        || !health.path.starts_with('/')
+        || health
+            .path
+            .bytes()
+            .any(|b| b <= 0x20 || b == b'\r' || b == b'\n')
+    {
+        return Err(RuntimeError::Protocol(format!(
+            "manifest healthCheck.path is invalid: {:?}",
+            health.path
+        )));
+    }
+    let request = format!(
+        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
+        path = health.path
+    );
+    stream
+        .write_all(request.as_bytes())
+        .map_err(|error| RuntimeError::Protocol(format!("health probe write: {error}")))?;
+
+    // Read just enough of the response to confirm a 2xx status
+    // line. Bound the read so a hostile backend can't pin us.
+    let mut head = [0u8; 1024];
+    let mut total = 0usize;
+    let deadline = Instant::now() + timeout;
+    while total < head.len() {
+        let remaining = deadline.saturating_duration_since(Instant::now());
+        if remaining.is_zero() {
+            return Err(RuntimeError::Protocol(
+                "health probe: timeout before status line".into(),
+            ));
+        }
+        stream
+            .set_read_timeout(Some(remaining))
+            .map_err(|error| RuntimeError::Protocol(format!("health probe set_read_timeout: {error}")))?;
+        match stream.read(&mut head[total..]) {
+            Ok(0) => break,
+            Ok(n) => total += n,
+            Err(error) if error.kind() == std::io::ErrorKind::TimedOut => break,
+            Err(error) => {
+                return Err(RuntimeError::Protocol(format!("health probe read: {error}")))
+            }
+        }
+        // If we have the full headers we can stop early.
+        if head[..total].windows(4).any(|w| w == b"\r\n\r\n") {
+            break;
+        }
+    }
+    let response_head = std::str::from_utf8(&head[..total])
+        .map_err(|error| RuntimeError::Protocol(format!("health probe non-utf8: {error}")))?;
+    let status_line = response_head
+        .lines()
+        .next()
+        .ok_or_else(|| RuntimeError::Protocol("health probe: empty response".into()))?;
+    let mut parts = status_line.split(' ');
+    let http_version = parts
+        .next()
+        .ok_or_else(|| RuntimeError::Protocol("health probe: missing HTTP version".into()))?;
+    let status_code: u16 = parts
+        .next()
+        .ok_or_else(|| RuntimeError::Protocol("health probe: missing status code".into()))?
+        .parse()
+        .map_err(|error| RuntimeError::Protocol(format!("health probe: bad status code: {error}")))?;
+    if !http_version.starts_with("HTTP/") {
+        return Err(RuntimeError::Protocol(format!(
+            "health probe: unexpected status line {status_line:?}"
+        )));
+    }
+    if !(200..300).contains(&status_code) {
+        return Err(RuntimeError::Protocol(format!(
+            "health probe returned status {status_code}"
+        )));
+    }
+    Ok(())
+}
+
 /// Parse a backend's `alex.ready` handshake line. Returns the
 /// `port` the child claims to be listening on when the line is
 /// well-formed; returns `None` for any other shape so the line is
@@ -1131,9 +1317,12 @@ fn allocate_service_port() -> Result<u16, RuntimeError> {
 /// does.
 fn generate_runtime_token() -> String {
     let mut bytes = [0u8; 32];
-    // `getrandom` is re-exported transitively. We use the crate
-    // directly to avoid pulling a new dependency into [dependencies].
-    if let Err(error) = getrandom::getrandom(&mut bytes) {
+    // `getrandom` v0.3 renamed the top-level `getrandom` function
+    // to `fill`. We use the CSPRNG directly rather than mixing
+    // PID/nanos/counter bytes — those values are observable to
+    // any process running as the same user, and a loopback token
+    // that an external attacker can guess is not a real token.
+    if let Err(error) = getrandom::fill(&mut bytes) {
         // CSPRNG failure is fatal: we cannot mint a usable token.
         // Fail loudly so the supervisor does not silently downgrade
         // security.
@@ -1209,10 +1398,13 @@ mod lifecycle_tests {
             port: 28000,
             token: "x".repeat(64),
         });
-        assert_eq!(shutdown_grace_for(&rpc_endpoint), SHUTDOWN_GRACE);
+        assert_eq!(
+            shutdown_grace_for(&rpc_endpoint),
+            (BackendMode::Rpc, SHUTDOWN_GRACE)
+        );
         assert_eq!(
             shutdown_grace_for(&service_endpoint),
-            SERVICE_SHUTDOWN_GRACE
+            (BackendMode::Service, SERVICE_SHUTDOWN_GRACE)
         );
         assert!(SERVICE_SHUTDOWN_GRACE > SHUTDOWN_GRACE);
     }
@@ -1500,17 +1692,22 @@ mod service_runtime_tests {
             .expect("spawn node");
         let stderr = child.stderr.take().expect("stderr pipe");
         let logs: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
-        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(1);
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<u16>(1);
         let flag = Arc::new(AtomicBool::new(false));
         let (ready_tx_for_thread, flag_for_thread) = (ready_tx, Arc::clone(&flag));
         let logs_for_thread = Arc::clone(&logs);
         let handle = std::thread::spawn(move || {
             stderr_pump(stderr, logs_for_thread, Some(ready_tx_for_thread), Some(flag_for_thread));
         });
-        ready_rx
+        let received = ready_rx
             .recv_timeout(Duration::from_secs(2))
             .expect("ready signal arrives");
         assert!(flag.load(Ordering::Acquire));
+        assert_eq!(
+            received, 12345,
+            "the parser must surface the port the child reported, \
+             not just any truthy value"
+        );
         let _ = child.wait();
         handle.join().ok();
     }
