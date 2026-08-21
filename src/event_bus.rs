@@ -43,6 +43,23 @@ struct BusState {
     /// simple list is enough — a `HashMap` would only matter if we
     /// later add filter multiplexing.
     by_event: HashMap<String, Vec<String>>,
+    /// Pending deliveries drained by the shell layer on each
+    /// tao event-loop tick. We keep this inside the bus (rather
+    /// than scatter writes to a side channel) so the host can
+    /// `drain` it without holding the per-event lock for long,
+    /// and so a subscription that arrives after a delivery can
+    /// still see it on the next tick.
+    pending: Vec<PendingDelivery>,
+}
+
+/// One entry in the delivery queue. The shell hands the bus
+/// the event name + the delivered event; the bus pushes the
+/// (event, delivery) pair so the wire envelope can be built
+/// without re-locking.
+#[derive(Debug, Clone)]
+struct PendingDelivery {
+    event: String,
+    delivered: DeliveredEvent,
 }
 
 #[derive(Debug, Clone)]
@@ -141,6 +158,7 @@ impl EventBus {
         let mut state = self.state.lock().expect("event bus lock poisoned");
         state.subscriptions.clear();
         state.by_event.clear();
+        state.pending.clear();
     }
 
     /// Returns true if the app currently has at least one active
@@ -159,6 +177,10 @@ impl EventBus {
     /// not match the payload (so a per-path watch only fires on
     /// events inside the watched root). Returns `None` if no
     /// subscription matches or the filter rejects the payload.
+    ///
+    /// Side effect: each successful match is appended to the
+    /// pending delivery queue so the shell layer can drain it
+    /// on the next event-loop tick.
     pub fn deliver(&self, event: &str, payload: &Value) -> Vec<DeliveredEvent> {
         let mut state = self.state.lock().expect("event bus lock poisoned");
         let Some(list) = state.by_event.get(event).cloned() else {
@@ -173,13 +195,32 @@ impl EventBus {
                 continue;
             }
             subscription.sequence = subscription.sequence.saturating_add(1);
-            out.push(DeliveredEvent {
+            let delivered = DeliveredEvent {
                 subscription_id: subscription.id.clone(),
                 sequence: subscription.sequence,
                 payload: payload.clone(),
+            };
+            state.pending.push(PendingDelivery {
+                event: event.to_owned(),
+                delivered: delivered.clone(),
             });
+            out.push(delivered);
         }
         out
+    }
+
+    /// Drain the pending delivery queue. The shell calls this on
+    /// every event-loop tick (or after a known side effect) to
+    /// pull events that the bus accumulated since the last
+    /// drain. Returns `(event, delivery)` pairs in the order
+    /// they were produced.
+    pub fn drain_pending(&self) -> Vec<(String, DeliveredEvent)> {
+        let mut state = self.state.lock().expect("event bus lock poisoned");
+        let pending = std::mem::take(&mut state.pending);
+        pending
+            .into_iter()
+            .map(|entry| (entry.event, entry.delivered))
+            .collect()
     }
 }
 
@@ -349,5 +390,30 @@ mod tests {
         let bus = EventBus::new();
         let err = bus.subscribe("", None).unwrap_err();
         assert!(matches!(err, EventBusError::InvalidPayload(_)));
+    }
+
+    #[test]
+    fn drain_pending_returns_event_name_with_each_delivery() {
+        let bus = EventBus::new();
+        bus.subscribe("filesystem.changed", None).unwrap();
+        bus.deliver(
+            "filesystem.changed",
+            &serde_json::json!({ "path": "a" }),
+        );
+        let drained = bus.drain_pending();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].0, "filesystem.changed");
+        assert_eq!(drained[0].1.sequence, 1);
+        // A second drain returns nothing — the queue is empty.
+        assert!(bus.drain_pending().is_empty());
+    }
+
+    #[test]
+    fn clear_drops_pending_too() {
+        let bus = EventBus::new();
+        bus.subscribe("filesystem.changed", None).unwrap();
+        bus.deliver("filesystem.changed", &serde_json::json!({}));
+        bus.clear();
+        assert!(bus.drain_pending().is_empty());
     }
 }

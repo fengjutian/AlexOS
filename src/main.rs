@@ -10,7 +10,7 @@ use alex::{
     load_app,
     manager::{LocalAppManager, ManagerRouter},
     manager_webview, package, plugin,
-    runtime::{RuntimeHandle, RuntimeProcess},
+    runtime::{compute_app_dirs, RuntimeHandle, RuntimeProcess, RuntimeSpec},
     shell,
     trust::TrustStore,
     update::{self, UpdateChannel},
@@ -246,7 +246,41 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 println!("application has no backend runtime");
                 return Ok(());
             };
-            let mut runtime = RuntimeProcess::start(&path, backend)?;
+            // Build the same auto-managed data / cache / log dir tree
+            // that `RuntimeHandle::start_with_spec` would, so the
+            // backend sees `ALEX_APP_DATA_DIR` / `ALEX_APP_CACHE_DIR`
+            // / `ALEX_APP_LOG_DIR` injected into its env. Without
+            // this, `node:sqlite` backends would silently fall back
+            // to `:memory:` because `dbPath` would be null.
+            let spec = RuntimeSpec {
+                app_id: app.id.clone(),
+                package_root: path.clone(),
+                backend: backend.clone(),
+                data_dir: None,
+                cache_dir: None,
+            };
+            let auto_dirs = compute_app_dirs(&app.id).ok();
+            let (data_dir, cache_dir, log_dir) = match &auto_dirs {
+                Some(dirs) => {
+                    dirs.ensure()
+                        .map_err(|e| format!("ensure app dirs: {e}"))?;
+                    (Some(dirs.data.as_path()), Some(dirs.cache.as_path()), Some(dirs.logs.as_path()))
+                }
+                None => (None, None, None),
+            };
+            let logs = std::sync::Arc::new(std::sync::Mutex::new(
+                std::collections::VecDeque::new(),
+            ));
+            let (mut runtime, endpoint) = RuntimeProcess::start_with_spec(
+                &spec,
+                data_dir,
+                cache_dir,
+                log_dir,
+                std::sync::Arc::clone(&logs),
+            )?;
+            if let Some(ep) = &endpoint {
+                println!("service endpoint: 127.0.0.1:{}", ep.port);
+            }
             println!("runtime started (pid {})", runtime.id());
             loop {
                 if let Some(status) = runtime.try_wait()? {

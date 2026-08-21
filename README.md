@@ -13,6 +13,8 @@ WebView2、安全边界和应用生命周期，使用受管理的 Node.js 子进
 [docs/app-manager-ui-design.md](docs/app-manager-ui-design.md)。
 Plugin → Host 的反向 IPC 协议见
 [docs/reverse-ipc.md](docs/reverse-ipc.md)。
+Docker 式应用容器、Windows 隔离和未来 OCI 适配方案见
+[docs/alex-container-design.md](docs/alex-container-design.md)。
 
 ## Self-hosting (自举)
 

@@ -31,7 +31,7 @@ use crate::{
     manifest::{AppManifest, BackendMode},
     package,
     package::PackageError,
-    runtime::{RuntimeHandle, RuntimeState, RuntimeStatus},
+    runtime::{RuntimeHandle, RuntimeSpec, RuntimeState, RuntimeStatus},
     trust,
 };
 
@@ -775,7 +775,13 @@ impl RuntimeSupervisor {
             }
             runtimes.remove(id);
         }
-        let handle = RuntimeHandle::start(install_root, backend)?;
+        let handle = RuntimeHandle::start_with_spec(RuntimeSpec {
+            app_id: id.to_owned(),
+            package_root: install_root.to_path_buf(),
+            backend: backend.clone(),
+            data_dir: None,
+            cache_dir: None,
+        })?;
         let status = handle.status(Duration::from_secs(2))?;
         runtimes.insert(id.to_owned(), handle);
         Ok(status)

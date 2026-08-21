@@ -2123,16 +2123,18 @@ fn api_filesystem_watch_returns_subscription() {
 }
 
 #[test]
-fn api_capabilities_lists_every_method() {
+fn api_capabilities_lists_wired_and_experimental_separately() {
     let (_root, router) = hello_router();
     let result = call(&router, "system.capabilities", json!({}));
-    let caps = result
-        .result
-        .unwrap()["capabilities"]
-        .as_array()
-        .unwrap()
-        .clone();
-    let names: Vec<&str> = caps.iter().map(|v| v.as_str().unwrap()).collect();
+    let payload = result.result.unwrap();
+    let available = payload["capabilities"].as_array().unwrap().clone();
+    let experimental = payload["experimental"].as_array().unwrap().clone();
+    let available_names: Vec<&str> =
+        available.iter().map(|v| v.as_str().unwrap()).collect();
+    let experimental_names: Vec<&str> =
+        experimental.iter().map(|v| v.as_str().unwrap()).collect();
+    // Wired end-to-end: filesystem, dialog, clipboard, system.openExternal,
+    // window.manage, notification.show, runtime.
     for required in [
         "filesystem.readBinary",
         "filesystem.writeBinary",
@@ -2141,13 +2143,49 @@ fn api_capabilities_lists_every_method() {
         "filesystem.remove",
         "filesystem.rename",
         "filesystem.copy",
-        "filesystem.watch",
-        "storage",
-        "paths",
-        "events.subscribe",
+        "dialog.open",
+        "clipboard.read",
+        "clipboard.write",
+        "window.manage",
+        "notification.show",
+        "runtime.invoke",
         "runtime.cancel",
     ] {
-        assert!(names.contains(&required), "missing capability {required}");
+        assert!(
+            available_names.contains(&required),
+            "missing wired capability {required}"
+        );
+    }
+    // Not yet wired — the page must not branch on these as
+    // if they were real. `process.spawn` / `network.fetch`
+    // / `window.create` / `menu.*` / `tray.*` / `shortcut.*`
+    // are all in the registry but the host side is still
+    // a stub. `events.subscribe` is wired for the page
+    // side, but the shell does not yet pump bus events
+    // back, so the subscription never delivers.
+    for required in [
+        "process.spawn",
+        "network.fetch",
+        "window.open",
+        "menu.manage",
+        "tray.manage",
+        "shortcut.register",
+        "events.subscribe",
+        "storage",
+        "paths",
+        "filesystem.watch",
+    ] {
+        assert!(
+            experimental_names.contains(&required),
+            "missing experimental capability {required}"
+        );
+        // Critical: the experimental APIs must not appear in
+        // the `available` list, or pages will call them and
+        // silently no-op.
+        assert!(
+            !available_names.contains(&required),
+            "experimental capability {required} should not be in `available`"
+        );
     }
 }
 
@@ -2308,6 +2346,29 @@ fn api_tray_rejects_icon_outside_package() {
 }
 
 #[test]
+fn api_tray_rejects_file_url_outside_package() {
+    let (_root, router) = hello_router();
+    // A `file://` URL pointing at the host's C:\ drive
+    // must be refused even when the URL itself is well-
+    // formed. Without this, the registry would accept
+    // a path the page has no business reaching, and the
+    // shell would later try to render a system DLL as a
+    // tray icon.
+    let result = call(
+        &router,
+        "tray.create",
+        json!({
+            "icon": "file:///C:/Windows/System32/shell32.dll",
+            "tooltip": "host file via file URL"
+        }),
+    );
+    let err = result
+        .error
+        .expect("expected TRAY_ERROR for out-of-package file:// icon");
+    assert_eq!(err.code, "TRAY_ERROR");
+}
+
+#[test]
 fn api_shortcut_register_and_list() {
     let (_root, router) = hello_router();
     let reg = call(
@@ -2358,6 +2419,17 @@ fn api_process_spawn_requires_allow_list() {
         err.code == "OPERATION_FORBIDDEN" || err.code == "PERMISSION_DENIED",
         "unexpected code: {err:?}"
     );
+}
+
+#[test]
+fn api_process_kill_requires_pid_field() {
+    let (_root, router) = hello_router();
+    // The stub used to silently swallow missing fields.
+    // After the fix it must report INVALID_PARAMS so the
+    // page sees the call fail instead of a fake success.
+    let result = call(&router, "process.kill", json!({}));
+    let err = result.error.expect("expected error for missing pid");
+    assert_eq!(err.code, "INVALID_PARAMS");
 }
 
 #[test]

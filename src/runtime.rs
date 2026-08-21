@@ -740,7 +740,14 @@ impl RuntimeProcess {
         Self::start_with_spec(&spec, None, None, None, Arc::clone(&logs)).map(|(p, _)| p)
     }
 
-    fn start_with_spec(
+    /// Spawn a backend using the full `RuntimeSpec` (including the
+    /// real `app_id`, so the host can inject `ALEX_APP_DATA_DIR` /
+    /// `ALEX_APP_CACHE_DIR` / `ALEX_APP_LOG_DIR`). Returns the bare
+    /// process plus its service-mode endpoint, for callers that need
+    /// the process handle directly (e.g. `alex run` waiting on
+    /// `try_wait`). Long-lived supervisors should prefer
+    /// [`RuntimeHandle::start_with_spec`] which adds a watchdog.
+    pub fn start_with_spec(
         spec: &RuntimeSpec,
         data_dir: Option<&Path>,
         cache_dir: Option<&Path>,

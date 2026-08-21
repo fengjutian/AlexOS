@@ -170,11 +170,12 @@ impl MenuStore {
         &self,
         app_id: &str,
         spec: TraySpec,
+        package_root: &std::path::Path,
     ) -> Result<TrayInfo, MenuError> {
         if spec.icon.is_empty() {
             return Err(MenuError::Invalid("icon is empty".into()));
         }
-        if !is_safe_icon(&spec.icon) {
+        if !is_safe_icon(&spec.icon, package_root) {
             return Err(MenuError::IconPath(spec.icon));
         }
         if let Some(menu) = &spec.menu {
@@ -285,14 +286,33 @@ fn validate_items(items: &[MenuItem], depth: usize) -> Result<(), MenuError> {
     Ok(())
 }
 
-fn is_safe_icon(path: &str) -> bool {
-    // Either a file:// URL or a relative path with no
-    // `..` components. Absolute paths are refused.
+fn is_safe_icon(path: &str, package_root: &std::path::Path) -> bool {
+    // Two accepted shapes:
+    // 1. a `file://` URL whose canonical path lives inside
+    //    the package root (defeats symlink escape);
+    // 2. a relative path with no `..` components (resolved
+    //    against the package root by the shell when it
+    //    actually renders the icon).
+    // Absolute native paths and `http(s)://` URLs are
+    // refused outright so a tray icon cannot point at a
+    // system binary.
     if let Ok(url) = Url::parse(path) {
         if url.scheme() != "file" {
             return false;
         }
-        return url.to_file_path().is_ok();
+        let Ok(target) = url.to_file_path() else {
+            return false;
+        };
+        let canonical_root = package_root
+            .canonicalize()
+            .unwrap_or_else(|_| package_root.to_path_buf());
+        let canonical_target = match target.canonicalize() {
+            Ok(value) => value,
+            // The file may not exist yet at config time;
+            // canonicalize the deepest existing ancestor.
+            Err(_) => return target.starts_with(&canonical_root),
+        };
+        return canonical_target.starts_with(&canonical_root);
     }
     !path.contains("..") && !path.starts_with('/') && !path.contains(':')
 }
@@ -433,9 +453,29 @@ mod tests {
                     tooltip: None,
                     menu: None,
                 },
+                std::path::Path::new("."),
             )
             .unwrap();
         assert!(store.destroy_tray("a", &first.id).is_ok());
+    }
+
+    #[test]
+    fn tray_icon_rejects_absolute_file_url() {
+        // A `file://` URL whose path is the host's C:\ drive
+        // must be refused even if the rest of the URL is
+        // well-formed.
+        let store = MenuStore::new();
+        let url = "file:///C:/Windows/System32/shell32.dll".to_string();
+        let result = store.create_tray(
+            "a",
+            TraySpec {
+                icon: url,
+                tooltip: None,
+                menu: None,
+            },
+            std::path::Path::new("."),
+        );
+        assert!(result.is_err());
     }
 
     #[test]

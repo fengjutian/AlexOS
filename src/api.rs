@@ -1049,9 +1049,17 @@ impl ApiRouter {
     fn system_capabilities(&self) -> ApiResult {
         // Capability negotiation: pages call this once at
         // boot to learn which APIs the current build supports.
-        // The list is static; future host versions can extend
-        // it.
-        let caps: &[&str] = &[
+        // The split between `available` and `experimental`
+        // is honest: `available` is wired end-to-end through
+        // the shell, `experimental` is parsed/permission-gated
+        // but the host-side native side is still a stub. Pages
+        // should branch on `available` for production paths and
+        // treat `experimental` as a "the method will accept
+        // your call but no side effect happens yet" signal.
+        let available: &[&str] = &[
+            // Filesystem: every method dispatches to a
+            // real fs call (read, write, stat, readDir,
+            // createDir, remove, rename, copy, exists).
             "filesystem.read",
             "filesystem.readBinary",
             "filesystem.write",
@@ -1063,39 +1071,48 @@ impl ApiRouter {
             "filesystem.remove",
             "filesystem.rename",
             "filesystem.copy",
-            "filesystem.watch",
-            "filesystem.unwatch",
             "filesystem.delete",
-            "filesystem.drop",
-            "storage",
-            "paths",
             "dialog.open",
-            "dialog.save",
             "clipboard.read",
             "clipboard.write",
             "system.openExternal",
+            "window.manage",
+            "notification.show",
+            "media.camera",
+            "media.microphone",
+            "geolocation",
+            "runtime.invoke",
+            "runtime.manage",
+            "runtime.cancel",
+        ];
+        let experimental: &[&str] = &[
+            // Watchers exist (notify-based registry) but
+            // the shell does not yet forward bus events
+            // back to the page; subscriptions will not
+            // deliver payloads.
+            "filesystem.watch",
+            "filesystem.unwatch",
+            "filesystem.drop",
+            "storage",
+            "paths",
+            "dialog.save",
             "system.listApps",
             "system.listExtensions",
             "system.install",
             "system.uninstall",
-            "window.manage",
             "window.open",
-            "notification.show",
             "menu.manage",
             "tray.manage",
             "shortcut.register",
             "process.spawn",
             "network.fetch",
-            "media.camera",
-            "media.microphone",
-            "geolocation",
             "events.subscribe",
             "events.unsubscribe",
-            "runtime.invoke",
-            "runtime.manage",
-            "runtime.cancel",
         ];
-        Ok(json!({ "capabilities": caps }))
+        Ok(json!({
+            "capabilities": available,
+            "experimental": experimental,
+        }))
     }
 
     fn open_external(&self, params: &Value) -> ApiResult {
@@ -1455,7 +1472,7 @@ impl ApiRouter {
         )?;
         let spec: TraySpec = parse_params(params)?;
         self.menu_store
-            .create_tray(&self.manifest.id, spec)
+            .create_tray(&self.manifest.id, spec, &self.package_root)
             .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
             .map_err(|error| ("TRAY_ERROR", error.to_string()))
     }
@@ -1591,7 +1608,15 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::ProcessSpawn { .. }),
             "process.spawn",
         )?;
-        let _pid: String = parse_params(params)?;
+        let pid = params
+            .get("pid")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `pid`".to_owned()))?;
+        // Stub: a future slice will look the pid up in a
+        // Job-Object-backed handle table and call
+        // `TerminateJobObject`. Today no real process was
+        // ever spawned, so the kill is a no-op.
+        let _ = pid;
         Ok(json!({ "killed": true }))
     }
 
