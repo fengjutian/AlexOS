@@ -1,6 +1,9 @@
 # Alex OS 实现状态与未开发功能
 
-更新基线：Alex OS `0.1.0`，Windows + WebView2 + Node.js 原型。
+更新基线：Alex OS `0.1.0`，Windows + WebView2 + Node.js 原型。0.1 切片 1-4
+全部落地：每个 App 现在可以长期运行独立的 Node.js 服务（Express /
+WebSocket / SQLite / 定时任务），前端通过 `alex://app/api/*` 内部反向代理
+访问服务，端口由 host 分配，token 由 host 注入。
 
 本文档只描述仓库当前代码能够支持的行为。最初愿景中的 Python、Rust 插件、跨平台和 Store
 仍属于路线图，不应出现在当前版本能力承诺中。
@@ -11,16 +14,24 @@
 
 ```text
 .alex 应用目录/归档
-  → Manifest 与完整性校验
+  → Manifest 与完整性校验（含 service.mode + healthCheck + restart policy）
   → Rust Shell
   → WebView2 前端
   → Alex IPC
   → 权限检查
   ├─ Rust Native API
-  └─ 受管理的 Node.js 子进程
+  ├─ RPC 模式 Node.js 子进程（stdin/stdout JSON Lines，单请求）
+  └─ Service 模式 Node.js 子进程（Express / WebSocket / 任意 HTTP server）
+      → host 分配 28000-28999 端口 + 注入 ALEX_SERVICE_PORT
+      → stderr 写 {"type":"alex.ready","port":N} 握手
+      → 持久化在 %LOCALAPPDATA%/AlexOS/apps/<id>/{data,cache,logs,runtime}/
+      → alex://app/api/* 反向代理（X-Alx-Token 注入，body 1 MiB cap）
 ```
 
-当前仅支持一个应用窗口和一个 Node 后端进程。应用后端属于可信本机代码，不在安全沙箱中。
+App Manager 现在能展示 service 状态：mode（rpc / service）、pid、port、ready、
+最近 20 行 stderr、lastError。优雅退出（service 5s / rpc 2s），崩溃按
+`RestartPolicy.policy` 退避重启（默认 `on-failure` × 5 次），超限后
+RuntimeStatus 报告 `Crashed` 不再启动。
 
 ## 2. 已实现功能和实际限制
 
