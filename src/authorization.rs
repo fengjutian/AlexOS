@@ -76,10 +76,9 @@ impl PermissionStore {
             for legacy in legacy_keys {
                 if let Some(manifest) =
                     Permission::manifest_name_for_ipc_method(&legacy).map(str::to_owned)
+                    && let Some(value) = decisions.remove(&legacy)
                 {
-                    if let Some(value) = decisions.remove(&legacy) {
-                        decisions.entry(manifest).or_insert(value);
-                    }
+                    decisions.entry(manifest).or_insert(value);
                 }
             }
             let serialized = serde_json::to_vec_pretty(&decisions)?;

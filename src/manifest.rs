@@ -116,7 +116,7 @@ pub enum BackendMode {
 /// backend is marked `unhealthy` and the restart policy decides what
 /// happens next.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct HealthCheck {
     #[serde(default = "HealthCheck::default_path")]
     pub path: String,
@@ -150,7 +150,7 @@ impl HealthCheck {
 ///
 /// `max_retries` caps the count inside a host-defined sliding window.
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct RestartPolicy {
     #[serde(default = "RestartPolicy::default_policy")]
     pub policy: String,
@@ -177,7 +177,7 @@ impl RestartPolicy {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
-#[serde(deny_unknown_fields)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct Backend {
     pub runtime: RuntimeKind,
     pub entry: String,

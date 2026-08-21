@@ -113,3 +113,38 @@ li .actions {
 .error {
   color: #b1271b;
 }
+
+.sig-badge {
+  display: inline-block;
+  font-size: 0.72rem;
+  font-weight: 600;
+  padding: 0.1rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+}
+
+.sig-badge[data-state="unsigned"] {
+  color: #5d5d63;
+  background: #ececef;
+  border-color: #d0d0d4;
+}
+
+.sig-badge[data-state="signed-trusted"] {
+  color: #11552c;
+  background: #d9f3df;
+  border-color: #8ccaa0;
+}
+
+.sig-badge[data-state="signed-untrusted"] {
+  color: #8a4a00;
+  background: #fff1d6;
+  border-color: #e5b66b;
+}
+
+.sig-badge[data-state="invalid-signature"] {
+  color: #8b1a14;
+  background: #fde0dc;
+  border-color: #e0938c;
+}

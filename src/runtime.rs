@@ -663,9 +663,8 @@ impl Drop for RuntimeProcess {
 /// Drain a child's stderr. Each line is appended to the shared log
 /// ring buffer; if `ready_tx` is set, the first JSON line whose
 /// `"type"` field equals `"alex.ready"` also flips `ready_flag` and
-/// unblocks the start path. EOF is reported as a single
-/// `ready_tx.send(Err(()))` (which we never actually call here; the
-/// start path times out instead, which is more useful for tests).
+/// unblocks the start path. EOF drops the sender so the start path
+/// `recv_timeout` returns `Disconnected` and the process is killed.
 fn stderr_pump(
     stderr: std::process::ChildStderr,
     logs: Arc<Mutex<VecDeque<String>>>,
@@ -681,10 +680,7 @@ fn stderr_pump(
             Ok(0) => break,
             Ok(_) => {
                 let trimmed = line.trim_end();
-                if !signalled
-                    && let Ok(value) = serde_json::from_str::<Value>(trimmed)
-                    && value.get("type").and_then(|v| v.as_str()) == Some("alex.ready")
-                {
+                if !signalled && try_parse_ready_signal(trimmed) {
                     signalled = true;
                     if let Some(flag) = &ready_flag {
                         flag.store(true, Ordering::Release);
@@ -703,14 +699,23 @@ fn stderr_pump(
             Err(_) => break,
         }
     }
-    // EOF before ready — wake the start path with a failed send so
-    // it tears the child down rather than hanging on the timeout.
     if !signalled {
         if let Some(flag) = &ready_flag {
             flag.store(false, Ordering::Release);
         }
         drop(ready_tx);
     }
+}
+
+/// True if `line` parses as a JSON object whose `type` field equals
+/// `alex.ready`. Anything else — non-JSON, JSON without `type`,
+/// JSON with a different `type` — is treated as a normal log line.
+fn try_parse_ready_signal(line: &str) -> bool {
+    serde_json::from_str::<Value>(line)
+        .ok()
+        .and_then(|value| value.get("type").and_then(|t| t.as_str()).map(String::from))
+        .as_deref()
+        == Some("alex.ready")
 }
 
 /// Find the first port in the service range that the OS is willing to
@@ -792,4 +797,183 @@ fn terminate_process_tree(pid: u32) -> bool {
 #[cfg(not(windows))]
 fn terminate_process_tree(_pid: u32) -> bool {
     false
+}
+
+#[cfg(test)]
+mod service_runtime_tests {
+    use super::*;
+    use std::collections::VecDeque;
+    use std::process::{Command, Stdio};
+    use std::sync::atomic::AtomicBool;
+    use std::sync::{Arc, Mutex};
+
+    #[test]
+    fn allocate_service_port_returns_value_in_range() {
+        // Tests run on machines that may already have loopback
+        // listeners, so a no-op range check is enough — we don't
+        // want to leak a binding across tests.
+        for _ in 0..16 {
+            let port = allocate_service_port().expect("a port is available");
+            assert!((SERVICE_PORT_RANGE_START..=SERVICE_PORT_RANGE_END).contains(&port));
+        }
+    }
+
+    #[test]
+    fn runtime_token_is_64_lowercase_hex_chars() {
+        let token = generate_runtime_token();
+        assert_eq!(token.len(), 64, "token must be 32 bytes hex");
+        assert!(
+            token.chars().all(|c| matches!(c, '0'..='9' | 'a'..='f')),
+            "token must be lowercase hex: {token}"
+        );
+    }
+
+    #[test]
+    fn runtime_token_varies_across_calls() {
+        // With nanos + pid + counter mixing 32 bytes the chance of
+        // a collision is negligible; we just need the function not
+        // to be a constant.
+        let a = generate_runtime_token();
+        let b = generate_runtime_token();
+        assert_ne!(a, b);
+    }
+
+    #[test]
+    fn ready_signal_parser_accepts_canonical_line() {
+        assert!(try_parse_ready_signal(r#"{"type":"alex.ready","port":28000}"#));
+    }
+
+    #[test]
+    fn ready_signal_parser_ignores_unrelated_json() {
+        assert!(!try_parse_ready_signal(r#"{"type":"http.request","method":"GET"}"#));
+        assert!(!try_parse_ready_signal(r#"{"port":28000}"#));
+        // A non-string `type` (e.g. number) must not be mistaken for
+        // the ready marker; only the exact string counts.
+        assert!(!try_parse_ready_signal(r#"{"type":1}"#));
+    }
+
+    #[test]
+    fn ready_signal_parser_ignores_non_json() {
+        assert!(!try_parse_ready_signal(""));
+        assert!(!try_parse_ready_signal("listening on 28000"));
+        assert!(!try_parse_ready_signal("{not json"));
+    }
+
+    /// End-to-end: spawn a real Node child that writes the ready
+    /// line to stderr, then check that `stderr_pump` flips the flag
+    /// and unblocks a `recv` on the ready channel. Skipped when
+    /// Node isn't on PATH or ALEX_NODE.
+    #[test]
+    fn stderr_pump_signals_ready_on_real_node_child() {
+        let node = match discover_node() {
+            Some(path) => path,
+            None => {
+                eprintln!("skipping: Node.js not available");
+                return;
+            }
+        };
+        let mut child = Command::new(node)
+            .arg("-e")
+            .arg(
+                "process.stderr.write('{\"type\":\"alex.ready\",\"port\":12345}\\n'); \
+                 setTimeout(() => {}, 50);",
+            )
+            .stdin(Stdio::null())
+            .stdout(Stdio::null())
+            .stderr(Stdio::piped())
+            .spawn()
+            .expect("spawn node");
+        let stderr = child.stderr.take().expect("stderr pipe");
+        let logs: Arc<Mutex<VecDeque<String>>> = Arc::new(Mutex::new(VecDeque::new()));
+        let (ready_tx, ready_rx) = mpsc::sync_channel::<()>(1);
+        let flag = Arc::new(AtomicBool::new(false));
+        let (ready_tx_for_thread, flag_for_thread) = (ready_tx, Arc::clone(&flag));
+        let logs_for_thread = Arc::clone(&logs);
+        let handle = std::thread::spawn(move || {
+            stderr_pump(stderr, logs_for_thread, Some(ready_tx_for_thread), Some(flag_for_thread));
+        });
+        ready_rx
+            .recv_timeout(Duration::from_secs(2))
+            .expect("ready signal arrives");
+        assert!(flag.load(Ordering::Acquire));
+        let _ = child.wait();
+        handle.join().ok();
+    }
+
+    /// End-to-end: launch the `examples/service-hello` Node backend
+    /// through `RuntimeHandle::start_with_spec` and assert the host
+    /// sees a `Ready` runtime with a real loopback port and a 64-char
+    /// hex token, and that the backend actually serves /health.
+    #[test]
+    fn runtime_handle_starts_service_hello_and_handshakes() {
+        if discover_node().is_none() {
+            eprintln!("skipping: Node.js not available");
+            return;
+        }
+        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let package_root = workspace.join("examples").join("service-hello");
+        let backend_index = package_root.join("backend").join("index.js");
+        if !backend_index.is_file() {
+            eprintln!("skipping: {} not built", backend_index.display());
+            return;
+        }
+        let manifest_path = package_root.join("manifest.json");
+        let manifest_text = std::fs::read_to_string(&manifest_path).expect("read manifest");
+        let manifest: crate::manifest::AppManifest =
+            serde_json::from_str(&manifest_text).expect("parse manifest");
+        let backend = manifest.backend.expect("backend present");
+        let spec = RuntimeSpec {
+            app_id: manifest.id.clone(),
+            package_root: package_root.clone(),
+            backend: backend.clone(),
+            data_dir: None,
+            cache_dir: None,
+        };
+        let handle = RuntimeHandle::start_with_spec(spec).expect("service runtime starts");
+        let status = handle
+            .status(Duration::from_secs(2))
+            .expect("status query succeeds");
+        let port = status.port.expect("service mode reports a port");
+        let token = status.token.expect("service mode reports a token");
+        assert_eq!(status.mode, BackendMode::Service);
+        assert_eq!(status.state, RuntimeState::Ready);
+        assert!(status.ready);
+        assert_eq!(token.len(), 64);
+        assert!((SERVICE_PORT_RANGE_START..=SERVICE_PORT_RANGE_END).contains(&port));
+
+        // The host probes the backend by HTTP so we know the
+        // service is not just ready-but-unreachable. We use a raw
+        // TcpStream + HTTP/1.0 to avoid pulling ureq into the
+        // runtime test path (ureq 3.x has no per-call timeout).
+        use std::io::{Read, Write};
+        use std::net::{TcpStream, ToSocketAddrs};
+        let addr = ("127.0.0.1", port)
+            .to_socket_addrs()
+            .expect("resolve")
+            .next()
+            .expect("addr");
+        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
+            .expect("connect to /health");
+        stream
+            .set_read_timeout(Some(Duration::from_secs(2)))
+            .ok();
+        stream
+            .set_write_timeout(Some(Duration::from_secs(2)))
+            .ok();
+        stream
+            .write_all(
+                b"GET /health HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",
+            )
+            .expect("write request");
+        let mut response = String::new();
+        stream.read_to_string(&mut response).expect("read response");
+        assert!(
+            response.contains("\"status\":\"ready\""),
+            "health body was: {response}"
+        );
+
+        // Tear down so the next test can claim a fresh port.
+        let _ = handle.cancel();
+        let _ = handle.status(Duration::from_secs(2));
+    }
 }
