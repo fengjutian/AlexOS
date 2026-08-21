@@ -47,11 +47,18 @@ enum Commands {
         #[arg(long, default_value = "./target/apps")]
         install_root: PathBuf,
     },
-    /// Run an installed plugin's backend (no webview).
+    /// Run an installed plugin. Default opens a WebView so the
+    /// plugin behaves like an app (frontend + backend + system
+    /// permissions) — this is the path that lets a plugin replace
+    /// the built-in App Manager. Pass `--headless` to run backend
+    /// only with output forwarded to host stdout.
     Plugin {
         id: String,
         #[arg(long, default_value = "./target/apps")]
         install_root: PathBuf,
+        /// Run the plugin without a WebView (backend only).
+        #[arg(long)]
+        headless: bool,
     },
     /// Invoke an Alex API request from a JSON file (diagnostic command).
     Invoke {
@@ -246,7 +253,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Shell { path } => {
             let app = load_app(&path)?;
-            shell::run(&path, app)?;
+            shell::run(&path, app, None)?;
         }
         Commands::Dev { path } => {
             let app = load_app(&path)?;
@@ -266,21 +273,36 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                     "alex manager: launching self-hosted plugin {} {}",
                     manifest.id, manifest.version
                 );
-                plugin::run(&plugin_path, &manifest, &install_root)?;
+                // The self-hosted manager runs through the same
+                // shell/webview path as a regular plugin, so it keeps
+                // the normal permission-prompt UX (headless=false).
+                plugin::run(&plugin_path, &manifest, &install_root, false)?;
             } else {
                 let manager = LocalAppManager::open(&install_root)?;
                 let router = Arc::new(ManagerRouter::new(Arc::new(manager)));
                 manager_webview::run(router)?;
             }
         }
-        Commands::Plugin { id, install_root } => {
+        Commands::Plugin {
+            id,
+            install_root,
+            headless,
+        } => {
             let install_path = plugin::find_in_install(&install_root, &id)?.ok_or_else(|| {
                 package::PackageError::NotInstalled(format!(
                     "plugin {id} not found or not a plugin"
                 ))
             })?;
             let manifest = load_app(&install_path)?;
-            plugin::run(&install_path, &manifest, &install_root)?;
+            if headless {
+                plugin::run(&install_path, &manifest, &install_root, true)?;
+            } else {
+                eprintln!(
+                    "alex plugin: launching webview for {} {}",
+                    manifest.id, manifest.version
+                );
+                shell::run(&install_path, manifest, Some(&install_root))?;
+            }
         }
         Commands::Invoke {
             path,

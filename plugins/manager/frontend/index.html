@@ -2,12 +2,28 @@
 <html lang="en">
   <head>
     <meta charset="utf-8" />
-    <title>Alex OS Manager (plugin)</title>
+    <meta http-equiv="Content-Security-Policy" content="default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'" />
+    <title>Alex OS Manager</title>
+    <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <h1>Alex OS Manager (plugin form)</h1>
-    <p>This UI is reserved for the future plugin-driven Manager.</p>
-    <p>0.1 ships the plugin as a backend-only stub so the host can
-       boot it; the frontend will host the React UI in a later slice.</p>
+    <header>
+      <h1>Alex OS Manager</h1>
+      <p id="subtitle">Self-hosted by <code>com.alex.manager</code> via reverse IPC.</p>
+    </header>
+    <main>
+      <section>
+        <h2>Installed applications</h2>
+        <button id="refresh" type="button">Refresh</button>
+        <p id="status">Loading…</p>
+        <ul id="apps"></ul>
+      </section>
+      <section>
+        <h2>Plugin extension points</h2>
+        <p id="extension-status">Loading…</p>
+        <ul id="extensions"></ul>
+      </section>
+    </main>
+    <script src="app.js"></script>
   </body>
 </html>

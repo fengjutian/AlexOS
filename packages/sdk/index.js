@@ -83,6 +83,27 @@ export function createAlexClient(transport = browserTransport()) {
       async openExternal(url, options) {
         await invoke("system.openExternal", { url }, options);
       },
+      async listApps(options) {
+        const result = await invoke("system.listApps", {}, options);
+        return result.apps;
+      },
+      async listExtensions(options) {
+        const result = await invoke("system.listExtensions", {}, options);
+        return result.extensions;
+      },
+      async install({ packagePath, requireSignature, trustedKey }, options) {
+        const params = { packagePath };
+        if (typeof requireSignature === "boolean") {
+          params.requireSignature = requireSignature;
+        }
+        if (typeof trustedKey === "string" && trustedKey.length > 0) {
+          params.trustedKey = trustedKey;
+        }
+        return invoke("system.install", params, options);
+      },
+      async uninstall({ id }, options) {
+        return invoke("system.uninstall", { id }, options);
+      },
     }),
   });
 }

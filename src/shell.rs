@@ -3,13 +3,21 @@ use std::path::Path;
 use crate::{AlexError, manifest::AppManifest};
 
 #[cfg(windows)]
-pub fn run(package_root: &Path, manifest: AppManifest) -> Result<(), AlexError> {
-    windows::run(package_root, manifest)
+pub fn run(
+    package_root: &Path,
+    manifest: AppManifest,
+    system_install_root: Option<&Path>,
+) -> Result<(), AlexError> {
+    windows::run(package_root, manifest, system_install_root)
         .map_err(|error| AlexError::Validation(format!("shell failed: {error}")))
 }
 
 #[cfg(not(windows))]
-pub fn run(_package_root: &Path, _manifest: AppManifest) -> Result<(), AlexError> {
+pub fn run(
+    _package_root: &Path,
+    _manifest: AppManifest,
+    _system_install_root: Option<&Path>,
+) -> Result<(), AlexError> {
     Err(AlexError::Validation(
         "the 0.1 shell currently supports Windows only".into(),
     ))
@@ -130,6 +138,7 @@ pub mod windows {
     pub fn run(
         package_root: &Path,
         manifest: AppManifest,
+        system_install_root: Option<&Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
@@ -143,6 +152,9 @@ pub mod windows {
             .with_native_host(Arc::new(WindowHost {
                 proxy: proxy.clone(),
             }));
+        if let Some(install_root) = system_install_root {
+            router = router.with_system_install_root(install_root.to_path_buf());
+        }
         if let Some(backend) = &manifest.backend {
             router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
         }

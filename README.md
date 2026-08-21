@@ -11,11 +11,15 @@ WebView2、安全边界和应用生命周期，使用受管理的 Node.js 子进
 [docs/status-and-roadmap.md](docs/status-and-roadmap.md)。
 应用管理 UI 的产品范围、页面结构和技术方案见
 [docs/app-manager-ui-design.md](docs/app-manager-ui-design.md)。
+Plugin → Host 的反向 IPC 协议见
+[docs/reverse-ipc.md](docs/reverse-ipc.md)。
 
 ## Self-hosting (自举)
 
-0.1 实现了最小自举闭环:Alex OS 可以用 Alex OS 自己写一个 `system.*`
-插件并通过 host 桥接调用底层能力。完整链路:
+0.1 实现了**完整**自举闭环:Alex OS 用 Alex OS 自己写一个 `system.*`
+plugin,通过 **reverse IPC**(`hostCall` / `hostResponse` 协议)在
+plugin 后端里问 host 拿数据 — host 端用 plugin 自己的 `ApiRouter`
+按 manifest 校验权限。完整链路:
 
 ```powershell
 # 1. 用 Alex 包一个 manager plugin
@@ -30,8 +34,10 @@ cargo run -- manager --install-root target\apps
 ```
 
 未装 manager plugin 时 `alex manager` 仍然可用内置 fallback(0.1
-行为不变)。当前阶段 plugin 走 system.* IPC 受权限约束,跟普通
-app 走同一套 dispatch 校验。
+行为不变)。`alex plugin <id> --headless` 跑纯后端 smoke
+test(不打开 WebView,自动 grant plugin 声明的 system.* 权限给
+PermissionStore,避免弹模态框阻塞)。当前阶段 plugin 走
+`system.*` IPC 受权限约束,跟普通 app 走同一套 dispatch 校验。
 
 ## 当前已实现
 
@@ -49,9 +55,13 @@ app 走同一套 dispatch 校验。
 - Stable/Beta/Dev 签名更新清单和 HTTPS 远程更新；
 - 窗口焦点、尺寸和位置事件;
 - `alex dev` 开发模式:Frontend 热重载 + Backend 自动重启 + `.alexignore`;
-- `alex plugin` 加载已安装 plugin,通过 stdin/stdout 桥接到 plugin 自己的 ApiRouter;
-- `alex manager` 内置 App Manager 中心(可选自举为 plugin);
-- Plugin 系统(`kind: "plugin"`):Extension points + System permission + 自举闭环.
+- `alex plugin <id>` 加载已安装 plugin,通过 stdin/stdout 桥接到 plugin 自己的 ApiRouter;
+- `alex plugin <id> --headless` 纯后端 smoke(自动 grant system.* 权限,适合 CI);
+- `alex manager` 内置 App Manager 中心(已可自举为 plugin);
+- Plugin 系统(`kind: "plugin"`):Extension points + System permission + 自举闭环;
+- **Reverse IPC**:plugin backend 写 `hostCall` 问 host,host 经 plugin 自己的 `ApiRouter` 派发 `system.*` 后写回 `hostResponse`(wire format 见 `docs/reverse-ipc.md`);
+- **`@alex/sdk` system namespace**:`listApps` / `listExtensions` / `install` / `uninstall`(供 plugin 的 WebView frontend 调用,跟 reverse IPC 共享同一条 `ApiRouter` 路径);
+- **Manager plugin WebView UI**:`com.alex.manager` 自带 frontend,装上后 `alex manager` 渲染 apps 列表 + 扩展点 + 卸载按钮.
 
 “已实现”表示代码路径存在并通过当前测试，不表示已经完成生产级兼容性、安全审计、
 GUI 自动化或大规模稳定性验证。

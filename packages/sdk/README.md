@@ -20,3 +20,31 @@ Every method accepts an optional `{ timeoutMs, signal }` argument. Errors are no
 Implemented namespaces are `fs`, `clipboard`, `dialog`, `runtime`, `system`, `window`,
 `notification`, and `events`. Runtime cancellation currently terminates and later restarts the
 whole Node backend process; it is not fine-grained per-request cancellation.
+
+## `system` namespace
+
+`system.info()` and `system.openExternal(url)` are callable from any application. The remaining
+methods are reserved for packages that declare `kind: "plugin"` and have the matching system
+permission granted at runtime — calling them from a regular `app` returns `PERMISSION_DENIED`.
+
+```js
+// List apps installed in the system install root (requires
+// `system.manageApps` on the calling plugin).
+const apps = await alex.system.listApps();
+// → [{ id, name, version, path }, ...]
+
+// List extension points contributed by all installed plugins
+// (requires `system.manageExtensions`).
+const extensions = await alex.system.listExtensions();
+// → [{ pluginId, kind, id, label, entry }, ...]
+
+// Install a `.alex` archive (requires `system.install`).
+const { installed } = await alex.system.install({
+  packagePath: "C:/path/to/some-app.alex",
+  requireSignature: true,
+  trustedKey: "<base64 ed25519 public key>",
+});
+
+// Uninstall by id (requires `system.uninstall`).
+await alex.system.uninstall({ id: "com.example.some_app" });
+```

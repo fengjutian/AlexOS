@@ -9,8 +9,9 @@
 //!   `system.*` 时被权限系统约束
 
 use std::{
+    io::Write,
     path::{Path, PathBuf},
-    sync::Arc,
+    sync::{Arc, Mutex},
     thread,
     time::Duration,
 };
@@ -133,11 +134,20 @@ pub fn find_in_install(
 /// 以 plugin 自己的 manifest 作为身份。Plugin 调 `system.*` 时
 /// 走与普通 app 完全一样的 dispatch + 权限校验路径。
 ///
+/// `headless=true` 表示从 `alex plugin --headless` 这条命令进来
+/// (没有 WebView),需要预先给 manifest 里声明的 `system.*` 权限
+/// 写一个 `Granted` 决策到 PermissionStore。否则第一次 `system.*`
+/// 调用会因为 `PermissionStore::Prompt` 状态触发 `native::confirm_permission`
+/// 弹 rfd 模态框,headless 模式没有 UI 接收点击 → 进程永久阻塞。
+/// WebView 模式 (`headless=false`) 走的是用户主动的 UI 流程,保留
+/// 弹框行为不变。
+///
 /// 阻塞直到 backend 进程退出。
 pub fn run(
     install_path: &Path,
     manifest: &AppManifest,
     system_install_root: &Path,
+    headless: bool,
 ) -> Result<(), crate::runtime::RuntimeError> {
     validate_plugin_manifest(manifest).map_err(|msg| {
         crate::runtime::RuntimeError::Protocol(format!("invalid plugin manifest: {msg}"))
@@ -168,12 +178,14 @@ pub fn run(
     let stdout = process
         .take_stdout()
         .ok_or_else(|| crate::runtime::RuntimeError::Protocol("stdout already taken".into()))?;
-    // Bridge the child's stdout straight to the host terminal — the
-    // self-hosted plugin is the user-visible surface.
-    let stdout_thread = thread::Builder::new()
-        .name(format!("alex-plugin-stdout-{}", manifest.id))
-        .spawn(move || tee_child_stdout(stdout))
-        .map_err(|error| crate::runtime::RuntimeError::Protocol(error.to_string()))?;
+    // Take stdin so the unified reader thread can write host responses
+    // back to the plugin (the protocol lets a plugin ask the host a
+    // question by writing `{kind:"hostCall", id, method, params}` to
+    // its stdout, and the host writes the matching `hostResponse` to
+    // its stdin).
+    let stdin = process
+        .take_stdin()
+        .ok_or_else(|| crate::runtime::RuntimeError::Protocol("stdin already taken".into()))?;
 
     let permissions_root = system_install_root
         .parent()
@@ -181,18 +193,53 @@ pub fn run(
         .unwrap_or_else(|| system_install_root.to_path_buf());
     let store = PermissionStore::open_at(&permissions_root, &manifest.id)
         .map_err(|error| crate::runtime::RuntimeError::Protocol(error.to_string()))?;
-    let _router = Arc::new(
+    if headless {
+        // Pre-grant every `system.*` permission the plugin declared.
+        // Headless mode is a developer-facing entry point: the user
+        // already opted in by running `alex plugin <id> --headless`,
+        // so we do not surface a native confirm dialog.
+        for permission in &manifest.permissions {
+            if permission.name().starts_with("system.") {
+                store
+                    .set(
+                        permission.name(),
+                        crate::authorization::PermissionDecision::Granted,
+                    )
+                    .map_err(|error| crate::runtime::RuntimeError::Protocol(error.to_string()))?;
+            }
+        }
+    }
+    let router = Arc::new(
         ApiRouter::new(install_path.to_path_buf(), manifest.clone())
             .with_permission_store(store)
             .with_system_install_root(system_install_root.to_path_buf()),
     );
-    // 0.1 does not implement reverse IPC; the router is reserved for
-    // a future slice where the host protocol gains a "backend asks
-    // host" round-trip. Plugins currently satisfy `system.manageApps`
-    // by reading the install root directly via `ALEX_INSTALL_ROOT`.
+    let stdin = Arc::new(Mutex::new(stdin));
 
-    let stdout_result = stdout_thread.join();
-    let _ = stdout_result;
+    // One thread: read stdout byte-by-byte, line-buffer, then either
+    // (a) treat the line as a `hostCall` and dispatch + write response
+    // to stdin, or (b) treat it as free-form log output and tee it to
+    // the host terminal. This avoids two threads competing for the
+    // same stdout read end. The thread runs in the background and
+    // exits when the backend's stdout closes (which happens when
+    // the child process exits).
+    let router_for_dispatch = Arc::clone(&router);
+    let stdin_for_dispatch = Arc::clone(&stdin);
+    let manifest_id_for_dispatch = manifest.id.clone();
+    let _dispatch_thread = thread::Builder::new()
+        .name(format!("alex-plugin-dispatch-{}", manifest.id))
+        .spawn(move || {
+            run_unified_dispatch(
+                stdout,
+                stdin_for_dispatch,
+                router_for_dispatch,
+                manifest_id_for_dispatch,
+            )
+        })
+        .map_err(|error| crate::runtime::RuntimeError::Protocol(error.to_string()))?;
+
+    // Wait for the backend to exit. When it does, the child's stdout
+    // closes, the dispatch thread sees EOF and exits on its own.
     loop {
         if let Some(status) = process.try_wait()? {
             if !status.success() {
@@ -207,8 +254,15 @@ pub fn run(
     Ok(())
 }
 
-fn tee_child_stdout<R: std::io::Read + Send + 'static>(mut reader: R) {
-    use std::io::Write;
+/// One thread per plugin: read its stdout, parse each line, and either
+/// dispatch it as a `hostCall` to `ApiRouter` (and write the matching
+/// `hostResponse` to stdin) or echo the line to the host terminal.
+fn run_unified_dispatch<R: std::io::Read + Send + 'static>(
+    mut reader: R,
+    stdin: Arc<Mutex<std::process::ChildStdin>>,
+    router: Arc<ApiRouter>,
+    manifest_id: String,
+) {
     let mut buf = Vec::new();
     let mut out = std::io::stdout();
     let mut byte = [0u8; 1];
@@ -218,15 +272,54 @@ fn tee_child_stdout<R: std::io::Read + Send + 'static>(mut reader: R) {
             Ok(_) => {
                 buf.push(byte[0]);
                 if byte[0] == b'\n' {
-                    let _ = out.write_all(&buf);
-                    let _ = out.flush();
+                    let line = String::from_utf8_lossy(&buf).into_owned();
+                    if let Some((id, method, params)) = parse_host_call(&line) {
+                        let response = router.dispatch(crate::ipc::Request {
+                            protocol: 1,
+                            id: id.clone(),
+                            source: manifest_id.clone(),
+                            method,
+                            params,
+                            deadline_ms: None,
+                        });
+                        let envelope = serde_json::json!({
+                            "kind": "hostResponse",
+                            "id": id,
+                            "result": response.result,
+                            "error": response.error,
+                        });
+                        if let Ok(mut guard) = stdin.lock() {
+                            let _ = writeln!(guard, "{}", envelope);
+                            let _ = guard.flush();
+                        }
+                    } else {
+                        let _ = out.write_all(&buf);
+                        let _ = out.flush();
+                    }
                     buf.clear();
                 }
             }
             Err(error) => {
-                eprintln!("alex plugin: stdout tee failed: {error}");
+                eprintln!("alex plugin: dispatch read failed: {error}");
                 break;
             }
         }
     }
+}
+
+/// If `line` is a `{kind:"hostCall", id, method, params}` envelope,
+/// return the id/method/params. Returns None for any other shape
+/// (including malformed JSON, non-hostCall lines, and partial reads).
+pub fn parse_host_call(line: &str) -> Option<(String, String, serde_json::Value)> {
+    let value: serde_json::Value = serde_json::from_str(line).ok()?;
+    if value.get("kind")?.as_str()? != "hostCall" {
+        return None;
+    }
+    let id = value.get("id")?.as_str()?.to_owned();
+    let method = value.get("method")?.as_str()?.to_owned();
+    let params = value
+        .get("params")
+        .cloned()
+        .unwrap_or(serde_json::json!({}));
+    Some((id, method, params))
 }

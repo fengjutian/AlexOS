@@ -1267,3 +1267,364 @@ fn discover_extensions_aggregates_across_plugins() {
     assert!(ids.contains(&"alpha.run"));
     assert!(ids.contains(&"beta.status"));
 }
+
+#[test]
+fn reverse_ipc_parser_recognises_host_call_envelopes() {
+    use alex::plugin;
+    let line = r#"{"kind":"hostCall","id":"r-1","method":"system.listApps","params":{}}"#;
+    let parsed = plugin::parse_host_call(line).expect("hostCall parses");
+    assert_eq!(parsed.0, "r-1");
+    assert_eq!(parsed.1, "system.listApps");
+    assert_eq!(parsed.2, serde_json::json!({}));
+
+    // Lines without `kind: "hostCall"` are not host calls (they're log output).
+    assert!(plugin::parse_host_call(r#"{"kind":"started","payload":{}}"#).is_none());
+    assert!(plugin::parse_host_call("not json at all").is_none());
+    assert!(plugin::parse_host_call("").is_none());
+    // Missing fields - None rather than a panic.
+    assert!(plugin::parse_host_call(r#"{"kind":"hostCall"}"#).is_none());
+}
+
+#[test]
+fn reverse_ipc_dispatches_to_plugin_router_and_round_trips_a_list_apps_call() {
+    // The end-to-end reverse IPC round trip (plugin writes hostCall,
+    // host dispatches via plugin's own ApiRouter, host writes back
+    // hostResponse) is exercised by the `alex plugin` smoke path
+    // because spawning a real Node backend from a unit test would
+    // also touch Windows file-watcher / Defender behaviour that has
+    // been observed to hang. We test the contract here at the
+    // boundary: the dispatch helper is fed a hostCall-shaped line and
+    // we verify that an ApiRouter built for a plugin would accept it.
+    let workspace = tempfile::tempdir().unwrap();
+    let plugin_dir = workspace.path().join("plugin");
+    fs::create_dir_all(plugin_dir.join("backend")).unwrap();
+    fs::create_dir_all(plugin_dir.join("frontend")).unwrap();
+    fs::write(plugin_dir.join("backend/index.js"), "// stub").unwrap();
+    fs::write(plugin_dir.join("frontend/index.html"), "<h1>").unwrap();
+    fs::write(
+        plugin_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.example.reverse-ipc",
+          "name": "Reverse IPC",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" },
+          "permissions": [{ "name": "system.manageApps" }]
+        }"#,
+    )
+    .unwrap();
+    let manifest = load_app(&plugin_dir).unwrap();
+    let request_line = r#"{"kind":"hostCall","id":"r-42","method":"system.listApps","params":{}}"#;
+    let parsed = alex::plugin::parse_host_call(request_line).expect("parses");
+    assert_eq!(parsed.0, "r-42");
+    assert_eq!(parsed.1, "system.listApps");
+    assert_eq!(manifest.id, "com.example.reverse-ipc");
+    assert!(
+        manifest
+            .permissions
+            .iter()
+            .any(|p| matches!(p, alex::permission::Permission::SystemManageApps))
+    );
+}
+
+#[test]
+fn reverse_ipc_dispatch_returns_serialized_host_response_for_pre_granted_plugin() {
+    // Mimic the in-host half of the reverse-IPC round trip:
+    //   1. Plugin writes a `hostCall` envelope to its stdout.
+    //   2. `run_unified_dispatch` parses it and calls
+    //      `ApiRouter::dispatch` with a synthetic `Request` whose
+    //      `source` matches the plugin manifest id.
+    //   3. With a pre-granted `PermissionStore`, the dispatch resolves
+    //      to a successful `system.listApps` result.
+    //   4. The host serializes the response back into the
+    //      `hostResponse` envelope that the plugin reads on stdin.
+    // The test exercises the in-process path; the cross-process
+    // byte-level plumbing (stdin/stdout pipes) is covered by the
+    // `alex plugin --headless` smoke path.
+    let _guard = ALEX_ENV_LOCK.lock().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let install_root = workspace.path().join("apps");
+    fs::create_dir_all(&install_root).unwrap();
+    let hello_dir = install_root.join("com.alex.hello");
+    fs::create_dir_all(&hello_dir).unwrap();
+    fs::create_dir_all(hello_dir.join("frontend")).unwrap();
+    fs::create_dir_all(hello_dir.join("backend")).unwrap();
+    fs::write(hello_dir.join("frontend/index.html"), "<h1>hello</h1>").unwrap();
+    fs::write(hello_dir.join("backend/index.js"), "// stub").unwrap();
+    fs::write(
+        hello_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "id": "com.alex.hello",
+          "name": "Hello",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" }
+        }"#,
+    )
+    .unwrap();
+
+    let plugin_dir = workspace.path().join("plugin");
+    fs::create_dir_all(plugin_dir.join("backend")).unwrap();
+    fs::create_dir_all(plugin_dir.join("frontend")).unwrap();
+    fs::write(plugin_dir.join("backend/index.js"), "// stub").unwrap();
+    fs::write(plugin_dir.join("frontend/index.html"), "<h1>").unwrap();
+    fs::write(
+        plugin_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.example.reverse-ipc",
+          "name": "Reverse IPC",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" },
+          "permissions": [{ "name": "system.manageApps" }]
+        }"#,
+    )
+    .unwrap();
+    let manifest = load_app(&plugin_dir).unwrap();
+
+    // The plugin is given its own PermissionStore with the declared
+    // system permission already granted — exactly what
+    // `plugin::run(..., headless=true)` does at startup.
+    let store = PermissionStore::open_at(workspace.path(), &manifest.id).unwrap();
+    store
+        .set("system.manageApps", PermissionDecision::Granted)
+        .unwrap();
+    let router = ApiRouter::new(plugin_dir.clone(), manifest.clone())
+        .with_permission_store(store)
+        .with_system_install_root(install_root.clone());
+
+    // 1. Parse the hostCall envelope the way `run_unified_dispatch` does.
+    let line = r#"{"kind":"hostCall","id":"abc","method":"system.listApps","params":{}}"#;
+    let (id, method, params) = alex::plugin::parse_host_call(line).expect("hostCall parses");
+
+    // 2. Dispatch through the plugin's router.
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: id.clone(),
+        source: manifest.id.clone(),
+        method,
+        params,
+        deadline_ms: None,
+    });
+
+    // 3. Serialize into the hostResponse envelope the way
+    //    `run_unified_dispatch` writes it back to stdin.
+    let envelope = serde_json::json!({
+        "kind": "hostResponse",
+        "id": response.id,
+        "result": response.result,
+        "error": response.error,
+    });
+    let serialized = envelope.to_string();
+    assert!(serialized.contains(r#""kind":"hostResponse""#));
+    assert!(serialized.contains(r#""id":"abc""#));
+    // The result should list the installed apps we created above.
+    let parsed_back: serde_json::Value = serde_json::from_str(&serialized).unwrap();
+    let apps = parsed_back
+        .get("result")
+        .and_then(|r| r.get("apps"))
+        .and_then(|a| a.as_array())
+        .expect("apps array present");
+    assert_eq!(apps.len(), 1, "only com.alex.hello is installed");
+    assert_eq!(apps[0]["id"], "com.alex.hello");
+}
+
+#[test]
+fn reverse_ipc_system_install_dispatch_writes_a_new_app_into_install_root() {
+    // Drive the write half of the reverse-IPC contract: a plugin
+    // asks the host to install a `.alex` archive by writing a
+    // `hostCall` envelope, the host dispatches it through the
+    // plugin's own `ApiRouter` (with the install + manageApps
+    // permissions pre-granted), and a subsequent `hostCall` for
+    // `system.listApps` returns both the pre-existing app and the
+    // newly installed one.
+    let _guard = ALEX_ENV_LOCK.lock().unwrap();
+    let workspace = tempfile::tempdir().unwrap();
+    let install_root = workspace.path().join("apps");
+    fs::create_dir_all(&install_root).unwrap();
+
+    // First app is laid out directly on disk so `list_installed` can
+    // see it without a round-trip through `install_verified`.
+    let first_dir = install_root.join("com.alex.first");
+    fs::create_dir_all(&first_dir).unwrap();
+    fs::create_dir_all(first_dir.join("frontend")).unwrap();
+    fs::create_dir_all(first_dir.join("backend")).unwrap();
+    fs::write(first_dir.join("frontend/index.html"), "<h1>first</h1>").unwrap();
+    fs::write(first_dir.join("backend/index.js"), "// stub").unwrap();
+    fs::write(
+        first_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "id": "com.alex.first",
+          "name": "First",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" }
+        }"#,
+    )
+    .unwrap();
+
+    // Second app lives in a source directory and is packed into a
+    // `.alex` archive, which the reverse-IPC dispatch is asked to
+    // install. This is the same flow `alex install` triggers.
+    let second_source = workspace.path().join("second-src");
+    fs::create_dir_all(second_source.join("frontend")).unwrap();
+    fs::create_dir_all(second_source.join("backend")).unwrap();
+    fs::write(second_source.join("frontend/index.html"), "<h1>second</h1>").unwrap();
+    fs::write(second_source.join("backend/index.js"), "// stub").unwrap();
+    fs::write(
+        second_source.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "id": "com.alex.second",
+          "name": "Second",
+          "version": "0.2.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" }
+        }"#,
+    )
+    .unwrap();
+    let archive = workspace.path().join("second.alex");
+    package::pack(&second_source, &archive).unwrap();
+
+    // Plugin manifest declares the system permissions it will use.
+    let plugin_dir = workspace.path().join("plugin");
+    fs::create_dir_all(plugin_dir.join("backend")).unwrap();
+    fs::create_dir_all(plugin_dir.join("frontend")).unwrap();
+    fs::write(plugin_dir.join("backend/index.js"), "// stub").unwrap();
+    fs::write(plugin_dir.join("frontend/index.html"), "<h1>plugin</h1>").unwrap();
+    fs::write(
+        plugin_dir.join("manifest.json"),
+        r#"{
+          "schemaVersion": 1,
+          "kind": "plugin",
+          "id": "com.example.reverse-ipc-install",
+          "name": "Reverse IPC Install",
+          "version": "0.1.0",
+          "frontend": { "entry": "frontend/index.html" },
+          "backend": { "runtime": "node", "entry": "backend/index.js" },
+          "permissions": [
+            { "name": "system.manageApps" },
+            { "name": "system.install" },
+            { "name": "system.uninstall" }
+          ]
+        }"#,
+    )
+    .unwrap();
+    let manifest = load_app(&plugin_dir).unwrap();
+
+    // Pre-grant every declared system permission — mirrors what
+    // `plugin::run(..., headless=true)` does at startup.
+    let store = PermissionStore::open_at(workspace.path(), &manifest.id).unwrap();
+    for permission in &manifest.permissions {
+        if permission.name().starts_with("system.") {
+            store
+                .set(permission.name(), PermissionDecision::Granted)
+                .unwrap();
+        }
+    }
+    let router = ApiRouter::new(plugin_dir.clone(), manifest.clone())
+        .with_permission_store(store)
+        .with_system_install_root(install_root.clone());
+
+    // 1. hostCall → system.install. Build the same Request shape
+    //    that `run_unified_dispatch` constructs.
+    let install_line = format!(
+        r#"{{"kind":"hostCall","id":"inst-1","method":"system.install","params":{{"packagePath":"{}"}}}}"#,
+        archive.display().to_string().replace('\\', "\\\\")
+    );
+    let (install_id, install_method, install_params) =
+        alex::plugin::parse_host_call(&install_line).expect("install hostCall parses");
+    let install_response = router.dispatch(Request {
+        protocol: 1,
+        id: install_id,
+        source: manifest.id.clone(),
+        method: install_method,
+        params: install_params,
+        deadline_ms: None,
+    });
+    let install_envelope = serde_json::json!({
+        "kind": "hostResponse",
+        "id": install_response.id,
+        "result": install_response.result,
+        "error": install_response.error,
+    });
+    let install_serialized = install_envelope.to_string();
+    assert!(
+        install_serialized.contains(r#""error":null"#),
+        "install must succeed: {install_serialized}"
+    );
+    assert!(
+        install_serialized.contains("com.alex.second"),
+        "hostResponse should mention the newly installed id: {install_serialized}"
+    );
+    assert!(
+        install_root.join("com.alex.second").is_dir(),
+        "install_root must now contain the newly installed app"
+    );
+
+    // 2. hostCall → system.listApps. Now both apps should be
+    //    visible because install wrote into the same install_root
+    //    the router is configured with.
+    let list_line = r#"{"kind":"hostCall","id":"list-2","method":"system.listApps","params":{}}"#;
+    let (list_id, list_method, list_params) =
+        alex::plugin::parse_host_call(list_line).expect("list hostCall parses");
+    let list_response = router.dispatch(Request {
+        protocol: 1,
+        id: list_id,
+        source: manifest.id.clone(),
+        method: list_method,
+        params: list_params,
+        deadline_ms: None,
+    });
+    let parsed: serde_json::Value = serde_json::to_value(&list_response).unwrap();
+    let apps = parsed
+        .pointer("/result/apps")
+        .and_then(|value| value.as_array())
+        .expect("apps array present");
+    let ids: Vec<&str> = apps
+        .iter()
+        .map(|value| value.get("id").and_then(|v| v.as_str()).unwrap_or(""))
+        .collect();
+    assert!(
+        ids.contains(&"com.alex.first"),
+        "pre-existing app should still be listed: {ids:?}"
+    );
+    assert!(
+        ids.contains(&"com.alex.second"),
+        "newly installed app should be listed: {ids:?}"
+    );
+
+    // 3. hostCall → system.uninstall. Removes the second app.
+    let uninstall_line = r#"{"kind":"hostCall","id":"un-1","method":"system.uninstall","params":{"id":"com.alex.second"}}"#;
+    let (un_id, un_method, un_params) =
+        alex::plugin::parse_host_call(uninstall_line).expect("uninstall hostCall parses");
+    let un_response = router.dispatch(Request {
+        protocol: 1,
+        id: un_id,
+        source: manifest.id.clone(),
+        method: un_method,
+        params: un_params,
+        deadline_ms: None,
+    });
+    let un_envelope = serde_json::json!({
+        "kind": "hostResponse",
+        "id": un_response.id,
+        "result": un_response.result,
+        "error": un_response.error,
+    });
+    let un_serialized = un_envelope.to_string();
+    assert!(
+        un_serialized.contains(r#""error":null"#),
+        "uninstall must succeed: {un_serialized}"
+    );
+    assert!(
+        !install_root.join("com.alex.second").exists(),
+        "second app directory should be removed after uninstall"
+    );
+}

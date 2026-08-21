@@ -42,6 +42,32 @@ pub enum Permission {
 }
 
 impl Permission {
+    /// Return the canonical permission name as written in `manifest.json`
+    /// (matches the serde `rename` on each variant, e.g. `"system.manageApps"`).
+    /// Used by `plugin::run` to pre-grant `system.*` permissions without
+    /// parsing the manifest twice.
+    pub fn name(&self) -> &'static str {
+        match self {
+            Permission::FilesystemRead { .. } => "filesystem.read",
+            Permission::FilesystemWrite { .. } => "filesystem.write",
+            Permission::DialogOpen => "dialog.open",
+            Permission::ClipboardRead => "clipboard.read",
+            Permission::ClipboardWrite => "clipboard.write",
+            Permission::OpenExternal { .. } => "system.openExternal",
+            Permission::WindowManage => "window.manage",
+            Permission::NotificationShow => "notification.show",
+            Permission::RuntimeInvoke => "runtime.invoke",
+            Permission::RuntimeManage => "runtime.manage",
+            Permission::MediaCamera => "media.camera",
+            Permission::MediaMicrophone => "media.microphone",
+            Permission::Geolocation => "geolocation",
+            Permission::SystemInstall => "system.install",
+            Permission::SystemUninstall => "system.uninstall",
+            Permission::SystemManageApps => "system.manageApps",
+            Permission::SystemManageExtensions => "system.manageExtensions",
+        }
+    }
+
     pub fn allows_path(&self, operation: &str, package_root: &Path, requested: &Path) -> bool {
         let roots = match (self, operation) {
             (Permission::FilesystemRead { paths }, "filesystem.read") => paths,

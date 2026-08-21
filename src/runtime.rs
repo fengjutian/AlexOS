@@ -59,7 +59,7 @@ pub enum RuntimeState {
 
 pub struct RuntimeProcess {
     child: Child,
-    stdin: ChildStdin,
+    stdin: Option<ChildStdin>,
     stdout: Option<BufReader<ChildStdout>>,
 }
 
@@ -369,13 +369,19 @@ impl RuntimeProcess {
         });
         Ok(Self {
             child,
-            stdin,
+            stdin: Some(stdin),
             stdout: Some(BufReader::new(stdout)),
         })
     }
 
     pub fn id(&self) -> u32 {
         self.child.id()
+    }
+    /// Take ownership of the child's stdin. Used by `plugin::run` to
+    /// send reverse-IPC responses back to a plugin that asked the host
+    /// a question. Returns `None` if stdin has already been taken.
+    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+        self.stdin.take()
     }
     /// Take ownership of the child's stdout. The caller (e.g.
     /// `plugin::run`) uses this to forward backend output to the host
@@ -399,8 +405,12 @@ impl RuntimeProcess {
                 "runtime already exited with {status}"
             )));
         }
+        let stdin = self
+            .stdin
+            .as_mut()
+            .ok_or_else(|| RuntimeError::Protocol("runtime stdin already taken".into()))?;
         serde_json::to_writer(
-            &mut self.stdin,
+            &mut *stdin,
             &BackendRequest {
                 protocol: 1,
                 id,
@@ -409,8 +419,8 @@ impl RuntimeProcess {
             },
         )
         .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
-        self.stdin.write_all(b"\n")?;
-        self.stdin.flush()?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()?;
         let mut line = String::new();
         let stdout = self
             .stdout
@@ -452,9 +462,10 @@ impl RuntimeProcess {
         if self.child.try_wait()?.is_some() {
             return Ok(());
         }
-        self.stdin
-            .write_all(b"{\"protocol\":1,\"type\":\"shutdown\"}\n")?;
-        self.stdin.flush()?;
+        if let Some(stdin) = self.stdin.as_mut() {
+            stdin.write_all(b"{\"protocol\":1,\"type\":\"shutdown\"}\n")?;
+            stdin.flush()?;
+        }
         let deadline = Instant::now() + timeout;
         while Instant::now() < deadline {
             if self.child.try_wait()?.is_some() {
