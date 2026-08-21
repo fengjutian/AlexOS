@@ -8,6 +8,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
+    authorization::{PermissionDecision, PermissionStore},
     ipc::{PROTOCOL_VERSION, Request, Response},
     manifest::AppManifest,
     native,
@@ -22,6 +23,7 @@ pub struct ApiRouter {
     package_root: PathBuf,
     manifest: AppManifest,
     runtime: Option<RuntimeHandle>,
+    permission_store: Option<PermissionStore>,
 }
 
 impl ApiRouter {
@@ -31,11 +33,17 @@ impl ApiRouter {
             package_root,
             manifest,
             runtime: None,
+            permission_store: None,
         }
     }
 
     pub fn with_runtime(mut self, runtime: RuntimeHandle) -> Self {
         self.runtime = Some(runtime);
+        self
+    }
+
+    pub fn with_permission_store(mut self, store: PermissionStore) -> Self {
+        self.permission_store = Some(store);
         self
     }
 
@@ -103,9 +111,11 @@ impl ApiRouter {
     fn read_text(&self, params: &Value) -> ApiResult {
         let params: PathParams = parse_params(params)?;
         let requested = self.resolve_requested(&params.path);
-        if !self.manifest.permissions.iter().any(|permission| {
-            permission.allows_path("filesystem.read", &self.package_root, &requested)
-        }) {
+        if !self.permission_granted("filesystem.read")
+            || !self.manifest.permissions.iter().any(|permission| {
+                permission.allows_path("filesystem.read", &self.package_root, &requested)
+            })
+        {
             return Err(("PERMISSION_DENIED", "filesystem.read is not allowed".into()));
         }
         fs::read_to_string(&requested)
@@ -116,9 +126,11 @@ impl ApiRouter {
     fn write_text(&self, params: &Value) -> ApiResult {
         let params: WriteParams = parse_params(params)?;
         let requested = self.resolve_requested(&params.path);
-        if !self.manifest.permissions.iter().any(|permission| {
-            permission.allows_path("filesystem.write", &self.package_root, &requested)
-        }) {
+        if !self.permission_granted("filesystem.write")
+            || !self.manifest.permissions.iter().any(|permission| {
+                permission.allows_path("filesystem.write", &self.package_root, &requested)
+            })
+        {
             return Err((
                 "PERMISSION_DENIED",
                 "filesystem.write is not allowed".into(),
@@ -135,11 +147,12 @@ impl ApiRouter {
         params: &Value,
         deadline_ms: Option<u64>,
     ) -> ApiResult {
-        if !self
-            .manifest
-            .permissions
-            .iter()
-            .any(|permission| matches!(permission, Permission::RuntimeInvoke))
+        if !self.permission_granted("runtime.invoke")
+            || !self
+                .manifest
+                .permissions
+                .iter()
+                .any(|permission| matches!(permission, Permission::RuntimeInvoke))
         {
             return Err(("PERMISSION_DENIED", "runtime.invoke is not allowed".into()));
         }
@@ -218,6 +231,12 @@ impl ApiRouter {
                 format!("system.openExternal is not allowed for {origin}"),
             ));
         }
+        if !self.permission_granted("system.openExternal") {
+            return Err((
+                "PERMISSION_DENIED",
+                "system.openExternal was revoked".into(),
+            ));
+        }
         native::open_external(parsed.as_str())
             .map(|_| json!({ "opened": true }))
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
@@ -228,12 +247,12 @@ impl ApiRouter {
         predicate: impl Fn(&Permission) -> bool,
         name: &'static str,
     ) -> Result<(), (&'static str, String)> {
-        self.manifest
-            .permissions
-            .iter()
-            .any(predicate)
-            .then_some(())
-            .ok_or(("PERMISSION_DENIED", format!("{name} is not allowed")))
+        let declared =
+            self.manifest.permissions.iter().any(predicate) && self.permission_granted(name);
+        declared.then_some(()).ok_or((
+            "PERMISSION_DENIED",
+            format!("{name} is not allowed or was revoked"),
+        ))
     }
 
     fn runtime_status(&self) -> ApiResult {
@@ -267,12 +286,22 @@ impl ApiRouter {
     }
 
     fn require_runtime_manage(&self) -> Result<(), (&'static str, String)> {
-        self.manifest
+        let allowed = self
+            .manifest
             .permissions
             .iter()
             .any(|permission| matches!(permission, Permission::RuntimeManage))
-            .then_some(())
-            .ok_or(("PERMISSION_DENIED", "runtime.manage is not allowed".into()))
+            && self.permission_granted("runtime.manage");
+        allowed.then_some(()).ok_or((
+            "PERMISSION_DENIED",
+            "runtime.manage is not allowed or was revoked".into(),
+        ))
+    }
+
+    fn permission_granted(&self, name: &str) -> bool {
+        self.permission_store
+            .as_ref()
+            .is_none_or(|store| store.decision(name) == PermissionDecision::Granted)
     }
 
     fn resolve_requested(&self, path: &str) -> PathBuf {

@@ -32,7 +32,10 @@ mod windows {
         http::{Response as HttpResponse, header::CONTENT_TYPE},
     };
 
-    use crate::{api::ApiRouter, manifest::AppManifest, runtime::RuntimeHandle};
+    use crate::{
+        api::ApiRouter, authorization::PermissionStore, manifest::AppManifest,
+        runtime::RuntimeHandle,
+    };
 
     const BRIDGE: &str = r#"
       (() => {
@@ -80,7 +83,9 @@ mod windows {
             .with_title(&manifest.name)
             .build(&event_loop)?;
 
-        let mut router = ApiRouter::new(package_root.to_path_buf(), manifest.clone());
+        let permissions = PermissionStore::for_app(&manifest.id)?;
+        let mut router = ApiRouter::new(package_root.to_path_buf(), manifest.clone())
+            .with_permission_store(permissions);
         if let Some(backend) = &manifest.backend {
             router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
         }

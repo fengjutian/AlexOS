@@ -2,6 +2,7 @@ use std::{fs, io::Write};
 
 use alex::{
     api::ApiRouter,
+    authorization::{PermissionDecision, PermissionStore},
     ipc::{self, Request},
     load_app, package,
     permission::Permission,
@@ -244,4 +245,38 @@ fn signature_required_rejects_unsigned_packages() {
         .unwrap_err()
         .to_string();
     assert!(error.contains("unsigned"));
+}
+
+#[test]
+fn persisted_permission_revocation_is_enforced_and_audited() {
+    let workspace = tempfile::tempdir().unwrap();
+    let store = PermissionStore::open_at(workspace.path(), "com.alex.hello").unwrap();
+    store
+        .set("filesystem.read", PermissionDecision::Denied)
+        .unwrap();
+    let reopened = PermissionStore::open_at(workspace.path(), "com.alex.hello").unwrap();
+    assert_eq!(
+        reopened.decision("filesystem.read"),
+        PermissionDecision::Denied
+    );
+
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    let response = ApiRouter::new(root, app)
+        .with_permission_store(reopened)
+        .dispatch(Request {
+            protocol: 1,
+            id: "revoked".into(),
+            source: "com.alex.hello".into(),
+            method: "filesystem.readText".into(),
+            params: json!({ "path": "data/message.txt" }),
+            deadline_ms: None,
+        });
+    assert_eq!(response.error.unwrap().code, "PERMISSION_DENIED");
+    assert!(
+        workspace
+            .path()
+            .join("permissions/com.alex.hello.audit.jsonl")
+            .is_file()
+    );
 }

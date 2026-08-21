@@ -27,6 +27,8 @@ cargo run -- install target/hello-signed.alex --root target/apps --require-signa
 cargo run -- install target/hello.alex --root target/apps
 cargo run -- list --root target/apps
 cargo run -- uninstall com.alex.hello --root target/apps
+cargo run -- permissions revoke com.alex.hello runtime.invoke --root target/permissions
+cargo run -- permissions grant com.alex.hello runtime.invoke --root target/permissions
 $env:ALEX_NODE = "C:\path\to\node.exe"
 cargo run -- run examples/hello
 cargo test

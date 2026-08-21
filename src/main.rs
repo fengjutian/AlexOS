@@ -2,6 +2,7 @@ use std::{path::PathBuf, thread, time::Duration};
 
 use alex::{
     api::ApiRouter,
+    authorization::{PermissionDecision, PermissionStore},
     ipc::Request,
     load_app, package,
     runtime::{RuntimeHandle, RuntimeProcess},
@@ -61,6 +62,32 @@ enum Commands {
     /// Uninstall an application after validating its identity and path.
     Uninstall {
         id: String,
+        #[arg(long)]
+        root: PathBuf,
+    },
+    /// Inspect or change persisted application permission decisions.
+    Permissions {
+        #[command(subcommand)]
+        action: PermissionCommands,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum PermissionCommands {
+    List {
+        id: String,
+        #[arg(long)]
+        root: PathBuf,
+    },
+    Grant {
+        id: String,
+        permission: String,
+        #[arg(long)]
+        root: PathBuf,
+    },
+    Revoke {
+        id: String,
+        permission: String,
         #[arg(long)]
         root: PathBuf,
     },
@@ -171,6 +198,32 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let removed = package::uninstall(&id, &root)?;
             println!("uninstalled {} ({})", id, removed.display());
         }
+        Commands::Permissions { action } => match action {
+            PermissionCommands::List { id, root } => {
+                let store = PermissionStore::open_at(&root, &id)?;
+                for (permission, decision) in store.list() {
+                    println!("{}\t{:?}", permission, decision);
+                }
+            }
+            PermissionCommands::Grant {
+                id,
+                permission,
+                root,
+            } => {
+                PermissionStore::open_at(&root, &id)?
+                    .set(&permission, PermissionDecision::Granted)?;
+                println!("granted {} to {}", permission, id);
+            }
+            PermissionCommands::Revoke {
+                id,
+                permission,
+                root,
+            } => {
+                PermissionStore::open_at(&root, &id)?
+                    .set(&permission, PermissionDecision::Denied)?;
+                println!("revoked {} from {}", permission, id);
+            }
+        },
     }
     Ok(())
 }
