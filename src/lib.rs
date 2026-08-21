@@ -7,6 +7,7 @@ pub mod ipc;
 pub mod manager;
 pub mod manager_webview;
 pub mod manifest;
+pub mod menu_tray;
 pub mod native;
 pub mod package;
 pub mod permission;
@@ -18,6 +19,7 @@ pub mod storage;
 pub mod trust;
 pub mod update;
 pub mod watcher;
+pub mod windows;
 
 use std::path::{Path, PathBuf};
 

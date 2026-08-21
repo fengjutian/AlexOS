@@ -15,11 +15,13 @@ use crate::{
     file_token::{FileOp, FileTokenStore},
     ipc::{PROTOCOL_VERSION, Request, Response, SubscribeRequest, UnsubscribeRequest},
     manifest::AppManifest,
+    menu_tray::{MenuStore, MenuTemplate, TraySpec},
     native::{self, DialogFilter, HostCommand, NativeHost, OpenDialogSpec, SaveDialogSpec},
     permission::Permission,
     runtime::{RuntimeError, RuntimeHandle},
     storage::AppStorage,
     watcher::WatcherRegistry,
+    windows::{CreateWindowSpec, WindowBounds, WindowId, WindowRegistry},
 };
 
 const MAX_IPC_MESSAGE_BYTES: usize = 1024 * 1024;
@@ -43,6 +45,8 @@ pub struct ApiRouter {
     file_tokens: Arc<FileTokenStore>,
     storage: Option<AppStorage>,
     watcher_registry: Option<Arc<WatcherRegistry>>,
+    windows: Arc<WindowRegistry>,
+    menu_store: Arc<MenuStore>,
     inflight: Arc<Mutex<InflightTracker>>,
 }
 
@@ -88,6 +92,8 @@ impl ApiRouter {
             .ok()
             .and_then(|dirs| AppStorage::open(&dirs.data).ok());
         let watcher_registry = WatcherRegistry::new(Arc::clone(&bus));
+        let windows = WindowRegistry::new();
+        let menu_store = MenuStore::new();
         Self {
             package_root,
             manifest,
@@ -99,6 +105,8 @@ impl ApiRouter {
             file_tokens: tokens,
             storage,
             watcher_registry: Some(watcher_registry),
+            windows,
+            menu_store,
             inflight: Arc::new(Mutex::new(InflightTracker::default())),
         }
     }
@@ -140,6 +148,8 @@ impl ApiRouter {
     pub fn shutdown(&self) {
         self.event_bus.clear();
         self.file_tokens.revoke_all(&self.manifest.id);
+        self.windows.drop_app(&self.manifest.id);
+        self.menu_store.drop_app(&self.manifest.id);
         let mut tracker = self.inflight.lock().expect("inflight lock poisoned");
         for token in tracker.pending.values() {
             token.cancel();
@@ -253,6 +263,21 @@ impl ApiRouter {
             "window.minimize" => self.window_command(HostCommand::MinimizeWindow),
             "window.maximize" => self.window_command(HostCommand::MaximizeWindow),
             "window.close" => self.window_command(HostCommand::CloseWindow),
+            "window.create" => self.window_create(&request.params),
+            "window.list" => self.window_list(),
+            "window.getBounds" => self.window_get_bounds(&request.params),
+            "window.setBounds" => self.window_set_bounds(&request.params),
+            "window.setFullscreen" => self.window_set_fullscreen(&request.params),
+            "window.isFullscreen" => self.window_is_fullscreen(&request.params),
+            "window.destroy" => self.window_destroy(&request.params),
+            // ---- menu / tray / shortcut ------------------------------------
+            "menu.setApplicationMenu" => self.menu_set_application_menu(&request.params),
+            "menu.setContextMenu" => self.menu_set_context_menu(&request.params),
+            "tray.create" => self.tray_create(&request.params),
+            "tray.destroy" => self.tray_destroy(&request.params),
+            "shortcuts.register" => self.shortcuts_register(&request.params),
+            "shortcuts.unregister" => self.shortcuts_unregister(&request.params),
+            "shortcuts.list" => self.shortcuts_list(),
             // ---- notification ---------------------------------------------
             "notification.show" => self.notification_show(&request.params),
             // ---- runtime ---------------------------------------------------
@@ -1284,6 +1309,208 @@ impl ApiRouter {
             .execute(command)
             .map(|_| json!({ "accepted": true }))
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
+    fn window_create(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowOpen),
+            "window.open",
+        )?;
+        let spec: CreateWindowSpec = parse_params(params)?;
+        self.windows
+            .create(&self.manifest.id, spec)
+            .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+    }
+
+    fn window_list(&self) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowOpen),
+            "window.open",
+        )?;
+        let list = self.windows.list(&self.manifest.id);
+        Ok(json!({ "windows": list }))
+    }
+
+    fn parse_window_id(&self, params: &Value) -> Result<WindowId, (&'static str, String)> {
+        let raw = params
+            .get("windowId")
+            .and_then(|v| v.as_u64())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `windowId`".to_owned()))?;
+        Ok(WindowId(raw))
+    }
+
+    fn window_get_bounds(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowManage),
+            "window.manage",
+        )?;
+        let id = self.parse_window_id(params)?;
+        self.windows
+            .get(&self.manifest.id, id)
+            .map(|info| {
+                json!({
+                    "windowId": info.id.raw(),
+                    "x": info.x,
+                    "y": info.y,
+                    "width": info.width,
+                    "height": info.height,
+                })
+            })
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+    }
+
+    fn window_set_bounds(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowManage),
+            "window.manage",
+        )?;
+        let id = self.parse_window_id(params)?;
+        let bounds: WindowBounds = parse_params(params)?;
+        self.windows
+            .set_bounds(&self.manifest.id, id, bounds)
+            .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+    }
+
+    fn window_set_fullscreen(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowManage),
+            "window.manage",
+        )?;
+        let id = self.parse_window_id(params)?;
+        let value = params
+            .get("fullscreen")
+            .and_then(|v| v.as_bool())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `fullscreen`".to_owned()))?;
+        self.windows
+            .set_fullscreen(&self.manifest.id, id, value)
+            .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+    }
+
+    fn window_is_fullscreen(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowManage),
+            "window.manage",
+        )?;
+        let id = self.parse_window_id(params)?;
+        self.windows
+            .get(&self.manifest.id, id)
+            .map(|info| json!({ "fullscreen": info.fullscreen }))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+    }
+
+    fn window_destroy(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowOpen),
+            "window.open",
+        )?;
+        let id = self.parse_window_id(params)?;
+        self.windows
+            .destroy(&self.manifest.id, id)
+            .map(|_| json!({ "destroyed": true }))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+    }
+
+    fn menu_set_application_menu(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::MenuManage),
+            "menu.manage",
+        )?;
+        let template: MenuTemplate = parse_params(params)?;
+        self.menu_store
+            .set_application_menu(&self.manifest.id, template)
+            .map(|_| json!({ "applied": true }))
+            .map_err(|error| ("MENU_ERROR", error.to_string()))
+    }
+
+    fn menu_set_context_menu(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::MenuManage),
+            "menu.manage",
+        )?;
+        let template: MenuTemplate = parse_params(params)?;
+        self.menu_store
+            .set_context_menu(&self.manifest.id, template)
+            .map(|_| json!({ "applied": true }))
+            .map_err(|error| ("MENU_ERROR", error.to_string()))
+    }
+
+    fn tray_create(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::TrayManage),
+            "tray.manage",
+        )?;
+        let spec: TraySpec = parse_params(params)?;
+        self.menu_store
+            .create_tray(&self.manifest.id, spec)
+            .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
+            .map_err(|error| ("TRAY_ERROR", error.to_string()))
+    }
+
+    fn tray_destroy(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::TrayManage),
+            "tray.manage",
+        )?;
+        let tray_id: String = parse_params(params)?;
+        self.menu_store
+            .destroy_tray(&self.manifest.id, &tray_id)
+            .map(|_| json!({ "destroyed": true }))
+            .map_err(|error| ("TRAY_ERROR", error.to_string()))
+    }
+
+    fn shortcuts_register(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::ShortcutRegister),
+            "shortcut.register",
+        )?;
+        let accelerator: String = parse_params(params)?;
+        self.menu_store
+            .register_shortcut(&self.manifest.id, &accelerator)
+            .map(|_| json!({ "registered": true }))
+            .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))
+    }
+
+    fn shortcuts_unregister(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::ShortcutRegister),
+            "shortcut.register",
+        )?;
+        // For symmetry with `register`, we just remove the
+        // accelerator from the app's set. The host keeps a
+        // global "last write wins" view, so a previously
+        // registered app's hotkey comes back the moment
+        // this app drops it. We expose the same input
+        // shape as `register`.
+        let accelerator: String = parse_params(params)?;
+        let normalized = crate::menu_tray::normalize_accelerator_public(&accelerator)
+            .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
+        let mut state = self
+            .menu_store
+            .state
+            .lock()
+            .expect("menu lock poisoned");
+        if state
+            .shortcuts
+            .get(&normalized)
+            .is_some_and(|owner| owner == &self.manifest.id)
+        {
+            state.shortcuts.remove(&normalized);
+            if let Some(list) = state.app_shortcuts.get_mut(&self.manifest.id) {
+                list.retain(|accel| accel != &normalized);
+            }
+        }
+        Ok(json!({ "unregistered": true }))
+    }
+
+    fn shortcuts_list(&self) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::ShortcutRegister),
+            "shortcut.register",
+        )?;
+        Ok(json!({ "shortcuts": self.menu_store.app_shortcuts(&self.manifest.id) }))
     }
 
     // ------------------------------------------------------------------
