@@ -54,6 +54,81 @@ fn backoff_for(restart_count: u32) -> Duration {
     BACKOFF_SCHEDULE[idx]
 }
 
+/// The default restart policy applied when the manifest does not
+/// declare one. Matches the docstring on `RestartPolicy` in
+/// `src/manifest.rs`: `on-failure` with a 5-retry cap, which gives
+/// roughly 31 seconds of consecutive failure tolerance before the
+/// host gives up and reports the runtime as `Crashed`.
+#[allow(dead_code)]
+fn default_restart_policy() -> crate::manifest::RestartPolicy {
+    crate::manifest::RestartPolicy {
+        policy: "on-failure".into(),
+        max_retries: 5,
+    }
+}
+
+/// Resolve the manifest's restart policy (if any) to a concrete one
+/// the supervisor can use without unwrapping `Option` everywhere.
+#[allow(dead_code)]
+fn effective_policy(spec: &RuntimeSpec) -> crate::manifest::RestartPolicy {
+    spec.backend.restart.clone().unwrap_or_else(default_restart_policy)
+}
+
+/// True when the policy allows a restart given the previous exit
+/// code. `on-failure` (the default) only restarts on non-zero exits;
+/// `never` never restarts; `always` restarts regardless; unknown
+/// policy names fall back to `on-failure` so a future manifest
+/// version that introduces a new policy name does not silently
+/// disable restarts.
+#[allow(dead_code)]
+fn policy_allows_restart(policy: &crate::manifest::RestartPolicy, last_exit_code: Option<i32>) -> bool {
+    match policy.policy.as_str() {
+        "never" => false,
+        "always" => true,
+        // "on-failure" and any unknown future name: restart on
+        // failure. A `code()` of `None` is the "killed by signal"
+        // case on Unix; we treat that as a failure too.
+        _ => last_exit_code != Some(0),
+    }
+}
+
+/// Decide whether the supervisor should sleep and then start a
+/// fresh process. Returns `Ok(duration)` when restart is allowed
+/// (the caller should `thread::sleep(duration)` before launching) or
+/// `Err(reason)` when the host policy says stop. The error string
+/// becomes the runtime's `last_error` so the UI can surface it.
+#[allow(dead_code)]
+fn compute_backoff(
+    policy: &crate::manifest::RestartPolicy,
+    restart_count: u32,
+    last_exit_at: &Option<Instant>,
+    last_exit_code: Option<i32>,
+) -> Result<Duration, String> {
+    if !policy_allows_restart(policy, last_exit_code) {
+        return Err(format!(
+            "restart denied by policy ({}) after exit code {:?}",
+            policy.policy, last_exit_code
+        ));
+    }
+    if restart_count >= policy.max_retries {
+        return Err(format!(
+            "max retries ({}) exceeded",
+            policy.max_retries
+        ));
+    }
+    Ok(match last_exit_at {
+        Some(last) => {
+            let wait = backoff_for(restart_count);
+            // If enough time has passed since the last crash, no
+            // extra sleep is needed. The schedule is the *minimum*
+            // gap; cold start (None) and post-grace periods collapse
+            // to zero.
+            wait.saturating_sub(last.elapsed())
+        }
+        None => Duration::ZERO,
+    })
+}
+
 fn shutdown_grace_for(endpoint: &Option<ServiceEndpoint>) -> Duration {
     if endpoint.is_some() {
         SERVICE_SHUTDOWN_GRACE
@@ -438,6 +513,7 @@ fn runtime_manager(
     let mut restart_count: u32 = 0;
     let mut last_error: Option<String> = None;
     let mut last_exit_at: Option<Instant> = None;
+    let mut last_exit_code: Option<i32> = None;
     while let Ok(command) = rx.recv() {
         match command {
             RuntimeCommand::Invoke {
@@ -447,22 +523,38 @@ fn runtime_manager(
                 response,
             } => {
                 if process.is_none() {
-                    sleep_for_backoff(restart_count, &last_exit_at);
-                    match RuntimeProcess::start_with_spec(
-                        &spec,
-                        spec.data_dir.as_deref(),
-                        spec.cache_dir.as_deref(),
-                        Some(&log_dir),
-                        Arc::clone(&logs),
+                    let policy = effective_policy(&spec);
+                    match compute_backoff(
+                        &policy,
+                        restart_count,
+                        &last_exit_at,
+                        last_exit_code,
                     ) {
-                        Ok((value, new_endpoint)) => {
-                            current_pid.store(value.id(), Ordering::Release);
-                            process = Some(value);
-                            endpoint = new_endpoint;
-                            restart_count += 1;
-                            last_error = None;
+                        Ok(wait) => {
+                            if !wait.is_zero() {
+                                thread::sleep(wait);
+                            }
+                            match RuntimeProcess::start_with_spec(
+                                &spec,
+                                spec.data_dir.as_deref(),
+                                spec.cache_dir.as_deref(),
+                                Some(&log_dir),
+                                Arc::clone(&logs),
+                            ) {
+                                Ok((value, new_endpoint)) => {
+                                    current_pid.store(value.id(), Ordering::Release);
+                                    process = Some(value);
+                                    endpoint = new_endpoint;
+                                    restart_count += 1;
+                                    last_error = None;
+                                    last_exit_code = None;
+                                }
+                                Err(error) => last_error = Some(error.to_string()),
+                            }
                         }
-                        Err(error) => last_error = Some(error.to_string()),
+                        Err(reason) => {
+                            last_error = Some(reason);
+                        }
                     }
                 }
                 if endpoint.is_some() {
@@ -497,7 +589,7 @@ fn runtime_manager(
                 let _ = response.send(result);
             }
             RuntimeCommand::Status { response } => {
-                refresh(&mut process, &mut last_error, &mut last_exit_at);
+                refresh(&mut process, &mut last_error, &mut last_exit_at, &mut last_exit_code);
                 current_pid.store(
                     process.as_ref().map(RuntimeProcess::id).unwrap_or(0),
                     Ordering::Release,
@@ -551,27 +643,26 @@ fn runtime_manager(
     current_pid.store(0, Ordering::Release);
 }
 
-fn sleep_for_backoff(restart_count: u32, last_exit_at: &Option<Instant>) {
-    let Some(last) = last_exit_at else {
-        return;
-    };
-    let wait = backoff_for(restart_count);
-    let elapsed = last.elapsed();
-    if elapsed < wait {
-        thread::sleep(wait - elapsed);
-    }
+fn sleep_for_backoff(_restart_count: u32, _last_exit_at: &Option<Instant>) {
+    // Replaced by `compute_backoff` (which now also honours the
+    // manifest's `restart` policy). Kept as a stub so old call
+    // sites compile while the migration is in flight; remove once
+    // nothing references it any more.
 }
+
 
 fn refresh(
     process: &mut Option<RuntimeProcess>,
     last_error: &mut Option<String>,
     last_exit_at: &mut Option<Instant>,
+    last_exit_code: &mut Option<i32>,
 ) {
     if let Some(status) = process
         .as_mut()
         .and_then(|runtime| runtime.try_wait().ok().flatten())
     {
         *last_error = Some(format!("runtime exited with {status}"));
+        *last_exit_code = status.code();
         *process = None;
         *last_exit_at = Some(Instant::now());
     }

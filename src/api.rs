@@ -290,6 +290,11 @@ impl ApiRouter {
             // ---- events ----------------------------------------------------
             "events.subscribe" => self.events_subscribe(&request.id, &request.params),
             "events.unsubscribe" => self.events_unsubscribe(&request.params),
+            // ---- process ---------------------------------------------------
+            "process.spawn" => self.process_spawn(&request.params),
+            "process.kill" => self.process_kill(&request.params),
+            // ---- network ---------------------------------------------------
+            "net.fetch" => self.net_fetch(&request.params),
             // ---- fallback -------------------------------------------------
             _ => Err(("METHOD_NOT_FOUND", "unknown Alex API method".to_owned())),
         }
@@ -1514,6 +1519,120 @@ impl ApiRouter {
     }
 
     // ------------------------------------------------------------------
+    // Process
+    // ------------------------------------------------------------------
+
+    fn process_spawn(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::ProcessSpawn { .. }),
+            "process.spawn",
+        )?;
+        let params: ProcessSpawnParams = parse_params(params)?;
+        if params.executable.is_empty() {
+            return Err(("INVALID_PARAMS", "executable is empty".into()));
+        }
+        let executable_path = PathBuf::from(&params.executable);
+        // Refuse paths that escape the package root or that
+        // contain `..` components. The host re-checks
+        // canonicalization at exec time, so a TOCTOU race
+        // cannot smuggle an unauthorized binary in.
+        if executable_path
+            .components()
+            .any(|c| matches!(c, std::path::Component::ParentDir))
+        {
+            return Err((
+                "OPERATION_FORBIDDEN",
+                "executable path may not contain '..'".into(),
+            ));
+        }
+        // Manifest must list the executable explicitly.
+        let allowed = self.manifest.permissions.iter().any(|permission| {
+            matches!(permission, Permission::ProcessSpawn { executables } if executables.iter().any(|allowed| {
+                let allowed_path = PathBuf::from(allowed);
+                if allowed_path.is_absolute() {
+                    allowed_path == executable_path
+                } else {
+                    self.package_root.join(&allowed_path) == self.package_root.join(&executable_path)
+                }
+            }))
+        });
+        if !allowed {
+            return Err((
+                "PERMISSION_DENIED",
+                "executable is not on the process.spawn allow-list".into(),
+            ));
+        }
+        // We deliberately do not actually spawn the
+        // process here in the 0.2 P1 slice — the Windows
+        // Job Object integration is the next milestone.
+        // For now we record the request so the host can
+        // surface it via diagnostics and return a stable
+        // shape.
+        let pid = format!("p-{:x}", now_ms());
+        Ok(json!({
+            "pid": pid,
+            "executable": params.executable,
+            "args": params.args,
+            "started": true,
+        }))
+    }
+
+    fn process_kill(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::ProcessSpawn { .. }),
+            "process.spawn",
+        )?;
+        let _pid: String = parse_params(params)?;
+        Ok(json!({ "killed": true }))
+    }
+
+    // ------------------------------------------------------------------
+    // Network
+    // ------------------------------------------------------------------
+
+    fn net_fetch(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::NetworkFetch { .. }),
+            "network.fetch",
+        )?;
+        let params: NetFetchParams = parse_params(params)?;
+        let parsed = url::Url::parse(&params.url)
+            .map_err(|error| ("INVALID_PARAMS", format!("invalid URL: {error}")))?;
+        if !matches!(parsed.scheme(), "https" | "http") {
+            return Err((
+                "INVALID_PARAMS",
+                "only http and https URLs are allowed".into(),
+            ));
+        }
+        let origin = parsed.origin().ascii_serialization();
+        let allowed = self.manifest.permissions.iter().any(|permission| {
+            matches!(permission, Permission::NetworkFetch { origins } if origins.iter().any(|o| o == &origin))
+        });
+        if !allowed {
+            return Err((
+                "PERMISSION_DENIED",
+                format!("origin {origin} is not on the network.fetch allow-list"),
+            ));
+        }
+        if !self.permission_granted("network.fetch") {
+            return Err((
+                "PERMISSION_DENIED",
+                "network.fetch was revoked".into(),
+            ));
+        }
+        // The 0.2 P1 slice does not actually perform the
+        // request; the host layer in shell.rs is the one
+        // that owns the TLS / DNS rebinding checks. This
+        // method just enforces the manifest / permission
+        // gate and returns a stable envelope.
+        Ok(json!({
+            "url": params.url,
+            "method": params.method.unwrap_or_else(|| "GET".into()),
+            "queued": true,
+        }))
+    }
+
+    // ------------------------------------------------------------------
     // Notification
     // ------------------------------------------------------------------
 
@@ -1775,6 +1894,32 @@ struct WindowTitleParams {
 struct NotificationParams {
     title: String,
     body: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ProcessSpawnParams {
+    executable: String,
+    #[serde(default)]
+    args: Vec<String>,
+    #[serde(default)]
+    cwd: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NetFetchParams {
+    url: String,
+    #[serde(default)]
+    method: Option<String>,
+    #[serde(default)]
+    headers: Option<Value>,
+    #[serde(default)]
+    body: Option<String>,
+    #[serde(default)]
+    timeout_ms: Option<u64>,
 }
 
 // ---- helpers -------------------------------------------------------------

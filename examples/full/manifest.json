@@ -32,7 +32,11 @@
     { "name": "storage" },
     { "name": "paths" },
     { "name": "window.manage" },
+    { "name": "window.open" },
     { "name": "notification.show" },
+    { "name": "menu.manage" },
+    { "name": "tray.manage" },
+    { "name": "shortcut.register" },
     { "name": "process.spawn", "executables": ["tools/converter.exe"] },
     { "name": "runtime.invoke" },
     { "name": "runtime.manage" }

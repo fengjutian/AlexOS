@@ -98,7 +98,7 @@ const MAX_LABEL_BYTES: usize = 200;
 const MAX_ACCELERATOR_BYTES: usize = 64;
 
 pub struct MenuStore {
-    state: Mutex<MenuState>,
+    pub(crate) state: Mutex<MenuState>,
 }
 
 #[derive(Default)]
@@ -113,16 +113,16 @@ pub struct MenuState {
     pub(crate) app_shortcuts: HashMap<String, Vec<String>>,
 }
 
-struct AppMenu {
-    app_id: String,
+pub struct AppMenu {
+    pub(crate) app_id: String,
     #[allow(dead_code)]
-    template: MenuTemplate,
+    pub(crate) template: MenuTemplate,
 }
 
-struct AppTray {
-    app_id: String,
+pub struct AppTray {
+    pub(crate) app_id: String,
     #[allow(dead_code)]
-    info: TrayInfo,
+    pub(crate) info: TrayInfo,
 }
 
 impl MenuStore {
@@ -295,6 +295,10 @@ fn is_safe_icon(path: &str) -> bool {
         return url.to_file_path().is_ok();
     }
     !path.contains("..") && !path.starts_with('/') && !path.contains(':')
+}
+
+pub fn normalize_accelerator_public(accelerator: &str) -> Result<String, MenuError> {
+    normalize_accelerator(accelerator)
 }
 
 fn normalize_accelerator(accelerator: &str) -> Result<String, MenuError> {
