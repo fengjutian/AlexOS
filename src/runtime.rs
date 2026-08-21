@@ -483,7 +483,11 @@ impl Drop for RuntimeProcess {
     }
 }
 
-fn discover_node() -> Option<PathBuf> {
+/// Locate the Node.js executable. Honours the `ALEX_NODE` env override
+/// first, then falls back to a `PATH` lookup. Exposed so tests can
+/// detect a missing runtime and skip integration tests that need it
+/// instead of failing with `NodeNotFound`.
+pub fn discover_node() -> Option<PathBuf> {
     if let Some(path) = std::env::var_os("ALEX_NODE") {
         let path = PathBuf::from(path);
         if path.is_file() {

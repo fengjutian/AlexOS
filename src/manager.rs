@@ -33,6 +33,7 @@ use crate::{
     package::PackageError,
     permission::Permission,
     runtime::{RuntimeHandle, RuntimeState, RuntimeStatus},
+    trust,
 };
 
 const REGISTRY_FILENAME: &str = "registry.json";
@@ -401,7 +402,14 @@ impl AppManager for LocalAppManager {
         )?;
         let manifest = load_app(&installed)?;
         let now = iso8601_now();
-        let publisher_fingerprint = package::signer_public_key(package_path)?;
+        // Record the trust-store fingerprint (NOT the raw public key)
+        // so the UI can display a short identifier and match it
+        // against `alex trust list` output directly. An invalid key
+        // (e.g. truncated base64) yields `None` instead of an install
+        // error — the package's signature metadata is still on disk
+        // and the signed-trust state is computed in M7 below.
+        let publisher_fingerprint = package::signer_public_key(package_path)?
+            .and_then(|key| trust::fingerprint(&key).ok());
         let signed = publisher_fingerprint.is_some();
         let record = AppRecord {
             install_at: now.clone(),

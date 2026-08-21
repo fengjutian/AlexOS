@@ -859,6 +859,15 @@ fn system_request_permission_rejects_unknown_kind() {
 
 #[test]
 fn runtime_supervisor_rejects_double_launch() {
+    // The supervisor `launch` path spawns a real Node child process, so
+    // on a machine without Node this would fail with `NodeNotFound`
+    // rather than the intended `AlreadyRunning`. Skip cleanly when
+    // Node is unavailable so CI without Node (or a developer's
+    // Rust-only setup) still passes.
+    if alex::runtime::discover_node().is_none() {
+        eprintln!("skipping: Node.js not available on this machine");
+        return;
+    }
     let workspace = tempfile::tempdir().unwrap();
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
     let archive = workspace.path().join("hello.alex");

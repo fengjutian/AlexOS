@@ -81,7 +81,12 @@ impl TrustStore {
     }
 }
 
-fn fingerprint(public_key: &str) -> Result<String, TrustError> {
+/// Compute the canonical fingerprint for an Ed25519 public key (the
+/// 32 raw bytes, base64-encoded). This is the same value the trust
+/// store keys its publishers by; exposing it lets the app manager
+/// store the fingerprint next to an install (instead of the full
+/// public key) and match the two with a simple string compare.
+pub fn fingerprint(public_key: &str) -> Result<String, TrustError> {
     let bytes = BASE64
         .decode(public_key)
         .map_err(|error| TrustError::InvalidKey(error.to_string()))?;
