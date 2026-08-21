@@ -7,6 +7,7 @@ use alex::{
     load_app, package,
     runtime::{RuntimeHandle, RuntimeProcess},
     shell,
+    trust::TrustStore,
 };
 use clap::{Parser, Subcommand};
 
@@ -34,7 +35,12 @@ enum Commands {
     /// Open the application frontend in the native WebView shell.
     Shell { path: PathBuf },
     /// Invoke an Alex API request from a JSON file (diagnostic command).
-    Invoke { path: PathBuf, request: PathBuf },
+    Invoke {
+        path: PathBuf,
+        request: PathBuf,
+        #[arg(long)]
+        timeout_ms: Option<u64>,
+    },
     /// Build a validated .alex application archive.
     Pack {
         path: PathBuf,
@@ -53,6 +59,8 @@ enum Commands {
         require_signature: bool,
         #[arg(long)]
         trusted_key: Option<String>,
+        #[arg(long)]
+        trust_root: Option<PathBuf>,
     },
     /// List valid applications in an installation directory.
     List {
@@ -69,6 +77,11 @@ enum Commands {
     Permissions {
         #[command(subcommand)]
         action: PermissionCommands,
+    },
+    /// Manage trusted package publisher keys.
+    Trust {
+        #[command(subcommand)]
+        action: TrustCommands,
     },
 }
 
@@ -88,6 +101,25 @@ enum PermissionCommands {
     Revoke {
         id: String,
         permission: String,
+        #[arg(long)]
+        root: PathBuf,
+    },
+}
+
+#[derive(Debug, Subcommand)]
+enum TrustCommands {
+    Add {
+        label: String,
+        public_key: String,
+        #[arg(long)]
+        root: PathBuf,
+    },
+    List {
+        #[arg(long)]
+        root: PathBuf,
+    },
+    Remove {
+        fingerprint: String,
         #[arg(long)]
         root: PathBuf,
     },
@@ -139,10 +171,20 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let app = load_app(&path)?;
             shell::run(&path, app)?;
         }
-        Commands::Invoke { path, request } => {
+        Commands::Invoke {
+            path,
+            request,
+            timeout_ms,
+        } => {
             let app = load_app(&path)?;
             let request = std::fs::read_to_string(request)?;
-            let request: Request = serde_json::from_str(&request)?;
+            let mut request: Request = serde_json::from_str(&request)?;
+            if let Some(timeout) = timeout_ms {
+                let now = std::time::SystemTime::now()
+                    .duration_since(std::time::UNIX_EPOCH)?
+                    .as_millis() as u64;
+                request.deadline_ms = Some(now.saturating_add(timeout));
+            }
             let mut router = ApiRouter::new(path.clone(), app.clone());
             if request.method.starts_with("runtime.")
                 && let Some(backend) = &app.backend
@@ -169,7 +211,17 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             root,
             require_signature,
             trusted_key,
+            trust_root,
         } => {
+            let trusted_key = if let Some(trust_root) = trust_root {
+                let signer = package::signer_public_key(&archive)?.ok_or_else(|| {
+                    package::PackageError::Signature("package is unsigned".into())
+                })?;
+                TrustStore::open(&trust_root)?.require(&signer)?;
+                Some(signer)
+            } else {
+                trusted_key
+            };
             let installed = package::install_verified(
                 &archive,
                 &root,
@@ -222,6 +274,31 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 PermissionStore::open_at(&root, &id)?
                     .set(&permission, PermissionDecision::Denied)?;
                 println!("revoked {} from {}", permission, id);
+            }
+        },
+        Commands::Trust { action } => match action {
+            TrustCommands::Add {
+                label,
+                public_key,
+                root,
+            } => {
+                let fingerprint = TrustStore::open(&root)?.add(label, public_key)?;
+                println!("trusted publisher {}", fingerprint);
+            }
+            TrustCommands::List { root } => {
+                for (fingerprint, publisher) in TrustStore::open(&root)?.list() {
+                    println!(
+                        "{}\t{}\t{}",
+                        fingerprint, publisher.label, publisher.public_key
+                    );
+                }
+            }
+            TrustCommands::Remove { fingerprint, root } => {
+                if TrustStore::open(&root)?.remove(&fingerprint)? {
+                    println!("removed publisher {}", fingerprint);
+                } else {
+                    println!("publisher not found: {}", fingerprint);
+                }
             }
         },
     }

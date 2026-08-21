@@ -8,7 +8,7 @@ export interface OpenFileOptions extends InvokeOptions {
 }
 
 export interface AlexTransport {
-  invoke<T = unknown>(method: string, params?: unknown): Promise<T>;
+  invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
 }
 
 export interface SystemInfo {
@@ -48,6 +48,12 @@ export interface AlexClient {
     invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
     status(options?: InvokeOptions): Promise<RuntimeStatus>;
     restart(options?: InvokeOptions): Promise<RuntimeStatus>;
+  };
+  readonly window: {
+    setTitle(title: string, options?: InvokeOptions): Promise<void>;
+    minimize(options?: InvokeOptions): Promise<void>;
+    maximize(options?: InvokeOptions): Promise<void>;
+    close(options?: InvokeOptions): Promise<void>;
   };
   readonly system: {
     info(options?: InvokeOptions): Promise<SystemInfo>;

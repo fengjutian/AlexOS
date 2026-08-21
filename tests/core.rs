@@ -6,6 +6,7 @@ use alex::{
     ipc::{self, Request},
     load_app, package,
     permission::Permission,
+    trust::TrustStore,
 };
 use serde_json::json;
 
@@ -283,4 +284,32 @@ fn persisted_permission_revocation_is_enforced_and_audited() {
             .join("permissions/com.alex.hello.audit.jsonl")
             .is_file()
     );
+}
+
+#[test]
+fn publisher_trust_store_persists_and_matches_signed_packages() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let key = workspace.path().join("publisher.json");
+    let archive = workspace.path().join("signed.alex");
+    let public_key = package::generate_signing_key(&key).unwrap();
+    package::pack_signed(&source, &archive, &key).unwrap();
+    assert_eq!(
+        package::signer_public_key(&archive).unwrap().unwrap(),
+        public_key
+    );
+
+    let trust_root = workspace.path().join("trust");
+    let fingerprint = TrustStore::open(&trust_root)
+        .unwrap()
+        .add("Test Publisher".into(), public_key.clone())
+        .unwrap();
+    let mut reopened = TrustStore::open(&trust_root).unwrap();
+    assert_eq!(
+        reopened.require(&public_key).unwrap().label,
+        "Test Publisher"
+    );
+    assert_eq!(reopened.list().count(), 1);
+    assert!(reopened.remove(&fingerprint).unwrap());
+    assert!(reopened.require(&public_key).is_err());
 }

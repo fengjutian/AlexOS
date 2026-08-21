@@ -33,7 +33,10 @@ mod windows {
     };
 
     use crate::{
-        api::ApiRouter, authorization::PermissionStore, manifest::AppManifest,
+        api::ApiRouter,
+        authorization::PermissionStore,
+        manifest::AppManifest,
+        native::{HostCommand, NativeError, NativeHost},
         runtime::RuntimeHandle,
     };
 
@@ -48,18 +51,37 @@ mod windows {
           response.error ? item.reject(response.error) : item.resolve(response.result);
         };
         window.alex = Object.freeze({
-          invoke(method, params = {}) {
+          invoke(method, params = {}, options = {}) {
             const id = `web-${Date.now()}-${++sequence}`;
-            const deadlineMs = Date.now() + 30000;
+            const timeoutMs = options.timeoutMs ?? 30000;
+            const deadlineMs = Date.now() + timeoutMs;
             const request = { protocol: 1, id, source: __ALEX_PACKAGE_ID__, method, params, deadlineMs };
             return new Promise((resolve, reject) => {
+              const cancelRuntime = () => {
+                if (method !== "runtime.invoke") return;
+                window.ipc.postMessage(JSON.stringify({
+                  protocol: 1,
+                  id: `cancel-${id}`,
+                  source: __ALEX_PACKAGE_ID__,
+                  method: "runtime.cancel",
+                  params: { requestId: id }
+                }));
+              };
               const timer = setTimeout(() => {
                 pending.delete(id);
+                cancelRuntime();
                 reject({ code: "DEADLINE_EXCEEDED", message: "Alex API request timed out" });
-              }, 30000);
+              }, timeoutMs);
+              const abortHandler = () => {
+                clearTimeout(timer);
+                pending.delete(id);
+                cancelRuntime();
+                reject({ code: "ABORTED", message: "Alex API request was aborted" });
+              };
+              options.signal?.addEventListener("abort", abortHandler, { once: true });
               pending.set(id, {
-                resolve: (value) => { clearTimeout(timer); resolve(value); },
-                reject: (error) => { clearTimeout(timer); reject(error); }
+                resolve: (value) => { clearTimeout(timer); options.signal?.removeEventListener("abort", abortHandler); resolve(value); },
+                reject: (error) => { clearTimeout(timer); options.signal?.removeEventListener("abort", abortHandler); reject(error); }
               });
               window.ipc.postMessage(JSON.stringify(request));
             });
@@ -71,6 +93,20 @@ mod windows {
     #[derive(Debug)]
     enum UserEvent {
         IpcResponse(String),
+        Host(HostCommand),
+    }
+
+    #[derive(Clone)]
+    struct WindowHost {
+        proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    }
+
+    impl NativeHost for WindowHost {
+        fn execute(&self, command: HostCommand) -> Result<(), NativeError> {
+            self.proxy
+                .send_event(UserEvent::Host(command))
+                .map_err(|_| NativeError::Failed("window event loop is closed".into()))
+        }
     }
 
     pub fn run(
@@ -85,7 +121,10 @@ mod windows {
 
         let permissions = PermissionStore::for_app(&manifest.id)?;
         let mut router = ApiRouter::new(package_root.to_path_buf(), manifest.clone())
-            .with_permission_store(permissions);
+            .with_permission_store(permissions)
+            .with_native_host(Arc::new(WindowHost {
+                proxy: proxy.clone(),
+            }));
         if let Some(backend) = &manifest.backend {
             router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
         }
@@ -128,6 +167,12 @@ mod windows {
                     let script = format!("window.__alexResolve({json})");
                     let _ = webview.evaluate_script(&script);
                 }
+                Event::UserEvent(UserEvent::Host(command)) => match command {
+                    HostCommand::SetWindowTitle(title) => window.set_title(&title),
+                    HostCommand::MinimizeWindow => window.set_minimized(true),
+                    HostCommand::MaximizeWindow => window.set_maximized(true),
+                    HostCommand::CloseWindow => *control_flow = ControlFlow::Exit,
+                },
                 Event::WindowEvent {
                     event: WindowEvent::CloseRequested,
                     ..

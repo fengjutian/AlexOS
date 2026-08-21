@@ -1,0 +1,10 @@
+{
+  "protocol": 1,
+  "id": "example-hang-1",
+  "source": "com.alex.hello",
+  "method": "runtime.invoke",
+  "params": {
+    "method": "test.hang",
+    "params": {}
+  }
+}

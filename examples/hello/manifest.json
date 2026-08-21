@@ -16,6 +16,7 @@
       "paths": ["data"]
     },
     { "name": "runtime.invoke" },
-    { "name": "runtime.manage" }
+    { "name": "runtime.manage" },
+    { "name": "window.manage" }
   ]
 }

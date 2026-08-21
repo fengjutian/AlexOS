@@ -2,6 +2,18 @@ use std::path::PathBuf;
 
 use thiserror::Error;
 
+#[derive(Debug, Clone)]
+pub enum HostCommand {
+    SetWindowTitle(String),
+    MinimizeWindow,
+    MaximizeWindow,
+    CloseWindow,
+}
+
+pub trait NativeHost: Send + Sync {
+    fn execute(&self, command: HostCommand) -> Result<(), NativeError>;
+}
+
 #[derive(Debug, Error)]
 pub enum NativeError {
     #[error("native capability failed: {0}")]

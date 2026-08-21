@@ -49,6 +49,20 @@ export function createAlexClient(transport = browserTransport()) {
         return invoke("runtime.restart", {}, options);
       },
     }),
+    window: Object.freeze({
+      async setTitle(title, options) {
+        await invoke("window.setTitle", { title }, options);
+      },
+      async minimize(options) {
+        await invoke("window.minimize", {}, options);
+      },
+      async maximize(options) {
+        await invoke("window.maximize", {}, options);
+      },
+      async close(options) {
+        await invoke("window.close", {}, options);
+      },
+    }),
     system: Object.freeze({
       info(options) {
         return invoke("system.info", {}, options);
@@ -93,7 +107,9 @@ async function invokeWithControls(transport, method, params = {}, options = {}) 
 
   try {
     return await Promise.race([
-      Promise.resolve().then(() => transport.invoke(method, params)).catch(normalizeError),
+      Promise.resolve()
+        .then(() => transport.invoke(method, params, { timeoutMs, signal: options.signal }))
+        .catch(normalizeError),
       controls,
     ]);
   } finally {

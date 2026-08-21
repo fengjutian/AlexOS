@@ -343,6 +343,19 @@ pub fn install_verified(
     Ok(destination)
 }
 
+pub fn signer_public_key(archive_path: &Path) -> Result<Option<String>, PackageError> {
+    let mut archive = ZipArchive::new(File::open(archive_path)?)?;
+    match archive.by_name(SIGNATURE_PATH) {
+        Ok(entry) => {
+            let signature: SignatureManifest = serde_json::from_reader(entry)
+                .map_err(|error| PackageError::Signature(format!("invalid metadata: {error}")))?;
+            Ok(Some(signature.public_key))
+        }
+        Err(zip::result::ZipError::FileNotFound) => Ok(None),
+        Err(error) => Err(error.into()),
+    }
+}
+
 pub fn list_installed(install_root: &Path) -> Result<Vec<InstalledApp>, PackageError> {
     if !install_root.exists() {
         return Ok(Vec::new());

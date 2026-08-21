@@ -3,7 +3,11 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
-    sync::{Arc, Mutex, mpsc},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicU32, Ordering},
+        mpsc,
+    },
     thread,
     time::{Duration, Instant},
 };
@@ -62,6 +66,7 @@ pub struct RuntimeProcess {
 #[derive(Clone)]
 pub struct RuntimeHandle {
     sender: mpsc::Sender<RuntimeCommand>,
+    pid: Arc<AtomicU32>,
 }
 
 enum RuntimeCommand {
@@ -111,13 +116,17 @@ impl RuntimeHandle {
         let package_root = package_root.canonicalize()?;
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         let process = RuntimeProcess::start_with_logs(&package_root, backend, Arc::clone(&logs))?;
+        let pid = Arc::new(AtomicU32::new(process.id()));
         let (sender, receiver) = mpsc::channel();
         let backend = backend.clone();
+        let manager_pid = Arc::clone(&pid);
         thread::Builder::new()
             .name("alex-runtime-manager".into())
-            .spawn(move || runtime_manager(package_root, backend, process, logs, receiver))
+            .spawn(move || {
+                runtime_manager(package_root, backend, process, logs, manager_pid, receiver)
+            })
             .expect("runtime manager thread should start");
-        Ok(Self { sender })
+        Ok(Self { sender, pid })
     }
 
     pub fn invoke(
@@ -136,7 +145,13 @@ impl RuntimeHandle {
                 response: tx,
             })
             .map_err(|_| RuntimeError::Protocol("runtime manager stopped".into()))?;
-        receive(rx, timeout)
+        match receive(rx, timeout) {
+            Err(RuntimeError::Timeout(_)) => {
+                self.cancel();
+                Err(RuntimeError::Timeout(timeout))
+            }
+            result => result,
+        }
     }
 
     pub fn status(&self, timeout: Duration) -> Result<RuntimeStatus, RuntimeError> {
@@ -159,6 +174,11 @@ impl RuntimeHandle {
             .map_err(|_| RuntimeError::Protocol("runtime manager stopped".into()))?;
         receive(rx, timeout)
     }
+
+    pub fn cancel(&self) -> bool {
+        let pid = self.pid.load(Ordering::Acquire);
+        pid != 0 && terminate_process_tree(pid)
+    }
 }
 
 fn receive<T>(rx: mpsc::Receiver<Result<T, String>>, timeout: Duration) -> Result<T, RuntimeError> {
@@ -177,6 +197,7 @@ fn runtime_manager(
     backend: Backend,
     initial: RuntimeProcess,
     logs: Arc<Mutex<VecDeque<String>>>,
+    current_pid: Arc<AtomicU32>,
     rx: mpsc::Receiver<RuntimeCommand>,
 ) {
     let mut process = Some(initial);
@@ -193,6 +214,7 @@ fn runtime_manager(
                 if process.is_none() {
                     match RuntimeProcess::start_with_logs(&root, &backend, Arc::clone(&logs)) {
                         Ok(value) => {
+                            current_pid.store(value.id(), Ordering::Release);
                             process = Some(value);
                             restart_count += 1;
                             last_error = None;
@@ -220,11 +242,16 @@ fn runtime_manager(
                 {
                     last_error = result.as_ref().err().cloned();
                     process = None;
+                    current_pid.store(0, Ordering::Release);
                 }
                 let _ = response.send(result);
             }
             RuntimeCommand::Status { response } => {
                 refresh(&mut process, &mut last_error);
+                current_pid.store(
+                    process.as_ref().map(RuntimeProcess::id).unwrap_or(0),
+                    Ordering::Release,
+                );
                 let _ = response.send(snapshot(&process, restart_count, &last_error, &logs));
             }
             RuntimeCommand::Restart { response } => {
@@ -233,12 +260,14 @@ fn runtime_manager(
                 }
                 let result = RuntimeProcess::start_with_logs(&root, &backend, Arc::clone(&logs))
                     .map(|value| {
+                        current_pid.store(value.id(), Ordering::Release);
                         process = Some(value);
                         restart_count += 1;
                         last_error = None;
                         snapshot(&process, restart_count, &last_error, &logs)
                     })
                     .map_err(|error| {
+                        current_pid.store(0, Ordering::Release);
                         last_error = Some(error.to_string());
                         error.to_string()
                     });
@@ -249,6 +278,7 @@ fn runtime_manager(
     if let Some(mut value) = process {
         let _ = value.stop_gracefully(Duration::from_secs(2));
     }
+    current_pid.store(0, Ordering::Release);
 }
 
 fn refresh(process: &mut Option<RuntimeProcess>, last_error: &mut Option<String>) {
@@ -443,4 +473,22 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
             .map(|dir| dir.join(name))
             .find(|path| path.is_file())
     })
+}
+
+#[cfg(windows)]
+fn terminate_process_tree(pid: u32) -> bool {
+    use std::os::windows::process::CommandExt;
+    const CREATE_NO_WINDOW: u32 = 0x0800_0000;
+    Command::new("taskkill.exe")
+        .args(["/PID", &pid.to_string(), "/T", "/F"])
+        .creation_flags(CREATE_NO_WINDOW)
+        .stdout(Stdio::null())
+        .stderr(Stdio::null())
+        .status()
+        .is_ok_and(|status| status.success())
+}
+
+#[cfg(not(windows))]
+fn terminate_process_tree(_pid: u32) -> bool {
+    false
 }

@@ -17,6 +17,8 @@ pub enum Permission {
     ClipboardWrite,
     #[serde(rename = "system.openExternal")]
     OpenExternal { origins: Vec<String> },
+    #[serde(rename = "window.manage")]
+    WindowManage,
     #[serde(rename = "runtime.invoke")]
     RuntimeInvoke,
     #[serde(rename = "runtime.manage")]

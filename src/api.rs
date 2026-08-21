@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
@@ -11,7 +12,7 @@ use crate::{
     authorization::{PermissionDecision, PermissionStore},
     ipc::{PROTOCOL_VERSION, Request, Response},
     manifest::AppManifest,
-    native,
+    native::{self, HostCommand, NativeHost},
     permission::Permission,
     runtime::{RuntimeError, RuntimeHandle},
 };
@@ -24,6 +25,7 @@ pub struct ApiRouter {
     manifest: AppManifest,
     runtime: Option<RuntimeHandle>,
     permission_store: Option<PermissionStore>,
+    native_host: Option<Arc<dyn NativeHost>>,
 }
 
 impl ApiRouter {
@@ -34,6 +36,7 @@ impl ApiRouter {
             manifest,
             runtime: None,
             permission_store: None,
+            native_host: None,
         }
     }
 
@@ -44,6 +47,11 @@ impl ApiRouter {
 
     pub fn with_permission_store(mut self, store: PermissionStore) -> Self {
         self.permission_store = Some(store);
+        self
+    }
+
+    pub fn with_native_host(mut self, host: Arc<dyn NativeHost>) -> Self {
+        self.native_host = Some(host);
         self
     }
 
@@ -94,11 +102,16 @@ impl ApiRouter {
             "clipboard.writeText" => self.clipboard_write_text(&request.params),
             "dialog.openFile" => self.dialog_open_file(&request.params),
             "system.openExternal" => self.open_external(&request.params),
+            "window.setTitle" => self.window_set_title(&request.params),
+            "window.minimize" => self.window_command(HostCommand::MinimizeWindow),
+            "window.maximize" => self.window_command(HostCommand::MaximizeWindow),
+            "window.close" => self.window_command(HostCommand::CloseWindow),
             "runtime.invoke" => {
                 self.runtime_invoke(&request.id, &request.params, request.deadline_ms)
             }
             "runtime.status" => self.runtime_status(),
             "runtime.restart" => self.runtime_restart(),
+            "runtime.cancel" => self.runtime_cancel(),
             _ => Err(("METHOD_NOT_FOUND", "unknown Alex API method".to_owned())),
         };
 
@@ -242,6 +255,30 @@ impl ApiRouter {
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
     }
 
+    fn window_set_title(&self, params: &Value) -> ApiResult {
+        let params: WindowTitleParams = parse_params(params)?;
+        if params.title.is_empty() || params.title.len() > 200 {
+            return Err((
+                "INVALID_PARAMS",
+                "window title must contain 1 to 200 bytes".into(),
+            ));
+        }
+        self.window_command(HostCommand::SetWindowTitle(params.title))
+    }
+
+    fn window_command(&self, command: HostCommand) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::WindowManage),
+            "window.manage",
+        )?;
+        self.native_host
+            .as_ref()
+            .ok_or(("NATIVE_UNAVAILABLE", "window host is unavailable".into()))?
+            .execute(command)
+            .map(|_| json!({ "accepted": true }))
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
     fn require_permission(
         &self,
         predicate: impl Fn(&Permission) -> bool,
@@ -283,6 +320,17 @@ impl ApiRouter {
                     .map_err(|error| RuntimeError::Protocol(error.to_string()))
             })
             .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
+    }
+
+    fn runtime_cancel(&self) -> ApiResult {
+        if !self.permission_granted("runtime.invoke") {
+            return Err(("PERMISSION_DENIED", "runtime.invoke was revoked".into()));
+        }
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
+        Ok(json!({ "cancelled": runtime.cancel() }))
     }
 
     fn require_runtime_manage(&self) -> Result<(), (&'static str, String)> {
@@ -369,6 +417,12 @@ struct DialogOpenParams {
 #[serde(deny_unknown_fields)]
 struct OpenExternalParams {
     url: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct WindowTitleParams {
+    title: String,
 }
 
 fn parse_params<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T, (&'static str, String)> {

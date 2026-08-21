@@ -15,6 +15,9 @@ input.on("line", (line) => {
     }
     let result;
     switch (request.method) {
+      case "test.hang":
+        console.error("Starting cancellable hanging request");
+        return;
       case "hello.greet":
         result = { message: `Hello, ${request.params.name ?? "Alex"}!`, pid: process.pid };
         break;
