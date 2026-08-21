@@ -1,8 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
-    sync::{Arc, Mutex},
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::Deserialize;
@@ -12,13 +11,16 @@ use crate::{
     ipc::{PROTOCOL_VERSION, Request, Response},
     manifest::AppManifest,
     permission::Permission,
-    runtime::RuntimeProcess,
+    runtime::{RuntimeError, RuntimeHandle, RuntimeProcess},
 };
+
+const MAX_IPC_MESSAGE_BYTES: usize = 1024 * 1024;
+const DEFAULT_RUNTIME_TIMEOUT: Duration = Duration::from_secs(30);
 
 pub struct ApiRouter {
     package_root: PathBuf,
     manifest: AppManifest,
-    runtime: Option<Arc<Mutex<RuntimeProcess>>>,
+    runtime: Option<RuntimeHandle>,
 }
 
 impl ApiRouter {
@@ -32,11 +34,18 @@ impl ApiRouter {
     }
 
     pub fn with_runtime(mut self, runtime: RuntimeProcess) -> Self {
-        self.runtime = Some(Arc::new(Mutex::new(runtime)));
+        self.runtime = Some(RuntimeHandle::spawn(runtime));
         self
     }
 
     pub fn dispatch_json(&self, input: &str) -> Response {
+        if input.len() > MAX_IPC_MESSAGE_BYTES {
+            return Response::error(
+                "unknown",
+                "MESSAGE_TOO_LARGE",
+                "IPC messages are limited to 1 MiB",
+            );
+        }
         let request = match serde_json::from_str::<Request>(input) {
             Ok(request) => request,
             Err(error) => {
@@ -72,7 +81,9 @@ impl ApiRouter {
                 "arch": std::env::consts::ARCH,
                 "alexVersion": env!("CARGO_PKG_VERSION")
             })),
-            "runtime.invoke" => self.runtime_invoke(&request.id, &request.params),
+            "runtime.invoke" => {
+                self.runtime_invoke(&request.id, &request.params, request.deadline_ms)
+            }
             _ => Err(("METHOD_NOT_FOUND", "unknown Alex API method".to_owned())),
         };
 
@@ -111,7 +122,12 @@ impl ApiRouter {
             .map_err(|error| ("IO_ERROR", error.to_string()))
     }
 
-    fn runtime_invoke(&self, request_id: &str, params: &Value) -> ApiResult {
+    fn runtime_invoke(
+        &self,
+        request_id: &str,
+        params: &Value,
+        deadline_ms: Option<u64>,
+    ) -> ApiResult {
         if !self
             .manifest
             .permissions
@@ -125,12 +141,16 @@ impl ApiRouter {
             .runtime
             .as_ref()
             .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
-        let mut runtime = runtime
-            .lock()
-            .map_err(|_| ("RUNTIME_FAILURE", "runtime lock was poisoned".into()))?;
+        let timeout = deadline_ms
+            .map(|deadline| Duration::from_millis(deadline.saturating_sub(now_ms())))
+            .map(|timeout| timeout.min(DEFAULT_RUNTIME_TIMEOUT))
+            .unwrap_or(DEFAULT_RUNTIME_TIMEOUT);
         runtime
-            .invoke(request_id, &params.method, &params.params)
-            .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
+            .invoke(request_id, &params.method, &params.params, timeout)
+            .map_err(|error| match error {
+                RuntimeError::Timeout(_) => ("DEADLINE_EXCEEDED", error.to_string()),
+                _ => ("RUNTIME_FAILURE", error.to_string()),
+            })
     }
 
     fn resolve_requested(&self, path: &str) -> PathBuf {

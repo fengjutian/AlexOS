@@ -47,9 +47,17 @@ mod windows {
         window.alex = Object.freeze({
           invoke(method, params = {}) {
             const id = `web-${Date.now()}-${++sequence}`;
-            const request = { protocol: 1, id, source: __ALEX_PACKAGE_ID__, method, params };
+            const deadlineMs = Date.now() + 30000;
+            const request = { protocol: 1, id, source: __ALEX_PACKAGE_ID__, method, params, deadlineMs };
             return new Promise((resolve, reject) => {
-              pending.set(id, { resolve, reject });
+              const timer = setTimeout(() => {
+                pending.delete(id);
+                reject({ code: "DEADLINE_EXCEEDED", message: "Alex API request timed out" });
+              }, 30000);
+              pending.set(id, {
+                resolve: (value) => { clearTimeout(timer); resolve(value); },
+                reject: (error) => { clearTimeout(timer); reject(error); }
+              });
               window.ipc.postMessage(JSON.stringify(request));
             });
           }
@@ -86,10 +94,15 @@ mod windows {
         let webview = WebViewBuilder::new()
             .with_initialization_script(init_script)
             .with_ipc_handler(move |request| {
-                let response = ipc_router.dispatch_json(request.body());
-                if let Ok(json) = serde_json::to_string(&response) {
-                    let _ = proxy.send_event(UserEvent::IpcResponse(json));
-                }
+                let router = Arc::clone(&ipc_router);
+                let proxy = proxy.clone();
+                let body = request.body().clone();
+                std::thread::spawn(move || {
+                    let response = router.dispatch_json(&body);
+                    if let Ok(json) = serde_json::to_string(&response) {
+                        let _ = proxy.send_event(UserEvent::IpcResponse(json));
+                    }
+                });
             })
             .with_custom_protocol("alex".into(), move |_id, request| {
                 asset_response(&root, &frontend, request.uri().path())

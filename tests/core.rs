@@ -97,3 +97,11 @@ fn router_rejects_spoofed_package_identity() {
     });
     assert_eq!(response.error.unwrap().code, "SOURCE_MISMATCH");
 }
+
+#[test]
+fn router_rejects_oversized_ipc_messages() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    let response = ApiRouter::new(root, app).dispatch_json(&"x".repeat(1024 * 1024 + 1));
+    assert_eq!(response.error.unwrap().code, "MESSAGE_TOO_LARGE");
+}

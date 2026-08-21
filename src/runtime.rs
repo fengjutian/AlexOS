@@ -2,6 +2,9 @@ use std::{
     io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
+    sync::mpsc,
+    thread,
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -25,12 +28,72 @@ pub enum RuntimeError {
     Protocol(String),
     #[error("backend returned {code}: {message}")]
     Backend { code: String, message: String },
+    #[error("runtime request timed out after {0:?}")]
+    Timeout(Duration),
 }
 
 pub struct RuntimeProcess {
     child: Child,
     stdin: ChildStdin,
     stdout: BufReader<ChildStdout>,
+}
+
+#[derive(Clone)]
+pub struct RuntimeHandle {
+    sender: mpsc::Sender<RuntimeJob>,
+}
+
+struct RuntimeJob {
+    id: String,
+    method: String,
+    params: Value,
+    response: mpsc::SyncSender<Result<Value, String>>,
+}
+
+impl RuntimeHandle {
+    pub fn spawn(runtime: RuntimeProcess) -> Self {
+        let (sender, receiver) = mpsc::channel::<RuntimeJob>();
+        thread::Builder::new()
+            .name("alex-runtime-rpc".into())
+            .spawn(move || runtime_worker(runtime, receiver))
+            .expect("runtime worker thread should start");
+        Self { sender }
+    }
+
+    pub fn invoke(
+        &self,
+        id: &str,
+        method: &str,
+        params: &Value,
+        timeout: Duration,
+    ) -> Result<Value, RuntimeError> {
+        let (response, receiver) = mpsc::sync_channel(1);
+        self.sender
+            .send(RuntimeJob {
+                id: id.to_owned(),
+                method: method.to_owned(),
+                params: params.clone(),
+                response,
+            })
+            .map_err(|_| RuntimeError::Protocol("runtime worker stopped".into()))?;
+        match receiver.recv_timeout(timeout) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(message)) => Err(RuntimeError::Protocol(message)),
+            Err(mpsc::RecvTimeoutError::Timeout) => Err(RuntimeError::Timeout(timeout)),
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(RuntimeError::Protocol("runtime worker stopped".into()))
+            }
+        }
+    }
+}
+
+fn runtime_worker(mut runtime: RuntimeProcess, receiver: mpsc::Receiver<RuntimeJob>) {
+    while let Ok(job) = receiver.recv() {
+        let result = runtime
+            .invoke(&job.id, &job.method, &job.params)
+            .map_err(|error| error.to_string());
+        let _ = job.response.send(result);
+    }
 }
 
 #[derive(Serialize)]
