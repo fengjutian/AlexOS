@@ -1,5 +1,6 @@
 pub mod api;
 pub mod authorization;
+pub mod dev;
 pub mod ipc;
 pub mod manifest;
 pub mod native;

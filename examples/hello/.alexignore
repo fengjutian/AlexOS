@@ -1,0 +1,13 @@
+# Alex dev mode ignore patterns (.gitignore compatible).
+# File paths that match any non-negated pattern here will not trigger a
+# frontend reload or backend restart.
+
+node_modules/
+.git/
+.alex/
+target/
+dist/
+build/
+*.log
+*.tmp
+.DS_Store

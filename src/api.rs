@@ -55,6 +55,14 @@ impl ApiRouter {
         self
     }
 
+    /// Restart the attached backend runtime, if any. Returns `None` when no
+    /// runtime was attached. Used by `alex dev` to pick up backend code
+    /// changes without restarting the shell. Additive — does not change
+    /// existing dispatch behavior.
+    pub fn restart_runtime(&self, timeout: Duration) -> Option<Result<(), RuntimeError>> {
+        self.runtime.as_ref().map(|handle| handle.restart(timeout).map(|_| ()))
+    }
+
     pub fn dispatch_json(&self, input: &str) -> Response {
         if input.len() > MAX_IPC_MESSAGE_BYTES {
             return Response::error(

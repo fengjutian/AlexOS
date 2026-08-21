@@ -1,9 +1,9 @@
-use std::{fs, io::Write};
+use std::{fs, io::Write, path::Path};
 
 use alex::{
     api::ApiRouter,
     authorization::{PermissionDecision, PermissionStore},
-    ipc::{self, Request},
+    dev, ipc::{self, Request},
     load_app, package,
     permission::Permission,
     trust::TrustStore,
@@ -415,4 +415,71 @@ fn update_manifests_reject_insecure_urls() {
     .unwrap_err()
     .to_string();
     assert!(error.contains("HTTPS"));
+}
+
+#[test]
+fn alexignore_returns_none_when_file_is_absent() {
+    let workspace = tempfile::tempdir().unwrap();
+    assert!(dev::load_alexignore(workspace.path()).is_none());
+}
+
+#[test]
+fn alexignore_filters_watch_paths_with_gitignore_grammar() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(
+        workspace.path().join(".alexignore"),
+        "node_modules/\n*.log\n!keep.log\n",
+    )
+    .unwrap();
+    let matcher = dev::load_alexignore(workspace.path()).expect(".alexignore should load");
+    let m = Some(&matcher);
+
+    assert!(
+        matcher.matched(Path::new("debug.log"), false).is_ignore(),
+        "*.log should match debug.log"
+    );
+    assert!(
+        matcher.matched(Path::new("frontend/debug.log"), false).is_ignore(),
+        "*.log should match nested debug.log"
+    );
+    assert!(
+        !matcher.matched(Path::new("keep.log"), false).is_ignore(),
+        "!keep.log should override *.log"
+    );
+    assert!(
+        !matcher.matched(Path::new("frontend/index.html"), false).is_ignore(),
+        "unrelated files are not affected"
+    );
+
+    // Verify the wrapper used by the watcher reaches the same answer.
+    assert!(dev::is_ignored(
+        &m,
+        workspace.path(),
+        &workspace.path().join("node_modules/lodash/index.js")
+    ), "node_modules/ should cover nested files");
+    assert!(dev::is_ignored(
+        &m,
+        workspace.path(),
+        &workspace.path().join("frontend/debug.log")
+    ));
+    assert!(!dev::is_ignored(
+        &m,
+        workspace.path(),
+        &workspace.path().join("keep.log")
+    ));
+    assert!(!dev::is_ignored(
+        &m,
+        workspace.path(),
+        &workspace.path().join("frontend/index.html")
+    ));
+}
+
+#[test]
+fn alexignore_malformed_file_falls_back_to_no_filtering() {
+    let workspace = tempfile::tempdir().unwrap();
+    fs::write(workspace.path().join(".alexignore"), "[[[invalid").unwrap();
+    // ignore crate is permissive about most grammars; we just want a
+    // callable, non-panicking result. Either None (strict) or Some (lenient)
+    // is acceptable — the contract is "watcher must not panic".
+    let _ = dev::load_alexignore(workspace.path());
 }

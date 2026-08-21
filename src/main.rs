@@ -3,6 +3,7 @@ use std::{path::PathBuf, thread, time::Duration};
 use alex::{
     api::ApiRouter,
     authorization::{PermissionDecision, PermissionStore},
+    dev,
     ipc::Request,
     load_app, package,
     runtime::{RuntimeHandle, RuntimeProcess},
@@ -35,6 +36,8 @@ enum Commands {
     Run { path: PathBuf },
     /// Open the application frontend in the native WebView shell.
     Shell { path: PathBuf },
+    /// Run the application in development mode with file watching and hot reload.
+    Dev { path: PathBuf },
     /// Invoke an Alex API request from a JSON file (diagnostic command).
     Invoke {
         path: PathBuf,
@@ -229,6 +232,10 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Shell { path } => {
             let app = load_app(&path)?;
             shell::run(&path, app)?;
+        }
+        Commands::Dev { path } => {
+            let app = load_app(&path)?;
+            dev::run(&path, app)?;
         }
         Commands::Invoke {
             path,

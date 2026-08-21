@@ -16,7 +16,7 @@ pub fn run(_package_root: &Path, _manifest: AppManifest) -> Result<(), AlexError
 }
 
 #[cfg(windows)]
-mod windows {
+pub mod windows {
     use std::{
         path::{Path, PathBuf},
         sync::Arc,
@@ -40,7 +40,7 @@ mod windows {
         runtime::RuntimeHandle,
     };
 
-    const BRIDGE: &str = r#"
+    pub const BRIDGE: &str = r#"
       (() => {
         const pending = new Map();
         const listeners = new Map();
@@ -109,14 +109,14 @@ mod windows {
     "#;
 
     #[derive(Debug)]
-    enum UserEvent {
+    pub enum UserEvent {
         IpcResponse(String),
         Host(HostCommand),
     }
 
     #[derive(Clone)]
-    struct WindowHost {
-        proxy: tao::event_loop::EventLoopProxy<UserEvent>,
+    pub struct WindowHost {
+        pub proxy: tao::event_loop::EventLoopProxy<UserEvent>,
     }
 
     impl NativeHost for WindowHost {
@@ -215,7 +215,7 @@ mod windows {
         })
     }
 
-    fn asset_response(
+    pub fn asset_response(
         root: &Path,
         frontend: &str,
         uri_path: &str,
@@ -239,7 +239,7 @@ mod windows {
         }
     }
 
-    fn response(
+    pub fn response(
         status: u16,
         content_type: &str,
         body: Vec<u8>,
@@ -253,7 +253,7 @@ mod windows {
             .expect("static response is valid")
     }
 
-    fn content_type(path: &Path) -> &'static str {
+    pub fn content_type(path: &Path) -> &'static str {
         match path.extension().and_then(|value| value.to_str()) {
             Some("html") => "text/html; charset=utf-8",
             Some("js") => "text/javascript; charset=utf-8",
@@ -266,7 +266,7 @@ mod windows {
         }
     }
 
-    fn emit_event(webview: &wry::WebView, event: &str, data: serde_json::Value) {
+    pub fn emit_event(webview: &wry::WebView, event: &str, data: serde_json::Value) {
         let event = serde_json::to_string(event).expect("event name is valid JSON");
         let script = format!("window.__alexEmit?.({event},{data})");
         let _ = webview.evaluate_script(&script);
