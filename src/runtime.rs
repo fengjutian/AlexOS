@@ -656,6 +656,7 @@ fn runtime_manager(
     current_pid.store(0, Ordering::Release);
 }
 
+#[cfg(test)]
 fn sleep_for_backoff(restart_count: u32, last_exit_at: &Option<Instant>) {
     let Some(last) = last_exit_at else {
         return;
@@ -666,7 +667,6 @@ fn sleep_for_backoff(restart_count: u32, last_exit_at: &Option<Instant>) {
         thread::sleep(wait - elapsed);
     }
 }
-
 
 fn refresh(
     process: &mut Option<RuntimeProcess>,
