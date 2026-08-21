@@ -48,6 +48,39 @@ pub enum InstallSource {
     DevMode,
 }
 
+/// Signature state of an installed package. Persisted on `AppRecord`
+/// so the registry survives restarts; the `Signed` / `InvalidSignature`
+/// half is determined at install time, and the trust half is
+/// re-evaluated against the trust store on each `list_apps` /
+/// `get_app` read.
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum SignatureState {
+    /// No signature metadata in the archive.
+    Unsigned,
+    /// Signature metadata exists; the publisher key is in the trust
+    /// store.
+    SignedTrusted,
+    /// Signature metadata exists; the publisher key is NOT in the
+    /// trust store.
+    SignedUntrusted,
+    /// Signature metadata exists but is malformed (bad base64, wrong
+    /// key length, etc.).
+    InvalidSignature,
+}
+
+impl SignatureState {
+    /// The coarse shape without a trust-store lookup: "no signature
+    /// metadata", "valid-looking signature", or "broken signature".
+    pub fn without_trust_lookup(signer_public_key: Option<&str>) -> Self {
+        match signer_public_key {
+            None => Self::Unsigned,
+            Some(key) if trust::fingerprint(key).is_ok() => Self::SignedUntrusted,
+            Some(_) => Self::InvalidSignature,
+        }
+    }
+}
+
 /// 列表视图精简信息
 #[derive(Debug, Clone, Serialize)]
 #[serde(rename_all = "camelCase")]
@@ -60,7 +93,7 @@ pub struct AppSummary {
     pub install_source: InstallSource,
     pub last_launched_at: Option<String>,
     pub publisher_fingerprint: Option<String>,
-    pub signed: bool,
+    pub signature_state: SignatureState,
 }
 
 /// 详情视图
@@ -172,7 +205,11 @@ pub struct AppRecord {
     pub source: InstallSource,
     #[serde(default)]
     pub package_sha256: Option<String>,
-    pub signed: bool,
+    /// Coarse signature state at install time. Re-evaluated against
+    /// the trust store on every read (see `with_trust_lookup`) so a
+    /// publisher added after install shows up as `signed-trusted` on
+    /// the next refresh.
+    pub signature_state: SignatureState,
 }
 
 #[derive(Debug, Clone)]
@@ -298,7 +335,7 @@ fn rebuild_from_install_root(install_root: &Path) -> Result<RegistryFile, Manage
                 publisher_fingerprint: None,
                 source: InstallSource::LocalPackage,
                 package_sha256: None,
-                signed: false,
+                signature_state: SignatureState::Unsigned,
             },
         );
     }
@@ -309,13 +346,41 @@ fn rebuild_from_install_root(install_root: &Path) -> Result<RegistryFile, Manage
 }
 
 fn iso8601_now() -> String {
-    // Avoid pulling chrono; seconds since epoch is enough for Phase 1
-    // and avoids a new dependency. UI can format it as ISO 8601 UTC.
+    // RFC 3339 / ISO 8601 UTC. Hand-rolled from epoch seconds so we
+    // don't need to pull `chrono` or `time` as dependencies. UI
+    // consumers can pass the string directly to `new Date(...)` and
+    // get the right instant.
     let seconds = SystemTime::now()
         .duration_since(SystemTime::UNIX_EPOCH)
         .map(|d| d.as_secs())
         .unwrap_or(0);
-    format!("{seconds}")
+    let (year, month, day, hour, minute, second) = epoch_seconds_to_ymdhms(seconds);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    )
+}
+
+/// Convert epoch seconds (UTC) to (year, month, day, hour, minute,
+/// second). Uses Howard Hinnant's days-from-civil algorithm so the
+/// conversion is constant-time and stays correct past 2100.
+fn epoch_seconds_to_ymdhms(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
+    let days = (secs / 86_400) as i64;
+    let time_of_day = (secs % 86_400) as u32;
+    let hour = time_of_day / 3600;
+    let minute = (time_of_day % 3600) / 60;
+    let second = time_of_day % 60;
+    let z = days + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yp = (doe - doe / 1460 + doe / 36_524 - doe / 146_096) / 365;
+    let y = yp as i64 + era * 400;
+    let doy = doe - (365 * yp + yp / 4 - yp / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = doy - (153 * mp + 2) / 5 + 1;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 };
+    let y = y + (if m <= 2 { 1 } else { 0 });
+    (y as i32, m as u32, d as u32, hour, minute, second)
 }
 
 /// 本地实现:把现有 package / permission / trust 模块 facade 起来
@@ -404,13 +469,16 @@ impl AppManager for LocalAppManager {
         let now = iso8601_now();
         // Record the trust-store fingerprint (NOT the raw public key)
         // so the UI can display a short identifier and match it
-        // against `alex trust list` output directly. An invalid key
-        // (e.g. truncated base64) yields `None` instead of an install
-        // error — the package's signature metadata is still on disk
-        // and the signed-trust state is computed in M7 below.
-        let publisher_fingerprint = package::signer_public_key(package_path)?
-            .and_then(|key| trust::fingerprint(&key).ok());
-        let signed = publisher_fingerprint.is_some();
+        // against `alex trust list` output directly. The signature
+        // state separates "no metadata" from "metadata but broken"
+        // from "metadata looks valid" so the UI can warn the user
+        // about invalid signatures instead of silently treating them
+        // as a normal install.
+        let signer_public_key = package::signer_public_key(package_path)?;
+        let publisher_fingerprint = signer_public_key
+            .as_deref()
+            .and_then(|key| trust::fingerprint(key).ok());
+        let signature_state = SignatureState::without_trust_lookup(signer_public_key.as_deref());
         let record = AppRecord {
             install_at: now.clone(),
             updated_at: now,
@@ -418,7 +486,7 @@ impl AppManager for LocalAppManager {
             publisher_fingerprint,
             source: InstallSource::LocalPackage,
             package_sha256: None,
-            signed,
+            signature_state,
         };
         self.registry.upsert(manifest.id.clone(), record)?;
         let record_ref = self
@@ -827,7 +895,37 @@ fn summary_from(manifest: &AppManifest, record: &AppRecord, path: &Path) -> AppS
         install_source: record.source,
         last_launched_at: record.last_launched_at.clone(),
         publisher_fingerprint: record.publisher_fingerprint.clone(),
-        signed: record.signed,
+        signature_state: with_trust_lookup(
+            record.signature_state,
+            record.publisher_fingerprint.as_deref(),
+        ),
+    }
+}
+
+/// Upgrade `SignedUntrusted` to `SignedTrusted` when the fingerprint
+/// is present in the trust store. Reads the trust root from the
+/// `ALEX_TRUST_ROOT` env var; missing / unreadable trust stores are
+/// treated as "no trust info" and the state is left unchanged
+/// (showing `SignedUntrusted`). This is intentionally best-effort —
+/// the trust store can be added after install, and the next read
+/// will surface the new state without rewriting the registry.
+fn with_trust_lookup(state: SignatureState, fingerprint: Option<&str>) -> SignatureState {
+    if !matches!(state, SignatureState::SignedUntrusted) {
+        return state;
+    }
+    let Some(fingerprint) = fingerprint else {
+        return state;
+    };
+    let Some(root) = std::env::var_os("ALEX_TRUST_ROOT") else {
+        return state;
+    };
+    match trust::TrustStore::open(std::path::Path::new(&root)) {
+        Ok(store) => store
+            .list()
+            .any(|(stored, _)| stored == fingerprint)
+            .then_some(SignatureState::SignedTrusted)
+            .unwrap_or(state),
+        Err(_) => state,
     }
 }
 

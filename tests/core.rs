@@ -631,8 +631,11 @@ fn manager_install_then_list_then_uninstall() {
         "examples/hello has no description"
     );
     assert!(
-        !summary.signed,
-        "unsigned archive should report signed=false"
+        matches!(
+            summary.signature_state,
+            alex::manager::SignatureState::Unsigned
+        ),
+        "unsigned archive should report Unsigned"
     );
 
     let list = manager.list_apps().unwrap();

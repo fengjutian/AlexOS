@@ -159,7 +159,7 @@ mod windows {
             .with_devtools(cfg!(debug_assertions) && std::env::var_os("ALEX_DEVTOOLS").is_some())
             .with_incognito(true)
             .with_clipboard(false)
-            .with_navigation_handler(|url| url.starts_with("alex://app/"))
+            .with_navigation_handler(|url| crate::is_internal_webview_url(&url, "app"))
             .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
             .with_download_started_handler(|_, _| false)
             .with_ipc_handler(move |request| {
