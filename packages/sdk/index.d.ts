@@ -65,6 +65,9 @@ export interface AlexClient {
     maximize(options?: InvokeOptions): Promise<void>;
     close(options?: InvokeOptions): Promise<void>;
   };
+  readonly notification: {
+    show(notification: { title: string; body: string }, options?: InvokeOptions): Promise<void>;
+  };
   readonly system: {
     info(options?: InvokeOptions): Promise<SystemInfo>;
     openExternal(url: string, options?: InvokeOptions): Promise<void>;

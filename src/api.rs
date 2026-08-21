@@ -106,6 +106,7 @@ impl ApiRouter {
             "window.minimize" => self.window_command(HostCommand::MinimizeWindow),
             "window.maximize" => self.window_command(HostCommand::MaximizeWindow),
             "window.close" => self.window_command(HostCommand::CloseWindow),
+            "notification.show" => self.notification_show(&request.params),
             "runtime.invoke" => {
                 self.runtime_invoke(&request.id, &request.params, request.deadline_ms)
             }
@@ -279,6 +280,23 @@ impl ApiRouter {
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
     }
 
+    fn notification_show(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::NotificationShow),
+            "notification.show",
+        )?;
+        let params: NotificationParams = parse_params(params)?;
+        if params.title.is_empty() || params.title.len() > 200 || params.body.len() > 1_000 {
+            return Err((
+                "INVALID_PARAMS",
+                "notification title or body exceeds its limit".into(),
+            ));
+        }
+        native::show_notification(&params.title, &params.body)
+            .map(|_| json!({ "shown": true }))
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
     fn require_permission(
         &self,
         predicate: impl Fn(&Permission) -> bool,
@@ -423,6 +441,13 @@ struct OpenExternalParams {
 #[serde(deny_unknown_fields)]
 struct WindowTitleParams {
     title: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct NotificationParams {
+    title: String,
+    body: String,
 }
 
 fn parse_params<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T, (&'static str, String)> {

@@ -19,6 +19,8 @@ pub enum Permission {
     OpenExternal { origins: Vec<String> },
     #[serde(rename = "window.manage")]
     WindowManage,
+    #[serde(rename = "notification.show")]
+    NotificationShow,
     #[serde(rename = "runtime.invoke")]
     RuntimeInvoke,
     #[serde(rename = "runtime.manage")]

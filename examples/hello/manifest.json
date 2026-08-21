@@ -17,6 +17,7 @@
     },
     { "name": "runtime.invoke" },
     { "name": "runtime.manage" },
-    { "name": "window.manage" }
+    { "name": "window.manage" },
+    { "name": "notification.show" }
   ]
 }

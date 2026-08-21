@@ -8,6 +8,7 @@
       <button id="system-info">Call Alex API</button>
       <button id="backend">Call Node Backend</button>
       <button id="rename">Rename Window</button>
+      <button id="notify">Show Notification</button>
     </main>
     <script>
       document.querySelector("#system-info").addEventListener("click", async () => {
@@ -23,6 +24,12 @@
       });
       document.querySelector("#rename").addEventListener("click", async () => {
         await window.alex.invoke("window.setTitle", { title: "Alex OS Native Window" });
+      });
+      document.querySelector("#notify").addEventListener("click", async () => {
+        await window.alex.invoke("notification.show", {
+          title: "Alex OS",
+          body: "Native notification from the secure Alex API"
+        });
       });
       window.alex.on("window.focusChanged", ({ focused }) => {
         document.querySelector("#status").textContent = focused ? "Window focused" : "Window blurred";

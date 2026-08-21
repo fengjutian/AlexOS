@@ -92,3 +92,43 @@ pub fn open_external(url: &str) -> Result<(), NativeError> {
 pub fn open_external(_url: &str) -> Result<(), NativeError> {
     Err(NativeError::Unsupported)
 }
+
+#[cfg(windows)]
+pub fn show_notification(title: &str, body: &str) -> Result<(), NativeError> {
+    use windows::{
+        Data::Xml::Dom::XmlDocument,
+        UI::Notifications::{ToastNotification, ToastNotificationManager},
+        core::HSTRING,
+    };
+    let xml = format!(
+        "<toast><visual><binding template=\"ToastGeneric\"><text>{}</text><text>{}</text></binding></visual></toast>",
+        xml_escape(title),
+        xml_escape(body)
+    );
+    let document = XmlDocument::new().map_err(|error| NativeError::Failed(error.to_string()))?;
+    document
+        .LoadXml(&HSTRING::from(xml))
+        .map_err(|error| NativeError::Failed(error.to_string()))?;
+    let toast = ToastNotification::CreateToastNotification(&document)
+        .map_err(|error| NativeError::Failed(error.to_string()))?;
+    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from("Alex OS"))
+        .map_err(|error| NativeError::Failed(error.to_string()))?;
+    notifier
+        .Show(&toast)
+        .map_err(|error| NativeError::Failed(error.to_string()))
+}
+
+#[cfg(not(windows))]
+pub fn show_notification(_title: &str, _body: &str) -> Result<(), NativeError> {
+    Err(NativeError::Unsupported)
+}
+
+#[cfg(windows)]
+fn xml_escape(value: &str) -> String {
+    value
+        .replace('&', "&amp;")
+        .replace('<', "&lt;")
+        .replace('>', "&gt;")
+        .replace('"', "&quot;")
+        .replace('\'', "&apos;")
+}

@@ -71,6 +71,11 @@ export function createAlexClient(transport = browserTransport()) {
         await invoke("window.close", {}, options);
       },
     }),
+    notification: Object.freeze({
+      async show({ title, body }, options) {
+        await invoke("notification.show", { title, body }, options);
+      },
+    }),
     system: Object.freeze({
       info(options) {
         return invoke("system.info", {}, options);
