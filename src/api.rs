@@ -813,18 +813,15 @@ impl ApiRouter {
             )?;
         }
         let params: OpenDialogParams = parse_params(params)?;
-        if let Some(title) = params.title.as_ref() {
-            if title.len() > 200 {
-                return Err(("INVALID_PARAMS", "dialog title is too long".into()));
-            }
+        if let Some(title) = params.title.as_ref()
+            && title.len() > 200
+        {
+            return Err(("INVALID_PARAMS", "dialog title is too long".into()));
         }
         let filters = filters_from_params(params.filters.as_ref());
         let spec = OpenDialogSpec {
             title: params.title.clone(),
-            default_path: params
-                .default_path
-                .as_deref()
-                .map(|value| PathBuf::from(value)),
+            default_path: params.default_path.as_deref().map(PathBuf::from),
             filters,
             multiple,
             directory,
@@ -869,21 +866,18 @@ impl ApiRouter {
             "dialog.save",
         )?;
         let params: SaveDialogParams = parse_params(params)?;
-        if let Some(name) = params.suggested_name.as_ref() {
-            if name.len() > 200 {
-                return Err((
-                    "INVALID_PARAMS",
-                    "suggestedName is too long".into(),
-                ));
-            }
+        if let Some(name) = params.suggested_name.as_ref()
+            && name.len() > 200
+        {
+            return Err((
+                "INVALID_PARAMS",
+                "suggestedName is too long".into(),
+            ));
         }
         let filters = filters_from_params(params.filters.as_ref());
         let spec = SaveDialogSpec {
             title: params.title.clone(),
-            default_path: params
-                .default_path
-                .as_deref()
-                .map(|value| PathBuf::from(value)),
+            default_path: params.default_path.as_deref().map(PathBuf::from),
             filters,
             suggested_name: params.suggested_name.clone(),
         };
@@ -1616,7 +1610,7 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
             // Skip symlinks to avoid escape.
             continue;
         } else {
-            fs::copy(&entry.path(), &target)?;
+            fs::copy(entry.path(), &target)?;
         }
     }
     Ok(())

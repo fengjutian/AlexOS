@@ -10,7 +10,8 @@ export class AlexError extends Error {
 }
 
 export function createAlexClient(transport = browserTransport()) {
-  const invoke = (method, params, options) => invokeWithControls(transport, method, params, options);
+  const invoke = (method, params, options) =>
+    invokeWithControls(transport, method, params, options);
 
   return Object.freeze({
     invoke,
@@ -21,6 +22,19 @@ export function createAlexClient(transport = browserTransport()) {
         }
         return transport.on(event, listener);
       },
+      async subscribe(event, options = {}) {
+        const result = await invoke("events.subscribe", {
+          event,
+          filter: options.filter,
+        });
+        return {
+          subscriptionId: result.subscriptionId,
+          event: result.event,
+        };
+      },
+      async unsubscribe(subscriptionId) {
+        return invoke("events.unsubscribe", { subscriptionId });
+      },
     }),
     fs: Object.freeze({
       async readText(path, options) {
@@ -29,6 +43,89 @@ export function createAlexClient(transport = browserTransport()) {
       },
       async writeText(path, content, options) {
         await invoke("filesystem.writeText", { path, content }, options);
+      },
+      async readBinary(path, options) {
+        const result = await invoke("filesystem.readBinary", { path }, options);
+        if (result?.encoding !== "base64") {
+          throw new AlexError(
+            "INVALID_RESPONSE",
+            `filesystem.readBinary returned unknown encoding ${result?.encoding}`,
+          );
+        }
+        return base64ToBytes(result.data);
+      },
+      async writeBinary(path, data, options) {
+        const payload =
+          data instanceof Uint8Array
+            ? bytesToBase64(data)
+            : bytesToBase64(new Uint8Array(data));
+        await invoke("filesystem.writeBinary", { path, data: payload }, options);
+      },
+      async exists(path, options) {
+        const result = await invoke("filesystem.exists", { path }, options);
+        return result.exists;
+      },
+      async stat(path, options) {
+        return invoke("filesystem.stat", { path }, options);
+      },
+      async readDir(path, options) {
+        const result = await invoke("filesystem.readDir", { path }, options);
+        return result.entries;
+      },
+      async createDir(path, options = {}) {
+        const { recursive, timeoutMs, signal } = options;
+        await invoke("filesystem.createDir", { path, recursive }, { timeoutMs, signal });
+      },
+      async remove(path, options = {}) {
+        const { recursive, timeoutMs, signal } = options;
+        await invoke("filesystem.remove", { path, recursive }, { timeoutMs, signal });
+      },
+      async rename(from, to, options) {
+        await invoke("filesystem.rename", { from, to }, options);
+      },
+      async copy(from, to, options) {
+        await invoke("filesystem.copy", { from, to }, options);
+      },
+      async watch(path, options) {
+        const result = await invoke("filesystem.watch", { path }, options);
+        return { subscriptionId: result.subscriptionId, event: "filesystem.changed" };
+      },
+      async unwatch(subscriptionId, options) {
+        return invoke("filesystem.unwatch", { subscriptionId }, options);
+      },
+    }),
+    storage: Object.freeze({
+      async get(key, options) {
+        const result = await invoke("storage.get", { key }, options);
+        return result.value;
+      },
+      async set(key, value, options) {
+        await invoke("storage.set", { key, value }, options);
+      },
+      async delete(key, options) {
+        const result = await invoke("storage.delete", { key }, options);
+        return result.removed;
+      },
+      async clear(options) {
+        await invoke("storage.clear", {}, options);
+      },
+      async keys(options) {
+        const result = await invoke("storage.keys", {}, options);
+        return result.keys;
+      },
+    }),
+    paths: Object.freeze({
+      async dataDir(options) {
+        const result = await invoke("paths.dataDir", {}, options);
+        return result.path;
+      },
+      async cacheDir(options) {
+        const result = await invoke("paths.cacheDir", {}, options);
+        return result.path;
+      },
+      async tempDir(options) {
+        const result = await invoke("paths.tempDir", {}, options);
+        return result.path;
       },
     }),
     clipboard: Object.freeze({
@@ -42,8 +139,40 @@ export function createAlexClient(transport = browserTransport()) {
     }),
     dialog: Object.freeze({
       async openFile(options = {}) {
-        const result = await invoke("dialog.openFile", { title: options.title }, options);
-        return result.path ?? null;
+        const { filters, defaultPath, title, timeoutMs, signal } = options;
+        const result = await invoke(
+          "dialog.openFile",
+          { filters, defaultPath, title },
+          { timeoutMs, signal },
+        );
+        return result.path ? result : null;
+      },
+      async openFiles(options = {}) {
+        const { filters, defaultPath, title, timeoutMs, signal } = options;
+        const result = await invoke(
+          "dialog.openFile",
+          { filters, defaultPath, title, multiple: true },
+          { timeoutMs, signal },
+        );
+        return result.paths ?? [];
+      },
+      async openDirectory(options = {}) {
+        const { defaultPath, title, timeoutMs, signal } = options;
+        const result = await invoke(
+          "dialog.openDirectory",
+          { defaultPath, title },
+          { timeoutMs, signal },
+        );
+        return result.path ? result : null;
+      },
+      async saveFile(options = {}) {
+        const { filters, defaultPath, title, suggestedName, timeoutMs, signal } = options;
+        const result = await invoke(
+          "dialog.saveFile",
+          { filters, defaultPath, title, suggestedName },
+          { timeoutMs, signal },
+        );
+        return result.path ? result : null;
       },
     }),
     runtime: Object.freeze({
@@ -55,6 +184,9 @@ export function createAlexClient(transport = browserTransport()) {
       },
       restart(options) {
         return invoke("runtime.restart", {}, options);
+      },
+      async cancel(requestId, options) {
+        return invoke("runtime.cancel", { requestId }, options);
       },
     }),
     window: Object.freeze({
@@ -79,6 +211,9 @@ export function createAlexClient(transport = browserTransport()) {
     system: Object.freeze({
       info(options) {
         return invoke("system.info", {}, options);
+      },
+      capabilities(options) {
+        return invoke("system.capabilities", {}, options);
       },
       async openExternal(url, options) {
         await invoke("system.openExternal", { url }, options);
@@ -110,12 +245,15 @@ export function createAlexClient(transport = browserTransport()) {
 
 let defaultClient;
 
-export const alex = new Proxy({}, {
-  get(_target, property) {
-    defaultClient ??= createAlexClient();
-    return defaultClient[property];
+export const alex = new Proxy(
+  {},
+  {
+    get(_target, property) {
+      defaultClient ??= createAlexClient();
+      return defaultClient[property];
+    },
   },
-});
+);
 
 async function invokeWithControls(transport, method, params = {}, options = {}) {
   const timeoutMs = options.timeoutMs ?? DEFAULT_TIMEOUT_MS;
@@ -130,7 +268,10 @@ async function invokeWithControls(transport, method, params = {}, options = {}) 
   let abortHandler;
   const controls = new Promise((_, reject) => {
     timer = setTimeout(
-      () => reject(new AlexError("DEADLINE_EXCEEDED", `Alex API request timed out after ${timeoutMs}ms`)),
+      () =>
+        reject(
+          new AlexError("DEADLINE_EXCEEDED", `Alex API request timed out after ${timeoutMs}ms`),
+        ),
       timeoutMs,
     );
     if (options.signal) {
@@ -174,4 +315,27 @@ function normalizeError(error) {
 
 function abortedError(reason) {
   return new AlexError("ABORTED", "Alex API request was aborted", reason);
+}
+
+function bytesToBase64(bytes) {
+  let binary = "";
+  for (let i = 0; i < bytes.length; i += 1) {
+    binary += String.fromCharCode(bytes[i]);
+  }
+  if (typeof btoa === "function") {
+    return btoa(binary);
+  }
+  return Buffer.from(binary, "binary").toString("base64");
+}
+
+function base64ToBytes(value) {
+  if (typeof atob === "function") {
+    const binary = atob(value);
+    const out = new Uint8Array(binary.length);
+    for (let i = 0; i < binary.length; i += 1) {
+      out[i] = binary.charCodeAt(i);
+    }
+    return out;
+  }
+  return new Uint8Array(Buffer.from(value, "base64"));
 }

@@ -183,3 +183,98 @@ li .actions {
   background: #fde0dc;
   border-color: #e0938c;
 }
+
+.runtime-badge {
+  display: inline-flex;
+  align-items: center;
+  gap: 0.35rem;
+  font-size: 0.75rem;
+  color: #1d1d1f;
+}
+
+.runtime-state {
+  display: inline-block;
+  font-weight: 600;
+  padding: 0.08rem 0.4rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  text-transform: lowercase;
+  background: #ececef;
+  border-color: #d0d0d4;
+  color: #5d5d63;
+}
+
+.runtime-badge[data-state="ready"] .runtime-state {
+  color: #11552c;
+  background: #d9f3df;
+  border-color: #8ccaa0;
+}
+
+.runtime-badge[data-state="running"] .runtime-state {
+  color: #11552c;
+  background: #d9f3df;
+  border-color: #8ccaa0;
+}
+
+.runtime-badge[data-state="starting"] .runtime-state {
+  color: #5a4e00;
+  background: #fff4c2;
+  border-color: #d6b656;
+}
+
+.runtime-badge[data-state="crashed"] .runtime-state {
+  color: #8b1a14;
+  background: #fde0dc;
+  border-color: #e0938c;
+}
+
+.runtime-port {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  color: #11552c;
+}
+
+.runtime-pid {
+  color: #5d5d63;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.7rem;
+}
+
+.runtime-error {
+  cursor: help;
+  font-size: 0.9rem;
+}
+
+.runtime-logs {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: #5d5d63;
+}
+
+.runtime-logs summary {
+  cursor: pointer;
+  color: #5a4e00;
+}
+
+.runtime-logs pre {
+  margin: 0.25rem 0 0;
+  padding: 0.4rem 0.5rem;
+  background: #1d1d1f;
+  color: #d6d6da;
+  border-radius: 4px;
+  max-width: 360px;
+  max-height: 200px;
+  overflow: auto;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+}
+
+.runtime-offline {
+  display: inline-block;
+  font-size: 0.7rem;
+  color: #5d5d63;
+  background: #ececef;
+  border: 1px solid #d0d0d4;
+  border-radius: 999px;
+  padding: 0.08rem 0.4rem;
+}

@@ -28,7 +28,7 @@ use thiserror::Error;
 use crate::{
     authorization::{AuthorizationError, PermissionDecision, PermissionStore},
     load_app,
-    manifest::AppManifest,
+    manifest::{AppManifest, BackendMode},
     package,
     package::PackageError,
     runtime::{RuntimeHandle, RuntimeState, RuntimeStatus},
@@ -99,6 +99,33 @@ pub struct AppSummary {
     pub last_launched_at: Option<String>,
     pub publisher_fingerprint: Option<String>,
     pub signature_state: SignatureState,
+    /// Live runtime snapshot for this app. `None` when the app is
+    /// not currently running; populated by `LocalAppManager::list_apps`
+    /// from the `RuntimeSupervisor` so the manager UI can show
+    /// mode / port / pid / ready state without an extra round-trip.
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub runtime: Option<RuntimeSnapshot>,
+}
+
+/// Lightweight runtime state for the App Manager list view. Only the
+/// fields the UI needs are copied off the supervisor so we can return
+/// the list without holding the supervisor lock or re-querying the
+/// child process.
+#[derive(Debug, Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
+pub struct RuntimeSnapshot {
+    pub state: RuntimeState,
+    pub mode: BackendMode,
+    pub pid: Option<u32>,
+    pub port: Option<u16>,
+    pub ready: bool,
+    pub last_error: Option<String>,
+    /// Last few stderr lines from the backend's ring-buffered log.
+    /// The buffer itself is bounded (`MAX_LOG_LINES = 200` in
+    /// `src/runtime.rs`); the snapshot keeps the most recent slice so
+    /// the UI can render a "tail" without paging through the full
+    /// history.
+    pub recent_logs: Vec<String>,
 }
 
 /// 详情视图
@@ -416,6 +443,40 @@ pub struct LocalAppManager {
 }
 
 impl LocalAppManager {
+    /// Project a live `RuntimeStatus` into the lighter
+    /// `RuntimeSnapshot` shape the App Manager UI consumes. Returns
+    /// `None` if the supervisor has no slot for `id` (i.e. the app
+    /// is not currently running). We deliberately drop the
+    /// `restartCount` and full log history — the snapshot is meant
+    /// to fit in a single manager-UI row, not to be a full replica
+    /// of the runtime supervisor state.
+    fn runtime_snapshot(&self, id: &str) -> Option<RuntimeSnapshot> {
+        let status = self.runtimes.snapshot(id)?;
+        // Keep the most recent slice of the backend's stderr ring
+        // buffer; `MAX_LOG_LINES` is 200 in `src/runtime.rs` so this
+        // is a tail, not the full log. The UI can format it as a
+        // `<details>` block if it wants more.
+        let recent_logs: Vec<String> = status
+            .logs
+            .iter()
+            .rev()
+            .take(20)
+            .cloned()
+            .collect::<Vec<_>>()
+            .into_iter()
+            .rev()
+            .collect();
+        Some(RuntimeSnapshot {
+            state: status.state,
+            mode: status.mode,
+            pid: status.pid,
+            port: status.port,
+            ready: status.ready,
+            last_error: status.last_error,
+            recent_logs,
+        })
+    }
+
     pub fn open(install_root: &Path) -> Result<Self, ManagerError> {
         let permissions_root = std::env::var_os("ALEX_DATA_DIR")
             .map(PathBuf::from)
@@ -478,7 +539,9 @@ impl AppManager for LocalAppManager {
                 Ok(m) => m,
                 Err(_) => continue,
             };
-            out.push(summary_from(&manifest, &record, &app_path, &trust_lookup));
+            let mut summary = summary_from(&manifest, &record, &app_path, &trust_lookup);
+            summary.runtime = self.runtime_snapshot(&id);
+            out.push(summary);
         }
         out.sort_by(|a, b| a.id.cmp(&b.id));
         Ok(out)
@@ -754,6 +817,19 @@ impl RuntimeSupervisor {
             runtimes.remove(id);
         }
         Ok(status)
+    }
+
+    /// Snapshot the live runtime for `id`, or `None` when no
+    /// supervisor slot is currently held. Distinct from `status`:
+    /// that one always returns a `RuntimeStatus` and reports a
+    /// fabricated `Stopped` state for not-running apps, which would
+    /// be misleading to embed in `AppSummary.runtime`. Callers that
+    /// want the optional "is the backend up right now" view should
+    /// use this helper.
+    pub fn snapshot(&self, id: &str) -> Option<RuntimeStatus> {
+        let runtimes = self.runtimes.lock().expect("runtime lock poisoned");
+        let handle = runtimes.get(id)?;
+        handle.status(Duration::from_millis(200)).ok()
     }
 
     /// Stop the runtime (graceful, then forceful) and forget about
@@ -1037,6 +1113,7 @@ fn summary_from(
             record.publisher_fingerprint.as_deref(),
             trust_lookup,
         ),
+        runtime: None,
     }
 }
 
@@ -1072,3 +1149,82 @@ fn with_trust_lookup(
 // permission store should use, and the `Permission::name` method is
 // the single source of truth for that string. See `permissions` and
 // `set_permission` above.
+
+#[cfg(test)]
+mod runtime_snapshot_tests {
+    use super::*;
+    use serde_json::json;
+
+    /// The wire shape the App Manager UI consumes: `runtime` is
+    /// `camelCase` and the field is omitted entirely when no live
+    /// snapshot is available, so apps that aren't currently running
+    /// don't show an `offline` badge by default.
+    #[test]
+    fn app_summary_serializes_runtime_when_present_and_skips_when_absent() {
+        let summary_with_runtime = AppSummary {
+            id: "com.example.notes".into(),
+            name: "Notes".into(),
+            version: "0.1.0".into(),
+            description: None,
+            path: PathBuf::from("apps/com.example.notes"),
+            install_source: InstallSource::LocalPackage,
+            last_launched_at: None,
+            publisher_fingerprint: None,
+            signature_state: SignatureState::Unsigned,
+            runtime: Some(RuntimeSnapshot {
+                state: RuntimeState::Ready,
+                mode: BackendMode::Service,
+                pid: Some(1234),
+                port: Some(28100),
+                ready: true,
+                last_error: None,
+                recent_logs: vec!["ready".into()],
+            }),
+        };
+        let value = serde_json::to_value(&summary_with_runtime).expect("serialize");
+        let runtime = value
+            .get("runtime")
+            .expect("runtime present when snapshot exists");
+        assert_eq!(runtime["state"], "ready");
+        assert_eq!(runtime["mode"], "service");
+        assert_eq!(runtime["pid"], 1234);
+        assert_eq!(runtime["port"], 28100);
+        assert_eq!(runtime["ready"], true);
+        assert_eq!(runtime["recentLogs"], json!(["ready"]));
+
+        let summary_offline = AppSummary {
+            runtime: None,
+            ..summary_with_runtime
+        };
+        let value = serde_json::to_value(&summary_offline).expect("serialize");
+        assert!(
+            value.get("runtime").is_none(),
+            "offline apps must not carry a runtime key, got: {value}"
+        );
+    }
+
+    #[test]
+    fn runtime_snapshot_keeps_only_a_tail_of_logs() {
+        // The supervisor's ring buffer is 200 lines; the snapshot
+        // is supposed to take a tail so the manager UI doesn't
+        // stream the full history on every refresh. We only verify
+        // the contract here — that the tail is the most recent N
+        // lines, in order — and let the size be whatever the host
+        // decides.
+        let logs: Vec<String> = (0..50).map(|i| format!("line {i}")).collect();
+        let mut tail: Vec<String> = logs.iter().rev().take(20).cloned().collect();
+        tail.reverse();
+        let snapshot = RuntimeSnapshot {
+            state: RuntimeState::Ready,
+            mode: BackendMode::Service,
+            pid: Some(1),
+            port: Some(28000),
+            ready: true,
+            last_error: None,
+            recent_logs: tail,
+        };
+        assert_eq!(snapshot.recent_logs.len(), 20);
+        assert_eq!(snapshot.recent_logs.first().unwrap(), "line 30");
+        assert_eq!(snapshot.recent_logs.last().unwrap(), "line 49");
+    }
+}

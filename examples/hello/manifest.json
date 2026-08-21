@@ -15,9 +15,38 @@
       "name": "filesystem.read",
       "paths": ["data"]
     },
+    {
+      "name": "filesystem.write",
+      "paths": ["data"]
+    },
+    {
+      "name": "filesystem.watch",
+      "paths": ["data"]
+    },
+    {
+      "name": "filesystem.delete",
+      "paths": ["data"]
+    },
+    { "name": "filesystem.drop" },
+    { "name": "dialog.open" },
+    { "name": "dialog.save" },
+    { "name": "storage" },
+    { "name": "paths" },
+    { "name": "clipboard.read" },
+    { "name": "clipboard.write" },
+    { "name": "system.openExternal", "origins": ["https://example.com"] },
+    { "name": "window.manage" },
+    { "name": "window.open" },
+    { "name": "notification.show" },
+    { "name": "menu.manage" },
+    { "name": "tray.manage" },
+    { "name": "shortcut.register" },
+    { "name": "process.spawn", "executables": ["tools/converter.exe"] },
+    { "name": "media.camera" },
+    { "name": "media.microphone" },
+    { "name": "geolocation" },
     { "name": "runtime.invoke" },
     { "name": "runtime.manage" },
-    { "name": "window.manage" },
-    { "name": "notification.show" }
+    { "name": "network.fetch", "origins": ["https://api.example.com"] }
   ]
 }

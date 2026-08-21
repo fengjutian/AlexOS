@@ -36,6 +36,80 @@ function setExtStatus(text, isError) {
   extStatusEl.classList.toggle("error", Boolean(isError));
 }
 
+// Map a `RuntimeState` (lowercase enum from `src/runtime.rs`) into a
+// human-friendly badge label. Anything outside the known set falls
+// back to a neutral string so a future host addition does not break
+// the UI.
+const RUNTIME_STATE_LABELS = {
+  running: "running",
+  ready: "ready",
+  starting: "starting",
+  crashed: "crashed",
+  stopped: "stopped",
+};
+const RUNTIME_STATES = new Set(Object.keys(RUNTIME_STATE_LABELS));
+
+function makeRuntimeBadge(runtime) {
+  const wrap = document.createElement("span");
+  wrap.className = "runtime-badge";
+  if (!runtime) {
+    const offline = document.createElement("span");
+    offline.className = "runtime-offline";
+    offline.textContent = "offline";
+    offline.title = "Backend is not running.";
+    wrap.appendChild(offline);
+    return wrap;
+  }
+  const state = RUNTIME_STATES.has(runtime.state) ? runtime.state : "stopped";
+  wrap.dataset.state = state;
+  const badge = document.createElement("span");
+  badge.className = "runtime-state";
+  badge.textContent = `${runtime.mode ?? "rpc"} · ${RUNTIME_STATE_LABELS[state]}`;
+  // Service-mode extras: surface port + readiness so the user can see
+  // the proxy is bound and accepting. We never show the per-launch
+  // token — that's a host-only secret.
+  if (runtime.mode === "service") {
+    if (runtime.port) {
+      const port = document.createElement("span");
+      port.className = "runtime-port";
+      port.textContent = `:${runtime.port}`;
+      port.title = runtime.ready
+        ? "Service backend is accepting connections on this loopback port."
+        : "Service backend is bound but has not yet reported ready.";
+      wrap.append(badge, port);
+    } else {
+      wrap.appendChild(badge);
+    }
+  } else {
+    wrap.appendChild(badge);
+  }
+  if (runtime.pid) {
+    const pid = document.createElement("span");
+    pid.className = "runtime-pid";
+    pid.textContent = `pid ${runtime.pid}`;
+    wrap.appendChild(pid);
+  }
+  if (runtime.lastError) {
+    const err = document.createElement("span");
+    err.className = "runtime-error";
+    err.textContent = "⚠";
+    err.title = `Last error: ${runtime.lastError}`;
+    wrap.appendChild(err);
+  }
+  if (Array.isArray(runtime.recentLogs) && runtime.recentLogs.length > 0) {
+    const details = document.createElement("details");
+    details.className = "runtime-logs";
+    const summary = document.createElement("summary");
+    summary.textContent = `${runtime.recentLogs.length} log line(s)`;
+    details.appendChild(summary);
+    const pre = document.createElement("pre");
+    pre.textContent = runtime.recentLogs.join("\n");
+    details.appendChild(pre);
+    wrap.appendChild(details);
+  }
+  return wrap;
+}
+
 function makeAppRow(app) {
   const li = document.createElement("li");
   const name = document.createElement("span");
@@ -65,6 +139,7 @@ function makeAppRow(app) {
   } else {
     sig.title = "No signature metadata in the package.";
   }
+  const runtime = makeRuntimeBadge(app.runtime);
   const actions = document.createElement("span");
   actions.className = "actions";
   const uninstallBtn = document.createElement("button");
@@ -72,7 +147,7 @@ function makeAppRow(app) {
   uninstallBtn.textContent = "Uninstall";
   uninstallBtn.addEventListener("click", () => uninstallApp(app, uninstallBtn));
   actions.appendChild(uninstallBtn);
-  li.append(name, id, version, sig, actions);
+  li.append(name, id, version, sig, runtime, actions);
   return li;
 }
 

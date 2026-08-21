@@ -65,6 +65,17 @@ pub mod windows {
             try { listener(data); } catch (error) { queueMicrotask(() => { throw error; }); }
           }
         };
+        // Subscriptions have their own listener bucket so
+        // the page can subscribe to a streamed event without
+        // re-registering a listener every time the host
+        // delivers one.
+        const subscriptionListeners = new Map();
+        window.__alexDeliver = (envelope) => {
+          const set = subscriptionListeners.get(envelope.event) ?? new Set();
+          for (const listener of set) {
+            try { listener(envelope); } catch (error) { queueMicrotask(() => { throw error; }); }
+          }
+        };
         window.alex = Object.freeze({
           invoke(method, params = {}, options = {}) {
             const id = `web-${Date.now()}-${++sequence}`;
@@ -333,6 +344,31 @@ pub mod windows {
     pub fn emit_event(webview: &wry::WebView, event: &str, data: serde_json::Value) {
         let event = serde_json::to_string(event).expect("event name is valid JSON");
         let script = format!("window.__alexEmit?.({event},{data})");
+        let _ = webview.evaluate_script(&script);
+    }
+
+    /// Forward a delivered bus event to the WebView. The
+    /// page's `__alexDeliver` shim dispatches it to whichever
+    /// subscriber is listening for the matching event name.
+    /// The script swallows any host-side error so a dead
+    /// WebView does not bubble back into the runtime manager.
+    pub fn emit_subscribed(
+        webview: &wry::WebView,
+        event: &str,
+        subscription_id: &str,
+        sequence: u64,
+        payload: &serde_json::Value,
+    ) {
+        let envelope = serde_json::json!({
+            "kind": "event",
+            "event": event,
+            "subscriptionId": subscription_id,
+            "sequence": sequence,
+            "payload": payload,
+        });
+        let envelope_str = serde_json::to_string(&envelope)
+            .expect("envelope is valid JSON");
+        let script = format!("window.__alexDeliver?.({envelope_str})");
         let _ = webview.evaluate_script(&script);
     }
 }
