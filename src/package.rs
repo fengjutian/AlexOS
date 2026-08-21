@@ -5,6 +5,9 @@ use std::{
     path::{Path, PathBuf},
 };
 
+use base64::{Engine, engine::general_purpose::STANDARD as BASE64};
+use ed25519_dalek::{Signature, Signer, SigningKey, Verifier, VerifyingKey};
+use rand_core::OsRng;
 use serde::{Deserialize, Serialize};
 use sha2::{Digest, Sha256};
 use thiserror::Error;
@@ -13,6 +16,7 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 use crate::{AlexError, load_app};
 
 const INTEGRITY_PATH: &str = ".alex/integrity.json";
+const SIGNATURE_PATH: &str = ".alex/signature.json";
 const MAX_PACKAGE_FILES: usize = 10_000;
 const MAX_FILE_BYTES: u64 = 256 * 1024 * 1024;
 const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
@@ -39,6 +43,8 @@ pub enum PackageError {
     Integrity(String),
     #[error("package limit exceeded: {0}")]
     Limit(String),
+    #[error("package signature check failed: {0}")]
+    Signature(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -46,6 +52,22 @@ pub enum PackageError {
 struct IntegrityManifest {
     algorithm: String,
     files: BTreeMap<String, String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct SignatureManifest {
+    algorithm: String,
+    public_key: String,
+    signature: String,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct KeyFile {
+    algorithm: String,
+    public_key: String,
+    secret_key: String,
 }
 
 #[derive(Debug)]
@@ -96,6 +118,52 @@ pub fn create_project(destination: &Path, package_id: &str) -> Result<(), Packag
 }
 
 pub fn pack(source: &Path, output: &Path) -> Result<(), PackageError> {
+    pack_internal(source, output, None)
+}
+
+pub fn generate_signing_key(output: &Path) -> Result<String, PackageError> {
+    if output.exists() {
+        return Err(PackageError::AlreadyInstalled(output.to_path_buf()));
+    }
+    let signing = SigningKey::generate(&mut OsRng);
+    let public_key = BASE64.encode(signing.verifying_key().to_bytes());
+    let key = KeyFile {
+        algorithm: "ed25519".into(),
+        public_key: public_key.clone(),
+        secret_key: BASE64.encode(signing.to_bytes()),
+    };
+    fs::write(
+        output,
+        serde_json::to_vec_pretty(&key).expect("key data is valid"),
+    )?;
+    Ok(public_key)
+}
+
+pub fn pack_signed(source: &Path, output: &Path, key_path: &Path) -> Result<(), PackageError> {
+    let key: KeyFile = serde_json::from_reader(File::open(key_path)?)
+        .map_err(|error| PackageError::Signature(format!("invalid key file: {error}")))?;
+    if key.algorithm != "ed25519" {
+        return Err(PackageError::Signature("unsupported key algorithm".into()));
+    }
+    let secret: [u8; 32] = BASE64
+        .decode(&key.secret_key)
+        .map_err(|error| PackageError::Signature(error.to_string()))?
+        .try_into()
+        .map_err(|_| PackageError::Signature("invalid secret key length".into()))?;
+    let signing = SigningKey::from_bytes(&secret);
+    if BASE64.encode(signing.verifying_key().to_bytes()) != key.public_key {
+        return Err(PackageError::Signature(
+            "public and secret key do not match".into(),
+        ));
+    }
+    pack_internal(source, output, Some(&signing))
+}
+
+fn pack_internal(
+    source: &Path,
+    output: &Path,
+    signing: Option<&SigningKey>,
+) -> Result<(), PackageError> {
     load_app(source)?;
     if output.exists() {
         return Err(PackageError::AlreadyInstalled(output.to_path_buf()));
@@ -121,29 +189,52 @@ pub fn pack(source: &Path, output: &Path) -> Result<(), PackageError> {
         writer.start_file(relative, SimpleFileOptions::default())?;
         io::copy(&mut File::open(path)?, &mut writer)?;
     }
+    let integrity_bytes = serde_json::to_vec_pretty(&integrity).expect("integrity data is valid");
     writer.start_file(INTEGRITY_PATH, SimpleFileOptions::default())?;
-    writer.write_all(&serde_json::to_vec_pretty(&integrity).expect("integrity data is valid"))?;
+    writer.write_all(&integrity_bytes)?;
+    if let Some(signing) = signing {
+        let signature = SignatureManifest {
+            algorithm: "ed25519".into(),
+            public_key: BASE64.encode(signing.verifying_key().to_bytes()),
+            signature: BASE64.encode(signing.sign(&integrity_bytes).to_bytes()),
+        };
+        writer.start_file(SIGNATURE_PATH, SimpleFileOptions::default())?;
+        writer
+            .write_all(&serde_json::to_vec_pretty(&signature).expect("signature data is valid"))?;
+    }
     writer.finish()?;
     Ok(())
 }
 
 pub fn install(archive_path: &Path, install_root: &Path) -> Result<PathBuf, PackageError> {
+    install_verified(archive_path, install_root, false, None)
+}
+
+pub fn install_verified(
+    archive_path: &Path,
+    install_root: &Path,
+    require_signature: bool,
+    trusted_key: Option<&str>,
+) -> Result<PathBuf, PackageError> {
     fs::create_dir_all(install_root)?;
     let temporary = tempfile::Builder::new()
         .prefix(".alex-install-")
         .tempdir_in(install_root)?;
     let mut archive = ZipArchive::new(File::open(archive_path)?)?;
-    if archive.len() > MAX_PACKAGE_FILES + 1 {
+    if archive.len() > MAX_PACKAGE_FILES + 2 {
         return Err(PackageError::Limit(format!(
             "more than {MAX_PACKAGE_FILES} files"
         )));
     }
-    let integrity: IntegrityManifest = {
-        let entry = archive
+    let (integrity, integrity_bytes): (IntegrityManifest, Vec<u8>) = {
+        let mut entry = archive
             .by_name(INTEGRITY_PATH)
             .map_err(|_| PackageError::Integrity("missing integrity manifest".into()))?;
-        serde_json::from_reader(entry)
-            .map_err(|error| PackageError::Integrity(format!("invalid manifest: {error}")))?
+        let mut bytes = Vec::new();
+        entry.read_to_end(&mut bytes)?;
+        let manifest = serde_json::from_slice(&bytes)
+            .map_err(|error| PackageError::Integrity(format!("invalid manifest: {error}")))?;
+        (manifest, bytes)
     };
     if integrity.algorithm != "sha256" {
         return Err(PackageError::Integrity(format!(
@@ -151,9 +242,24 @@ pub fn install(archive_path: &Path, install_root: &Path) -> Result<PathBuf, Pack
             integrity.algorithm
         )));
     }
+    let signature = match archive.by_name(SIGNATURE_PATH) {
+        Ok(entry) => Some(
+            serde_json::from_reader::<_, SignatureManifest>(entry)
+                .map_err(|error| PackageError::Signature(format!("invalid metadata: {error}")))?,
+        ),
+        Err(zip::result::ZipError::FileNotFound) => None,
+        Err(error) => return Err(error.into()),
+    };
+    verify_signature(
+        signature.as_ref(),
+        &integrity_bytes,
+        require_signature,
+        trusted_key,
+    )?;
     let mut seen = HashSet::new();
     let mut total_bytes = 0_u64;
     let mut integrity_entries = 0_usize;
+    let mut signature_entries = 0_usize;
     for index in 0..archive.len() {
         let mut entry = archive.by_index(index)?;
         let relative = entry
@@ -162,6 +268,10 @@ pub fn install(archive_path: &Path, install_root: &Path) -> Result<PathBuf, Pack
         let relative_name = relative.to_string_lossy().replace('\\', "/");
         if relative_name == INTEGRITY_PATH {
             integrity_entries += 1;
+            continue;
+        }
+        if relative_name == SIGNATURE_PATH {
+            signature_entries += 1;
             continue;
         }
         let identity = relative_name.to_ascii_lowercase();
@@ -211,6 +321,11 @@ pub fn install(archive_path: &Path, install_root: &Path) -> Result<PathBuf, Pack
     if integrity_entries != 1 {
         return Err(PackageError::Integrity(
             "archive must contain exactly one integrity manifest".into(),
+        ));
+    }
+    if signature_entries != usize::from(signature.is_some()) {
+        return Err(PackageError::Signature(
+            "archive contains duplicate signature metadata".into(),
         ));
     }
     if seen.len() != integrity.files.len() {
@@ -338,6 +453,43 @@ fn copy_and_hash(
         total += read as u64;
     }
     Ok(total)
+}
+
+fn verify_signature(
+    metadata: Option<&SignatureManifest>,
+    message: &[u8],
+    required: bool,
+    trusted_key: Option<&str>,
+) -> Result<(), PackageError> {
+    let Some(metadata) = metadata else {
+        if required || trusted_key.is_some() {
+            return Err(PackageError::Signature("package is unsigned".into()));
+        }
+        return Ok(());
+    };
+    if metadata.algorithm != "ed25519" {
+        return Err(PackageError::Signature("unsupported algorithm".into()));
+    }
+    if trusted_key.is_some_and(|trusted| trusted != metadata.public_key) {
+        return Err(PackageError::Signature(
+            "publisher key is not trusted".into(),
+        ));
+    }
+    let public_bytes: [u8; 32] = BASE64
+        .decode(&metadata.public_key)
+        .map_err(|error| PackageError::Signature(error.to_string()))?
+        .try_into()
+        .map_err(|_| PackageError::Signature("invalid public key length".into()))?;
+    let signature_bytes: [u8; 64] = BASE64
+        .decode(&metadata.signature)
+        .map_err(|error| PackageError::Signature(error.to_string()))?
+        .try_into()
+        .map_err(|_| PackageError::Signature("invalid signature length".into()))?;
+    let verifying = VerifyingKey::from_bytes(&public_bytes)
+        .map_err(|error| PackageError::Signature(error.to_string()))?;
+    verifying
+        .verify(message, &Signature::from_bytes(&signature_bytes))
+        .map_err(|error| PackageError::Signature(error.to_string()))
 }
 
 fn ignored(path: &Path) -> bool {

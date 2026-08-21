@@ -35,12 +35,23 @@ enum Commands {
     /// Invoke an Alex API request from a JSON file (diagnostic command).
     Invoke { path: PathBuf, request: PathBuf },
     /// Build a validated .alex application archive.
-    Pack { path: PathBuf, output: PathBuf },
+    Pack {
+        path: PathBuf,
+        output: PathBuf,
+        #[arg(long)]
+        sign: Option<PathBuf>,
+    },
+    /// Generate an Ed25519 publisher key file.
+    Keygen { output: PathBuf },
     /// Install a .alex archive into an application directory.
     Install {
         archive: PathBuf,
         #[arg(long)]
         root: PathBuf,
+        #[arg(long)]
+        require_signature: bool,
+        #[arg(long)]
+        trusted_key: Option<String>,
     },
     /// List valid applications in an installation directory.
     List {
@@ -114,12 +125,30 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let response = router.dispatch(request);
             println!("{}", serde_json::to_string_pretty(&response)?);
         }
-        Commands::Pack { path, output } => {
-            package::pack(&path, &output)?;
+        Commands::Pack { path, output, sign } => {
+            if let Some(key) = sign {
+                package::pack_signed(&path, &output, &key)?;
+            } else {
+                package::pack(&path, &output)?;
+            }
             println!("packed {}", output.display());
         }
-        Commands::Install { archive, root } => {
-            let installed = package::install(&archive, &root)?;
+        Commands::Keygen { output } => {
+            let public_key = package::generate_signing_key(&output)?;
+            println!("generated {}\npublic key: {}", output.display(), public_key);
+        }
+        Commands::Install {
+            archive,
+            root,
+            require_signature,
+            trusted_key,
+        } => {
+            let installed = package::install_verified(
+                &archive,
+                &root,
+                require_signature,
+                trusted_key.as_deref(),
+            )?;
             println!("installed {}", installed.display());
         }
         Commands::List { root } => {

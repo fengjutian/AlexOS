@@ -205,3 +205,43 @@ fn external_urls_require_https_or_http_and_an_allowed_origin() {
     });
     assert_eq!(denied.error.unwrap().code, "PERMISSION_DENIED");
 }
+
+#[test]
+fn signed_packages_verify_against_the_trusted_publisher() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let key = workspace.path().join("publisher.json");
+    let archive = workspace.path().join("signed.alex");
+    let public_key = package::generate_signing_key(&key).unwrap();
+    package::pack_signed(&source, &archive, &key).unwrap();
+    let installed = package::install_verified(
+        &archive,
+        &workspace.path().join("trusted-apps"),
+        true,
+        Some(&public_key),
+    )
+    .unwrap();
+    assert!(installed.join("manifest.json").is_file());
+
+    let error = package::install_verified(
+        &archive,
+        &workspace.path().join("untrusted-apps"),
+        true,
+        Some("not-the-publisher"),
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("not trusted"));
+}
+
+#[test]
+fn signature_required_rejects_unsigned_packages() {
+    let workspace = tempfile::tempdir().unwrap();
+    let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let archive = workspace.path().join("unsigned.alex");
+    package::pack(&source, &archive).unwrap();
+    let error = package::install_verified(&archive, &workspace.path().join("apps"), true, None)
+        .unwrap_err()
+        .to_string();
+    assert!(error.contains("unsigned"));
+}

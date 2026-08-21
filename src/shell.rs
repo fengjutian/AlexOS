@@ -28,7 +28,7 @@ mod windows {
         window::WindowBuilder,
     };
     use wry::{
-        WebViewBuilder,
+        NewWindowResponse, WebViewBuilder,
         http::{Response as HttpResponse, header::CONTENT_TYPE},
     };
 
@@ -93,6 +93,12 @@ mod windows {
 
         let webview = WebViewBuilder::new()
             .with_initialization_script(init_script)
+            .with_devtools(cfg!(debug_assertions) && std::env::var_os("ALEX_DEVTOOLS").is_some())
+            .with_incognito(true)
+            .with_clipboard(false)
+            .with_navigation_handler(|url| url.starts_with("alex://app/"))
+            .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+            .with_download_started_handler(|_, _| false)
             .with_ipc_handler(move |request| {
                 let router = Arc::clone(&ipc_router);
                 let proxy = proxy.clone();
@@ -160,6 +166,8 @@ mod windows {
         HttpResponse::builder()
             .status(status)
             .header(CONTENT_TYPE, content_type)
+            .header("X-Content-Type-Options", "nosniff")
+            .header("Content-Security-Policy", "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'")
             .body(body.into())
             .expect("static response is valid")
     }

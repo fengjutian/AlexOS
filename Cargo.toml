@@ -21,3 +21,14 @@ open = "5.3.6"
 rfd = { version = "0.16.0", default-features = false }
 tao = "0.35.3"
 wry = "0.55.1"
+
+[dependencies.base64]
+version = "0.22.1"
+
+[dependencies.ed25519-dalek]
+version = "2.2.0"
+features = ["rand_core"]
+
+[dependencies.rand_core]
+version = "0.6.4"
+features = ["getrandom"]
