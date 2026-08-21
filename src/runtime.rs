@@ -5,7 +5,7 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
     sync::{Arc, Mutex, mpsc},
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use serde::{Deserialize, Serialize};
@@ -229,7 +229,7 @@ fn runtime_manager(
             }
             RuntimeCommand::Restart { response } => {
                 if let Some(mut value) = process.take() {
-                    let _ = value.stop();
+                    let _ = value.stop_gracefully(Duration::from_secs(2));
                 }
                 let result = RuntimeProcess::start_with_logs(&root, &backend, Arc::clone(&logs))
                     .map(|value| {
@@ -245,6 +245,9 @@ fn runtime_manager(
                 let _ = response.send(result);
             }
         }
+    }
+    if let Some(mut value) = process {
+        let _ = value.stop_gracefully(Duration::from_secs(2));
     }
 }
 
@@ -398,6 +401,23 @@ impl RuntimeProcess {
             self.child.wait()?;
         }
         Ok(())
+    }
+
+    pub fn stop_gracefully(&mut self, timeout: Duration) -> Result<(), RuntimeError> {
+        if self.child.try_wait()?.is_some() {
+            return Ok(());
+        }
+        self.stdin
+            .write_all(b"{\"protocol\":1,\"type\":\"shutdown\"}\n")?;
+        self.stdin.flush()?;
+        let deadline = Instant::now() + timeout;
+        while Instant::now() < deadline {
+            if self.child.try_wait()?.is_some() {
+                return Ok(());
+            }
+            thread::sleep(Duration::from_millis(25));
+        }
+        self.stop()
     }
 }
 

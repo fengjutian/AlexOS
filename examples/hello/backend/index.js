@@ -7,6 +7,12 @@ input.on("line", (line) => {
   let request;
   try {
     request = JSON.parse(line);
+    if (request.type === "shutdown") {
+      console.error("Alex Hello backend shutting down");
+      input.close();
+      process.exitCode = 0;
+      return;
+    }
     let result;
     switch (request.method) {
       case "hello.greet":

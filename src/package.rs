@@ -111,7 +111,7 @@ pub fn create_project(destination: &Path, package_id: &str) -> Result<(), Packag
     )?;
     fs::write(
         destination.join("backend/index.js"),
-        "const readline=require('node:readline');\nreadline.createInterface({input:process.stdin}).on('line',line=>{const r=JSON.parse(line);process.stdout.write(JSON.stringify({protocol:1,id:r.id,result:{ok:true}})+'\\n')});\n",
+        "const readline=require('node:readline');\nconst input=readline.createInterface({input:process.stdin});\ninput.on('line',line=>{const r=JSON.parse(line);if(r.type==='shutdown'){input.close();return;}process.stdout.write(JSON.stringify({protocol:1,id:r.id,result:{ok:true}})+'\\n')});\n",
     )?;
     load_app(destination)?;
     Ok(())

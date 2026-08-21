@@ -11,6 +11,25 @@ pub enum NativeError {
 }
 
 #[cfg(windows)]
+pub fn confirm_permission(app_name: &str, permission: &str) -> Result<bool, NativeError> {
+    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+    let result = MessageDialog::new()
+        .set_level(MessageLevel::Warning)
+        .set_title("Alex OS Permission Request")
+        .set_description(format!(
+            "{app_name} requests permission:\n\n{permission}\n\nAllow this application to use it?"
+        ))
+        .set_buttons(MessageButtons::YesNo)
+        .show();
+    Ok(matches!(result, MessageDialogResult::Yes))
+}
+
+#[cfg(not(windows))]
+pub fn confirm_permission(_app_name: &str, _permission: &str) -> Result<bool, NativeError> {
+    Err(NativeError::Unsupported)
+}
+
+#[cfg(windows)]
 pub fn clipboard_read_text() -> Result<String, NativeError> {
     let mut clipboard =
         arboard::Clipboard::new().map_err(|error| NativeError::Failed(error.to_string()))?;

@@ -299,9 +299,24 @@ impl ApiRouter {
     }
 
     fn permission_granted(&self, name: &str) -> bool {
-        self.permission_store
-            .as_ref()
-            .is_none_or(|store| store.decision(name) == PermissionDecision::Granted)
+        let Some(store) = &self.permission_store else {
+            return true;
+        };
+        match store.decision(name) {
+            PermissionDecision::Granted => true,
+            PermissionDecision::Denied => false,
+            PermissionDecision::Prompt => {
+                let granted =
+                    native::confirm_permission(&self.manifest.name, name).unwrap_or(false);
+                let decision = if granted {
+                    PermissionDecision::Granted
+                } else {
+                    PermissionDecision::Denied
+                };
+                let _ = store.set(name, decision);
+                granted
+            }
+        }
     }
 
     fn resolve_requested(&self, path: &str) -> PathBuf {

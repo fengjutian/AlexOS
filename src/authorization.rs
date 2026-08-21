@@ -13,6 +13,7 @@ use thiserror::Error;
 #[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
 pub enum PermissionDecision {
+    Prompt,
     Granted,
     Denied,
 }
@@ -37,7 +38,9 @@ impl PermissionStore {
     pub fn for_app(app_id: &str) -> Result<Self, AuthorizationError> {
         let root = std::env::var_os("ALEX_DATA_DIR")
             .map(PathBuf::from)
-            .or_else(|| std::env::var_os("LOCALAPPDATA").map(|path| PathBuf::from(path).join("AlexOS")))
+            .or_else(|| {
+                std::env::var_os("LOCALAPPDATA").map(|path| PathBuf::from(path).join("AlexOS"))
+            })
             .unwrap_or_else(|| PathBuf::from(".alex-data"));
         Self::open_at(&root, app_id)
     }
@@ -65,7 +68,7 @@ impl PermissionStore {
             .lock()
             .ok()
             .and_then(|values| values.get(permission).copied())
-            .unwrap_or(PermissionDecision::Granted)
+            .unwrap_or(PermissionDecision::Prompt)
     }
 
     pub fn set(
@@ -86,17 +89,27 @@ impl PermissionStore {
     }
 
     pub fn list(&self) -> BTreeMap<String, PermissionDecision> {
-        self.decisions.lock().map(|value| value.clone()).unwrap_or_default()
+        self.decisions
+            .lock()
+            .map(|value| value.clone())
+            .unwrap_or_default()
     }
 
-    fn audit(&self, permission: &str, decision: PermissionDecision) -> Result<(), AuthorizationError> {
+    fn audit(
+        &self,
+        permission: &str,
+        decision: PermissionDecision,
+    ) -> Result<(), AuthorizationError> {
         let record = serde_json::json!({
             "timestampMs": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),
             "appId": self.app_id,
             "permission": permission,
             "decision": decision,
         });
-        let mut output = OpenOptions::new().create(true).append(true).open(&self.audit_path)?;
+        let mut output = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.audit_path)?;
         writeln!(output, "{}", serde_json::to_string(&record)?)?;
         Ok(())
     }

@@ -251,6 +251,10 @@ fn signature_required_rejects_unsigned_packages() {
 fn persisted_permission_revocation_is_enforced_and_audited() {
     let workspace = tempfile::tempdir().unwrap();
     let store = PermissionStore::open_at(workspace.path(), "com.alex.hello").unwrap();
+    assert_eq!(
+        store.decision("filesystem.read"),
+        PermissionDecision::Prompt
+    );
     store
         .set("filesystem.read", PermissionDecision::Denied)
         .unwrap();
