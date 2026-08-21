@@ -1234,3 +1234,98 @@ mod runtime_snapshot_tests {
         assert_eq!(snapshot.recent_logs.last().unwrap(), "line 49");
     }
 }
+
+#[cfg(test)]
+mod supervisor_launch_env_injection_tests {
+    use super::*;
+    use crate::manifest::{Backend, RuntimeKind};
+
+    /// Regression: `RuntimeSupervisor::launch` used to call the
+    /// legacy `RuntimeHandle::start` with a hardcoded `app_id =
+    /// "<unknown>"`, which made `start_with_spec` skip the
+    /// auto-managed data / cache / log dir resolution and never
+    /// inject `ALEX_APP_DATA_DIR` into the child env. The result:
+    /// `node:sqlite` backends silently fell back to `:memory:` and
+    /// the user's notes.db ended up nowhere.
+    ///
+    /// This test launches a tiny Node fixture that dumps the env
+    /// values to a JSON file, then asserts the host's expected
+    /// paths are present. It exercises the actual `launch` path
+    /// (not just the lower-level `start_with_spec`) so the bug
+    /// class can't slip back in via the call site.
+    #[test]
+    #[serial_test::serial]
+    fn supervisor_launch_injects_alex_env_into_service_backend() {
+        if crate::runtime::discover_node().is_none() {
+            eprintln!("skipping: Node.js not available");
+            return;
+        }
+        let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
+        let fixture = workspace.join("tests").join("fixtures").join("smoke-env.js");
+        if !fixture.is_file() {
+            eprintln!("skipping: {} not built", fixture.display());
+            return;
+        }
+        let id = "com.alex.supervisor-env-test";
+        let out = std::env::temp_dir().join(format!("alex-supervisor-env-{id}.json"));
+        let _ = std::fs::remove_file(&out);
+
+        let backend = Backend {
+            runtime: RuntimeKind::Node,
+            entry: fixture.to_string_lossy().into_owned(),
+            mode: crate::manifest::BackendMode::Service,
+            health_check: None,
+            restart: None,
+            port: None,
+        };
+        let install_root = workspace.join("examples").join("notes");
+        let supervisor = RuntimeSupervisor::default();
+        let status = supervisor
+            .launch(id, &install_root, &backend)
+            .expect("supervisor launch with real app_id");
+
+        assert_eq!(status.state, RuntimeState::Ready, "status was: {status:?}");
+        let port = status.port.expect("service mode reports a port");
+        assert!((28000..=28999).contains(&port));
+
+        // Give the fixture a tick to flush its env dump.
+        for _ in 0..50 {
+            if out.is_file() {
+                break;
+            }
+            std::thread::sleep(std::time::Duration::from_millis(20));
+        }
+        let body = std::fs::read_to_string(&out).expect("fixture wrote env dump");
+        let parsed: serde_json::Value = serde_json::from_str(&body).expect("env dump is json");
+
+        assert_eq!(parsed["ALEX_APP_ID"], id, "wrong app id injected: {parsed}");
+
+        let data_dir = parsed["ALEX_APP_DATA_DIR"]
+            .as_str()
+            .expect("ALEX_APP_DATA_DIR injected");
+        let cache_dir = parsed["ALEX_APP_CACHE_DIR"]
+            .as_str()
+            .expect("ALEX_APP_CACHE_DIR injected");
+        let log_dir = parsed["ALEX_APP_LOG_DIR"]
+            .as_str()
+            .expect("ALEX_APP_LOG_DIR injected");
+
+        let expected_dirs = crate::runtime::compute_app_dirs(id).expect("valid id");
+        expected_dirs.ensure().expect("ensure dirs");
+        assert_eq!(data_dir, expected_dirs.data.to_string_lossy());
+        assert_eq!(cache_dir, expected_dirs.cache.to_string_lossy());
+        assert_eq!(log_dir, expected_dirs.logs.to_string_lossy());
+
+        assert_eq!(
+            parsed["ALEX_SERVICE_PORT"].as_str(),
+            Some(port.to_string().as_str()),
+            "ALEX_SERVICE_PORT mismatch"
+        );
+        let token = parsed["ALEX_RUNTIME_TOKEN"]
+            .as_str()
+            .expect("ALEX_RUNTIME_TOKEN injected");
+        assert_eq!(token.len(), 64, "token must be 64 hex chars: {token}");
+
+        let _ = std::fs::remove_file(&out);
+    }
+}
