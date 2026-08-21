@@ -67,20 +67,22 @@ const FORWARDED_RESPONSE_HEADERS: &[&str] = &[
 ];
 
 /// Forward `request` to the service backend bound to `endpoint` and
-/// return the upstream reply. `path_after_api` is the request path
-/// with the `/api` prefix already stripped (e.g. `notes` for
-/// `alex://app/api/notes`).
+/// return the upstream reply. `request_path` is the WebView's path
+/// component (e.g. `/api/notes` for `alex://app/api/notes`) and is
+/// forwarded verbatim to the upstream backend — backends are
+/// expected to mount their HTTP routes under `/api/...` so the
+/// page's URL is meaningful to the backend as well.
 ///
 /// `app_id` is stamped on the upstream request as `X-Alx-App-Id` so
 /// the backend can verify the host actually launched it.
 pub fn proxy_to_service(
     endpoint: &ServiceEndpoint,
     app_id: &str,
-    path_after_api: &str,
+    request_path: &str,
     request: &Request<Vec<u8>>,
 ) -> Response<Cow<'static, [u8]>> {
-    if path_after_api.is_empty() {
-        return text_response(StatusCode::NOT_FOUND, "missing path after /api/");
+    if !request_path.starts_with('/') || request_path == "/" {
+        return text_response(StatusCode::NOT_FOUND, "missing path");
     }
     let body = request.body();
     if body.len() > MAX_REQUEST_BYTES {
@@ -104,7 +106,8 @@ pub fn proxy_to_service(
     let _ = stream.set_read_timeout(Some(READ_WRITE_TIMEOUT));
     let _ = stream.set_write_timeout(Some(READ_WRITE_TIMEOUT));
 
-    let head = build_upstream_request(endpoint, app_id, path_after_api, request);
+    let head = build_upstream_request(endpoint, app_id, request_path, request);
+    eprintln!("[proxy] sending {} bytes: {}", head.len(), String::from_utf8_lossy(&head));
     if let Err(error) = stream.write_all(&head) {
         return text_response(
             StatusCode::BAD_GATEWAY,
@@ -146,20 +149,20 @@ fn resolve_loopback(port: u16) -> Option<std::net::SocketAddr> {
 fn build_upstream_request(
     endpoint: &ServiceEndpoint,
     app_id: &str,
-    path_after_api: &str,
+    request_path: &str,
     request: &Request<Vec<u8>>,
 ) -> Vec<u8> {
     let body_len = request.body().len();
     let mut head = String::with_capacity(256 + body_len);
     let _ = write!(
         head,
-        "{method} /{path} HTTP/1.0\r\n\
+        "{method} {path} HTTP/1.0\r\n\
          Host: 127.0.0.1\r\n\
          X-Alx-App-Id: {app_id}\r\n\
          Connection: close\r\n\
          Content-Length: {body_len}\r\n",
         method = request.method(),
-        path = path_after_api,
+        path = request_path,
         app_id = app_id,
         body_len = body_len,
     );
@@ -219,6 +222,17 @@ fn text_response(status: StatusCode, body: &str) -> Response<Cow<'static, [u8]>>
         .header("x-content-type-options", "nosniff")
         .body(Cow::Owned(body.as_bytes().to_vec()))
         .expect("static text response is valid")
+}
+
+/// Returned by the WebView protocol handler when the page requests
+/// `/api/...` but the host didn't launch a service-mode backend for
+/// this app (e.g. a legacy RPC-only app or a frontend-only package).
+/// The page sees a 503 with a stable error body it can branch on.
+pub fn service_unavailable_response() -> Response<Cow<'static, [u8]>> {
+    text_response(
+        StatusCode::SERVICE_UNAVAILABLE,
+        "no service-mode backend is bound to this app",
+    )
 }
 
 #[cfg(test)]
@@ -284,7 +298,7 @@ mod tests {
         // and we expect 502 from the proxy.
         let endpoint = endpoint_for(1);
         let request = make_get_request("alex://app/api/health");
-        let response = proxy_to_service(&endpoint, "com.example", "health", &request);
+        let response = proxy_to_service(&endpoint, "com.example", "/api/health", &request);
         assert_eq!(response.status().as_u16(), 502);
     }
 
@@ -293,7 +307,7 @@ mod tests {
         let endpoint = endpoint_for(1);
         let huge = vec![b'x'; MAX_REQUEST_BYTES + 1];
         let request = make_post_request("alex://app/api/notes", &huge);
-        let response = proxy_to_service(&endpoint, "com.example", "notes", &request);
+        let response = proxy_to_service(&endpoint, "com.example", "/api/notes", &request);
         assert_eq!(response.status().as_u16(), 413);
     }
 
@@ -303,12 +317,12 @@ mod tests {
         let (port, captured) = spawn_one_shot_backend(reply);
         let endpoint = endpoint_for(port);
         let request = make_get_request("alex://app/api/health");
-        let response = proxy_to_service(&endpoint, "com.example.test", "health", &request);
+        let response = proxy_to_service(&endpoint, "com.example.test", "/api/health", &request);
         assert_eq!(response.status().as_u16(), 200);
         assert_eq!(response.body().as_ref(), b"{\"status\":\"ready\"}");
         let sent = captured.lock().unwrap().clone().expect("captured");
         let sent_str = std::str::from_utf8(&sent).expect("utf8 request");
-        assert!(sent_str.starts_with("GET /health HTTP/1.0\r\n"));
+        assert!(sent_str.starts_with("GET /api/health HTTP/1.0\r\n"));
         assert!(sent_str.contains("X-Alx-App-Id: com.example.test\r\n"));
         assert!(sent_str.contains("X-Alx-Token: "));
         // Token must match what the endpoint declared.
@@ -322,11 +336,11 @@ mod tests {
         let endpoint = endpoint_for(port);
         let body = b"{\"title\":\"hello\"}";
         let request = make_post_request("alex://app/api/notes", body);
-        let response = proxy_to_service(&endpoint, "com.example", "notes", &request);
+        let response = proxy_to_service(&endpoint, "com.example", "/api/notes", &request);
         assert_eq!(response.status().as_u16(), 201);
         let sent = captured.lock().unwrap().clone().expect("captured");
         let sent_str = std::str::from_utf8(&sent).expect("utf8 request");
-        assert!(sent_str.starts_with("POST /notes HTTP/1.0\r\n"));
+        assert!(sent_str.starts_with("POST /api/notes HTTP/1.0\r\n"));
         assert!(sent_str.contains("content-type: application/json\r\n"));
         assert!(sent_str.contains(&format!("Content-Length: {}\r\n", body.len())));
         assert!(sent_str.ends_with(std::str::from_utf8(body).unwrap()));
@@ -344,7 +358,7 @@ mod tests {
             .header("accept", "application/json")
             .body(Vec::new())
             .unwrap();
-        let _ = proxy_to_service(&endpoint, "com.example", "notes", &request);
+        let _ = proxy_to_service(&endpoint, "com.example", "/api/notes", &request);
         let sent = captured.lock().unwrap().clone().expect("captured");
         let sent_str = std::str::from_utf8(&sent).expect("utf8 request");
         assert!(sent_str.contains("accept: application/json\r\n"));
@@ -360,7 +374,7 @@ mod tests {
         let (port, _captured) = spawn_one_shot_backend(reply);
         let endpoint = endpoint_for(port);
         let request = make_get_request("alex://app/api/missing");
-        let response = proxy_to_service(&endpoint, "com.example", "missing", &request);
+        let response = proxy_to_service(&endpoint, "com.example", "/api/missing", &request);
         assert_eq!(response.status().as_u16(), 404);
         assert_eq!(response.body().as_ref(), b"not here");
     }

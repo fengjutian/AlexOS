@@ -7,7 +7,9 @@
   <body>
     <main>
       <h1>Alex Service Hello</h1>
-      <p id="status">Service-mode demo. The backend is running but the frontend cannot reach it yet — the <code>alex://app/api/*</code> reverse proxy lands in stage 3.</p>
+      <p id="status">Click "Call Service" to round-trip a request through the <code>alex://app/api/*</code> reverse proxy.</p>
+      <button id="call">Call Service</button>
+      <pre id="output" hidden></pre>
       <button id="rename">Rename Window</button>
       <button id="notify">Show Notification</button>
     </main>

@@ -28,6 +28,7 @@ pub mod windows {
     use std::{
         path::{Path, PathBuf},
         sync::Arc,
+        time::Duration,
     };
 
     use tao::{
@@ -155,15 +156,54 @@ pub mod windows {
         if let Some(install_root) = system_install_root {
             router = router.with_system_install_root(install_root.to_path_buf());
         }
-        if let Some(backend) = &manifest.backend {
-            router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
-        }
+        // Service-mode backends expose an `alex://app/api/*` reverse
+        // proxy. We need the host-allocated endpoint in scope before
+        // building the WebView, so we resolve it from the runtime
+        // status right after start.
+        let service_endpoint: Option<crate::runtime::ServiceEndpoint> =
+            if let Some(backend) = &manifest.backend {
+                if matches!(backend.mode, crate::manifest::BackendMode::Service) {
+                    let spec = crate::runtime::RuntimeSpec {
+                        app_id: manifest.id.clone(),
+                        package_root: package_root.to_path_buf(),
+                        backend: backend.clone(),
+                        data_dir: None,
+                        cache_dir: None,
+                    };
+                    let handle = RuntimeHandle::start_with_spec(spec)?;
+                    let status = handle.status(Duration::from_secs(20))?;
+                    if !matches!(status.state, crate::runtime::RuntimeState::Ready) {
+                        return Err(format!(
+                            "service backend {} failed to reach Ready within handshake window: {:?}",
+                            manifest.id, status.last_error
+                        )
+                        .into());
+                    }
+                    router = router.with_runtime(handle);
+                    match (status.port, status.token) {
+                        (Some(port), Some(token)) => {
+                            Some(crate::runtime::ServiceEndpoint { port, token })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    router = router.with_runtime(RuntimeHandle::start(
+                        package_root,
+                        backend,
+                    )?);
+                    None
+                }
+            } else {
+                None
+            };
         let router = Arc::new(router);
         let ipc_router = Arc::clone(&router);
         let root = package_root.to_path_buf();
         let frontend = manifest.frontend.entry.clone();
         let package_id = serde_json::to_string(&manifest.id)?;
         let init_script = BRIDGE.replace("__ALEX_PACKAGE_ID__", &package_id);
+        let endpoint_for_handler = service_endpoint.clone();
+        let app_id_for_handler = manifest.id.clone();
 
         let webview = WebViewBuilder::new()
             .with_initialization_script(init_script)
@@ -185,7 +225,19 @@ pub mod windows {
                 });
             })
             .with_custom_protocol("alex".into(), move |_id, request| {
-                asset_response(&root, &frontend, request.uri().path())
+                let path = request.uri().path();
+                if path.starts_with("/api/") {
+                    if let Some(endpoint) = &endpoint_for_handler {
+                        return crate::proxy::proxy_to_service(
+                            endpoint,
+                            &app_id_for_handler,
+                            path,
+                            &request,
+                        );
+                    }
+                    return crate::proxy::service_unavailable_response();
+                }
+                asset_response(&root, &frontend, path)
             })
             .with_url("alex://app/")
             .build(&window)?;
@@ -260,7 +312,7 @@ pub mod windows {
             .status(status)
             .header(CONTENT_TYPE, content_type)
             .header("X-Content-Type-Options", "nosniff")
-            .header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'none'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'")
+            .header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'")
             .body(body.into())
             .expect("static response is valid")
     }

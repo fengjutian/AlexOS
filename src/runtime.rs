@@ -1129,6 +1129,7 @@ mod service_runtime_tests {
     use std::process::{Command, Stdio};
     use std::sync::atomic::AtomicBool;
     use std::sync::{Arc, Mutex};
+    use wry::http::Request;
 
     #[test]
     fn allocate_service_port_returns_value_in_range() {
@@ -1318,6 +1319,35 @@ mod service_runtime_tests {
             "backend did not write backend.log at {}",
             backend_log.display()
         );
+
+        // Stage-3 reverse proxy: a request shaped like one coming
+        // from the WebView must reach the backend, get forwarded,
+        // and the response body must contain the live service info.
+        // We invoke the proxy module directly here so the test
+        // doesn't need a WebView2 host; `shell::run` wires the
+        // same call into the `with_custom_protocol` handler.
+        let endpoint = ServiceEndpoint { port, token: token.clone() };
+        let request = Request::get("alex://app/api/info")
+            .header("accept", "application/json")
+            .body(Vec::new())
+            .expect("get request");
+        let response =
+            crate::proxy::proxy_to_service(&endpoint, &manifest.id, "/api/info", &request);
+        let body_text = std::str::from_utf8(response.body())
+            .unwrap_or("<non-utf8 body>")
+            .to_string();
+        assert_eq!(
+            response.status().as_u16(),
+            200,
+            "proxy did not return 200: status={} body={body_text:?}",
+            response.status().as_u16()
+        );
+        let body: serde_json::Value =
+            serde_json::from_str(&body_text).expect("proxy returned JSON");
+        assert_eq!(body["appId"], manifest.id);
+        assert!(body["pid"].is_number());
+        // uptimeMs is a number — confirm shape, not value.
+        assert!(body["uptimeMs"].is_number());
 
         // Tear down so the next test can claim a fresh port.
         let _ = handle.cancel();
