@@ -8,6 +8,7 @@ pub mod permission;
 pub mod runtime;
 pub mod shell;
 pub mod trust;
+pub mod update;
 
 use std::path::{Path, PathBuf};
 

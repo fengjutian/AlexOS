@@ -27,6 +27,8 @@ cargo run -- install target/hello-signed.alex --root target/apps --require-signa
 cargo run -- trust add "Example Publisher" "PUBLIC_KEY" --root target/trust
 cargo run -- install target/hello-signed.alex --root target/apps --trust-root target/trust
 cargo run -- update target/hello-v2.alex --root target/apps --trust-root target/trust
+cargo run -- publish-update target/hello-v2.alex target/stable.json --key target/publisher-key.json --id com.alex.hello --version 0.2.0 --url https://updates.example.com/hello-v2.alex --channel stable
+cargo run -- update-remote https://updates.example.com/stable.json --id com.alex.hello --root target/apps --trust-root target/trust --channel stable
 cargo run -- install target/hello.alex --root target/apps
 cargo run -- list --root target/apps
 cargo run -- uninstall com.alex.hello --root target/apps

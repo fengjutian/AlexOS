@@ -7,6 +7,7 @@ use alex::{
     load_app, package,
     permission::Permission,
     trust::TrustStore,
+    update::{self, UpdateChannel},
 };
 use serde_json::json;
 
@@ -347,4 +348,71 @@ fn application_updates_are_atomic_and_reject_downgrades() {
         .to_string();
     assert!(error.contains("not newer"));
     assert_eq!(load_app(&result.path).unwrap().version, "0.2.0");
+}
+
+#[test]
+fn signed_update_manifests_bind_channel_version_url_and_hash() {
+    let workspace = tempfile::tempdir().unwrap();
+    let key = workspace.path().join("publisher.json");
+    let package_path = workspace.path().join("app.alex");
+    let source = workspace.path().join("update_source");
+    package::create_project(&source, "com.alex.update_test").unwrap();
+    package::pack(&source, &package_path).unwrap();
+    let public_key = package::generate_signing_key(&key).unwrap();
+    let manifest = update::manifest_for_package(
+        "com.alex.update_test".into(),
+        UpdateChannel::Stable,
+        "0.1.0".into(),
+        "https://updates.example.com/app.alex".into(),
+        &package_path,
+    )
+    .unwrap();
+    let mut envelope = update::create_signed_manifest(manifest, &key).unwrap();
+    let trust_root = workspace.path().join("trust");
+    TrustStore::open(&trust_root)
+        .unwrap()
+        .add("Update Publisher".into(), public_key)
+        .unwrap();
+    let trust = TrustStore::open(&trust_root).unwrap();
+    update::verify_manifest(
+        &envelope,
+        "com.alex.update_test",
+        "0.0.1",
+        UpdateChannel::Stable,
+        &trust,
+    )
+    .unwrap();
+
+    envelope.manifest.version = "9.9.9".into();
+    assert!(
+        update::verify_manifest(
+            &envelope,
+            "com.alex.update_test",
+            "0.0.1",
+            UpdateChannel::Stable,
+            &trust,
+        )
+        .unwrap_err()
+        .to_string()
+        .contains("signature")
+    );
+}
+
+#[test]
+fn update_manifests_reject_insecure_urls() {
+    let workspace = tempfile::tempdir().unwrap();
+    let package_path = workspace.path().join("app.alex");
+    let source = workspace.path().join("insecure_source");
+    package::create_project(&source, "com.alex.insecure").unwrap();
+    package::pack(&source, &package_path).unwrap();
+    let error = update::manifest_for_package(
+        "com.alex.insecure".into(),
+        UpdateChannel::Dev,
+        "0.1.0".into(),
+        "http://updates.example.com/app.alex".into(),
+        &package_path,
+    )
+    .unwrap_err()
+    .to_string();
+    assert!(error.contains("HTTPS"));
 }

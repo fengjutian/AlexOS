@@ -14,7 +14,7 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-use crate::{AlexError, load_app};
+use crate::{AlexError, load_app, manifest::AppManifest};
 
 const INTEGRITY_PATH: &str = ".alex/integrity.json";
 const SIGNATURE_PATH: &str = ".alex/signature.json";
@@ -171,6 +171,24 @@ pub fn pack_signed(source: &Path, output: &Path, key_path: &Path) -> Result<(), 
         ));
     }
     pack_internal(source, output, Some(&signing))
+}
+
+pub fn sign_payload(key_path: &Path, payload: &[u8]) -> Result<(String, String), PackageError> {
+    let key: KeyFile = serde_json::from_reader(File::open(key_path)?)
+        .map_err(|error| PackageError::Signature(format!("invalid key file: {error}")))?;
+    let secret: [u8; 32] = BASE64
+        .decode(&key.secret_key)
+        .map_err(|error| PackageError::Signature(error.to_string()))?
+        .try_into()
+        .map_err(|_| PackageError::Signature("invalid secret key length".into()))?;
+    let signing = SigningKey::from_bytes(&secret);
+    let public_key = BASE64.encode(signing.verifying_key().to_bytes());
+    if public_key != key.public_key {
+        return Err(PackageError::Signature(
+            "public and secret key do not match".into(),
+        ));
+    }
+    Ok((public_key, BASE64.encode(signing.sign(payload).to_bytes())))
 }
 
 fn pack_internal(
@@ -368,6 +386,17 @@ pub fn signer_public_key(archive_path: &Path) -> Result<Option<String>, PackageE
         Err(zip::result::ZipError::FileNotFound) => Ok(None),
         Err(error) => Err(error.into()),
     }
+}
+
+pub fn archive_identity(archive_path: &Path) -> Result<(String, String), PackageError> {
+    let mut archive = ZipArchive::new(File::open(archive_path)?)?;
+    let manifest: AppManifest = serde_json::from_reader(
+        archive
+            .by_name("manifest.json")
+            .map_err(|_| PackageError::Integrity("missing manifest.json".into()))?,
+    )
+    .map_err(|error| PackageError::Integrity(format!("invalid manifest.json: {error}")))?;
+    Ok((manifest.id, manifest.version))
 }
 
 pub fn update_verified(

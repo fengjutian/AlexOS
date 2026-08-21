@@ -8,8 +8,9 @@ use alex::{
     runtime::{RuntimeHandle, RuntimeProcess},
     shell,
     trust::TrustStore,
+    update::{self, UpdateChannel},
 };
-use clap::{Parser, Subcommand};
+use clap::{Parser, Subcommand, ValueEnum};
 
 #[derive(Debug, Parser)]
 #[command(name = "alex", version, about = "Alex OS developer CLI")]
@@ -76,6 +77,33 @@ enum Commands {
         #[arg(long)]
         allow_downgrade: bool,
     },
+    /// Create a signed channel update manifest for an existing .alex package.
+    PublishUpdate {
+        package: PathBuf,
+        output: PathBuf,
+        #[arg(long)]
+        key: PathBuf,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        version: String,
+        #[arg(long)]
+        url: String,
+        #[arg(long, value_enum, default_value = "stable")]
+        channel: CliChannel,
+    },
+    /// Download a signed update manifest and atomically update an installed app.
+    UpdateRemote {
+        manifest_url: String,
+        #[arg(long)]
+        id: String,
+        #[arg(long)]
+        root: PathBuf,
+        #[arg(long)]
+        trust_root: PathBuf,
+        #[arg(long, value_enum, default_value = "stable")]
+        channel: CliChannel,
+    },
     /// List valid applications in an installation directory.
     List {
         #[arg(long)]
@@ -137,6 +165,23 @@ enum TrustCommands {
         #[arg(long)]
         root: PathBuf,
     },
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum CliChannel {
+    Stable,
+    Beta,
+    Dev,
+}
+
+impl From<CliChannel> for UpdateChannel {
+    fn from(value: CliChannel) -> Self {
+        match value {
+            CliChannel::Stable => Self::Stable,
+            CliChannel::Beta => Self::Beta,
+            CliChannel::Dev => Self::Dev,
+        }
+    }
 }
 
 fn main() {
@@ -270,6 +315,47 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             if updated.backup_retained {
                 eprintln!("warning: the old-version backup could not be removed");
             }
+        }
+        Commands::PublishUpdate {
+            package,
+            output,
+            key,
+            id,
+            version,
+            url,
+            channel,
+        } => {
+            let manifest =
+                update::manifest_for_package(id, channel.into(), version, url, &package)?;
+            let signed = update::create_signed_manifest(manifest, &key)?;
+            let package_signer = package::signer_public_key(&package)?.ok_or_else(|| {
+                package::PackageError::Signature("update package is unsigned".into())
+            })?;
+            if package_signer != signed.public_key {
+                return Err(package::PackageError::Signature(
+                    "update manifest and package use different publisher keys".into(),
+                )
+                .into());
+            }
+            std::fs::write(&output, serde_json::to_vec_pretty(&signed)?)?;
+            println!("published update manifest {}", output.display());
+        }
+        Commands::UpdateRemote {
+            manifest_url,
+            id,
+            root,
+            trust_root,
+            channel,
+        } => {
+            let result =
+                update::update_from_url(&manifest_url, &root, &id, channel.into(), &trust_root)?;
+            println!(
+                "updated {} {} -> {} ({})",
+                result.id,
+                result.previous_version,
+                result.version,
+                result.path.display()
+            );
         }
         Commands::List { root } => {
             let applications = package::list_installed(&root)?;
