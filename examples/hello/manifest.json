@@ -15,6 +15,7 @@
       "name": "filesystem.read",
       "paths": ["data"]
     },
-    { "name": "runtime.invoke" }
+    { "name": "runtime.invoke" },
+    { "name": "runtime.manage" }
   ]
 }

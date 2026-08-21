@@ -23,14 +23,38 @@ export function createAlexClient(transport = browserTransport()) {
         await invoke("filesystem.writeText", { path, content }, options);
       },
     }),
+    clipboard: Object.freeze({
+      async readText(options) {
+        const result = await invoke("clipboard.readText", {}, options);
+        return result.text;
+      },
+      async writeText(text, options) {
+        await invoke("clipboard.writeText", { text }, options);
+      },
+    }),
+    dialog: Object.freeze({
+      async openFile(options = {}) {
+        const result = await invoke("dialog.openFile", { title: options.title }, options);
+        return result.path ?? null;
+      },
+    }),
     runtime: Object.freeze({
       invoke(method, params = {}, options) {
         return invoke("runtime.invoke", { method, params }, options);
+      },
+      status(options) {
+        return invoke("runtime.status", {}, options);
+      },
+      restart(options) {
+        return invoke("runtime.restart", {}, options);
       },
     }),
     system: Object.freeze({
       info(options) {
         return invoke("system.info", {}, options);
+      },
+      async openExternal(url, options) {
+        await invoke("system.openExternal", { url }, options);
       },
     }),
   });

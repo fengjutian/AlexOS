@@ -179,3 +179,29 @@ fn install_rejects_a_tampered_package() {
         .to_string();
     assert!(error.contains("hash mismatch"));
 }
+
+#[test]
+fn external_urls_require_https_or_http_and_an_allowed_origin() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    let router = ApiRouter::new(root, app);
+    let invalid = router.dispatch(Request {
+        protocol: 1,
+        id: "invalid-url".into(),
+        source: "com.alex.hello".into(),
+        method: "system.openExternal".into(),
+        params: json!({ "url": "file:///C:/Windows/System32/cmd.exe" }),
+        deadline_ms: None,
+    });
+    assert_eq!(invalid.error.unwrap().code, "INVALID_PARAMS");
+
+    let denied = router.dispatch(Request {
+        protocol: 1,
+        id: "denied-origin".into(),
+        source: "com.alex.hello".into(),
+        method: "system.openExternal".into(),
+        params: json!({ "url": "https://example.com/path" }),
+        deadline_ms: None,
+    });
+    assert_eq!(denied.error.unwrap().code, "PERMISSION_DENIED");
+}

@@ -74,7 +74,7 @@ pub fn create_project(destination: &Path, package_id: &str) -> Result<(), Packag
         "version": "0.1.0",
         "frontend": { "entry": "frontend/index.html" },
         "backend": { "runtime": "node", "entry": "backend/index.js" },
-        "permissions": [{ "name": "runtime.invoke" }]
+        "permissions": [{ "name": "runtime.invoke" }, { "name": "runtime.manage" }]
     });
     fs::write(
         destination.join("manifest.json"),

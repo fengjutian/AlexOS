@@ -11,8 +11,16 @@ pub enum Permission {
     FilesystemWrite { paths: Vec<PathBuf> },
     #[serde(rename = "dialog.open")]
     DialogOpen,
+    #[serde(rename = "clipboard.read")]
+    ClipboardRead,
+    #[serde(rename = "clipboard.write")]
+    ClipboardWrite,
+    #[serde(rename = "system.openExternal")]
+    OpenExternal { origins: Vec<String> },
     #[serde(rename = "runtime.invoke")]
     RuntimeInvoke,
+    #[serde(rename = "runtime.manage")]
+    RuntimeManage,
 }
 
 impl Permission {

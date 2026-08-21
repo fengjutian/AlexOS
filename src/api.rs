@@ -10,8 +10,9 @@ use serde_json::{Value, json};
 use crate::{
     ipc::{PROTOCOL_VERSION, Request, Response},
     manifest::AppManifest,
+    native,
     permission::Permission,
-    runtime::{RuntimeError, RuntimeHandle, RuntimeProcess},
+    runtime::{RuntimeError, RuntimeHandle},
 };
 
 const MAX_IPC_MESSAGE_BYTES: usize = 1024 * 1024;
@@ -33,8 +34,8 @@ impl ApiRouter {
         }
     }
 
-    pub fn with_runtime(mut self, runtime: RuntimeProcess) -> Self {
-        self.runtime = Some(RuntimeHandle::spawn(runtime));
+    pub fn with_runtime(mut self, runtime: RuntimeHandle) -> Self {
+        self.runtime = Some(runtime);
         self
     }
 
@@ -81,9 +82,15 @@ impl ApiRouter {
                 "arch": std::env::consts::ARCH,
                 "alexVersion": env!("CARGO_PKG_VERSION")
             })),
+            "clipboard.readText" => self.clipboard_read_text(),
+            "clipboard.writeText" => self.clipboard_write_text(&request.params),
+            "dialog.openFile" => self.dialog_open_file(&request.params),
+            "system.openExternal" => self.open_external(&request.params),
             "runtime.invoke" => {
                 self.runtime_invoke(&request.id, &request.params, request.deadline_ms)
             }
+            "runtime.status" => self.runtime_status(),
+            "runtime.restart" => self.runtime_restart(),
             _ => Err(("METHOD_NOT_FOUND", "unknown Alex API method".to_owned())),
         };
 
@@ -153,6 +160,121 @@ impl ApiRouter {
             })
     }
 
+    fn clipboard_read_text(&self) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::ClipboardRead),
+            "clipboard.read",
+        )?;
+        native::clipboard_read_text()
+            .map(|text| json!({ "text": text }))
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
+    fn clipboard_write_text(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::ClipboardWrite),
+            "clipboard.write",
+        )?;
+        let params: ClipboardWriteParams = parse_params(params)?;
+        if params.text.len() > MAX_IPC_MESSAGE_BYTES {
+            return Err(("INVALID_PARAMS", "clipboard text exceeds 1 MiB".into()));
+        }
+        native::clipboard_write_text(params.text)
+            .map(|_| json!({ "written": true }))
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
+    fn dialog_open_file(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::DialogOpen),
+            "dialog.open",
+        )?;
+        let params: DialogOpenParams = parse_params(params)?;
+        if params.title.as_ref().is_some_and(|title| title.len() > 200) {
+            return Err(("INVALID_PARAMS", "dialog title is too long".into()));
+        }
+        native::pick_file(params.title.as_deref())
+            .map(|path| json!({ "path": path.map(|value| value.to_string_lossy().into_owned()) }))
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
+    fn open_external(&self, params: &Value) -> ApiResult {
+        let params: OpenExternalParams = parse_params(params)?;
+        let parsed = url::Url::parse(&params.url)
+            .map_err(|error| ("INVALID_PARAMS", format!("invalid URL: {error}")))?;
+        if !matches!(parsed.scheme(), "https" | "http") {
+            return Err((
+                "INVALID_PARAMS",
+                "only http and https URLs are allowed".into(),
+            ));
+        }
+        let origin = parsed.origin().ascii_serialization();
+        let allowed = self.manifest.permissions.iter().any(|permission| {
+            matches!(permission, Permission::OpenExternal { origins } if origins.iter().any(|item| item == &origin))
+        });
+        if !allowed {
+            return Err((
+                "PERMISSION_DENIED",
+                format!("system.openExternal is not allowed for {origin}"),
+            ));
+        }
+        native::open_external(parsed.as_str())
+            .map(|_| json!({ "opened": true }))
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))
+    }
+
+    fn require_permission(
+        &self,
+        predicate: impl Fn(&Permission) -> bool,
+        name: &'static str,
+    ) -> Result<(), (&'static str, String)> {
+        self.manifest
+            .permissions
+            .iter()
+            .any(predicate)
+            .then_some(())
+            .ok_or(("PERMISSION_DENIED", format!("{name} is not allowed")))
+    }
+
+    fn runtime_status(&self) -> ApiResult {
+        self.require_runtime_manage()?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
+        runtime
+            .status(Duration::from_secs(2))
+            .and_then(|status| {
+                serde_json::to_value(status)
+                    .map_err(|error| RuntimeError::Protocol(error.to_string()))
+            })
+            .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
+    }
+
+    fn runtime_restart(&self) -> ApiResult {
+        self.require_runtime_manage()?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
+        runtime
+            .restart(Duration::from_secs(5))
+            .and_then(|status| {
+                serde_json::to_value(status)
+                    .map_err(|error| RuntimeError::Protocol(error.to_string()))
+            })
+            .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
+    }
+
+    fn require_runtime_manage(&self) -> Result<(), (&'static str, String)> {
+        self.manifest
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, Permission::RuntimeManage))
+            .then_some(())
+            .ok_or(("PERMISSION_DENIED", "runtime.manage is not allowed".into()))
+    }
+
     fn resolve_requested(&self, path: &str) -> PathBuf {
         let path = PathBuf::from(path);
         if path.is_absolute() {
@@ -184,6 +306,25 @@ struct RuntimeInvokeParams {
     method: String,
     #[serde(default)]
     params: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct ClipboardWriteParams {
+    text: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct DialogOpenParams {
+    #[serde(default)]
+    title: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct OpenExternalParams {
+    url: String,
 }
 
 fn parse_params<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T, (&'static str, String)> {

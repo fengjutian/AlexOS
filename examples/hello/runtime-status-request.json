@@ -1,0 +1,7 @@
+{
+  "protocol": 1,
+  "id": "example-status-1",
+  "source": "com.alex.hello",
+  "method": "runtime.status",
+  "params": {}
+}

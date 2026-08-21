@@ -1,6 +1,12 @@
 use std::{path::PathBuf, thread, time::Duration};
 
-use alex::{api::ApiRouter, ipc::Request, load_app, package, runtime::RuntimeProcess, shell};
+use alex::{
+    api::ApiRouter,
+    ipc::Request,
+    load_app, package,
+    runtime::{RuntimeHandle, RuntimeProcess},
+    shell,
+};
 use clap::{Parser, Subcommand};
 
 #[derive(Debug, Parser)]
@@ -100,10 +106,10 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let request = std::fs::read_to_string(request)?;
             let request: Request = serde_json::from_str(&request)?;
             let mut router = ApiRouter::new(path.clone(), app.clone());
-            if request.method == "runtime.invoke"
+            if request.method.starts_with("runtime.")
                 && let Some(backend) = &app.backend
             {
-                router = router.with_runtime(RuntimeProcess::start(&path, backend)?);
+                router = router.with_runtime(RuntimeHandle::start(&path, backend)?);
             }
             let response = router.dispatch(request);
             println!("{}", serde_json::to_string_pretty(&response)?);
