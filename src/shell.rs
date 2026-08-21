@@ -32,7 +32,7 @@ mod windows {
         http::{Response as HttpResponse, header::CONTENT_TYPE},
     };
 
-    use crate::{api::ApiRouter, manifest::AppManifest};
+    use crate::{api::ApiRouter, manifest::AppManifest, runtime::RuntimeProcess};
 
     const BRIDGE: &str = r#"
       (() => {
@@ -72,7 +72,11 @@ mod windows {
             .with_title(&manifest.name)
             .build(&event_loop)?;
 
-        let router = Arc::new(ApiRouter::new(package_root.to_path_buf(), manifest.clone()));
+        let mut router = ApiRouter::new(package_root.to_path_buf(), manifest.clone());
+        if let Some(backend) = &manifest.backend {
+            router = router.with_runtime(RuntimeProcess::start(package_root, backend)?);
+        }
+        let router = Arc::new(router);
         let ipc_router = Arc::clone(&router);
         let root = package_root.to_path_buf();
         let frontend = manifest.frontend.entry.clone();

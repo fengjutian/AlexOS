@@ -70,7 +70,13 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let app = load_app(&path)?;
             let request = std::fs::read_to_string(request)?;
             let request: Request = serde_json::from_str(&request)?;
-            let response = ApiRouter::new(path, app).dispatch(request);
+            let mut router = ApiRouter::new(path.clone(), app.clone());
+            if request.method == "runtime.invoke"
+                && let Some(backend) = &app.backend
+            {
+                router = router.with_runtime(RuntimeProcess::start(&path, backend)?);
+            }
+            let response = router.dispatch(request);
             println!("{}", serde_json::to_string_pretty(&response)?);
         }
     }

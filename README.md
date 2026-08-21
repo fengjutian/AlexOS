@@ -8,6 +8,7 @@ IPC envelope.
 
 This repository contains the M0/M1 runtime core and the first Windows WebView2 shell. Web
 content calls the permission-checked Rust API through a small injected bridge.
+Node backends use a versioned JSON Lines protocol over managed stdin/stdout; logs belong on stderr.
 
 ## Try it
 

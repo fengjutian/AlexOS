@@ -11,6 +11,8 @@ pub enum Permission {
     FilesystemWrite { paths: Vec<PathBuf> },
     #[serde(rename = "dialog.open")]
     DialogOpen,
+    #[serde(rename = "runtime.invoke")]
+    RuntimeInvoke,
 }
 
 impl Permission {

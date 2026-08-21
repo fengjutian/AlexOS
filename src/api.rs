@@ -1,6 +1,7 @@
 use std::{
     fs,
     path::PathBuf,
+    sync::{Arc, Mutex},
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -10,11 +11,14 @@ use serde_json::{Value, json};
 use crate::{
     ipc::{PROTOCOL_VERSION, Request, Response},
     manifest::AppManifest,
+    permission::Permission,
+    runtime::RuntimeProcess,
 };
 
 pub struct ApiRouter {
     package_root: PathBuf,
     manifest: AppManifest,
+    runtime: Option<Arc<Mutex<RuntimeProcess>>>,
 }
 
 impl ApiRouter {
@@ -23,7 +27,13 @@ impl ApiRouter {
         Self {
             package_root,
             manifest,
+            runtime: None,
         }
+    }
+
+    pub fn with_runtime(mut self, runtime: RuntimeProcess) -> Self {
+        self.runtime = Some(Arc::new(Mutex::new(runtime)));
+        self
     }
 
     pub fn dispatch_json(&self, input: &str) -> Response {
@@ -62,6 +72,7 @@ impl ApiRouter {
                 "arch": std::env::consts::ARCH,
                 "alexVersion": env!("CARGO_PKG_VERSION")
             })),
+            "runtime.invoke" => self.runtime_invoke(&request.id, &request.params),
             _ => Err(("METHOD_NOT_FOUND", "unknown Alex API method".to_owned())),
         };
 
@@ -100,6 +111,28 @@ impl ApiRouter {
             .map_err(|error| ("IO_ERROR", error.to_string()))
     }
 
+    fn runtime_invoke(&self, request_id: &str, params: &Value) -> ApiResult {
+        if !self
+            .manifest
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, Permission::RuntimeInvoke))
+        {
+            return Err(("PERMISSION_DENIED", "runtime.invoke is not allowed".into()));
+        }
+        let params: RuntimeInvokeParams = parse_params(params)?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
+        let mut runtime = runtime
+            .lock()
+            .map_err(|_| ("RUNTIME_FAILURE", "runtime lock was poisoned".into()))?;
+        runtime
+            .invoke(request_id, &params.method, &params.params)
+            .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
+    }
+
     fn resolve_requested(&self, path: &str) -> PathBuf {
         let path = PathBuf::from(path);
         if path.is_absolute() {
@@ -123,6 +156,14 @@ struct PathParams {
 struct WriteParams {
     path: String,
     content: String,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct RuntimeInvokeParams {
+    method: String,
+    #[serde(default)]
+    params: Value,
 }
 
 fn parse_params<T: for<'de> Deserialize<'de>>(value: &Value) -> Result<T, (&'static str, String)> {

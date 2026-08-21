@@ -1,0 +1,12 @@
+{
+  "protocol": 1,
+  "id": "example-backend-1",
+  "source": "com.alex.hello",
+  "method": "runtime.invoke",
+  "params": {
+    "method": "hello.greet",
+    "params": {
+      "name": "CLI"
+    }
+  }
+}

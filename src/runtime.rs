@@ -1,8 +1,11 @@
 use std::{
+    io::{BufRead, BufReader, Write},
     path::{Path, PathBuf},
-    process::{Child, Command, ExitStatus, Stdio},
+    process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
 };
 
+use serde::{Deserialize, Serialize};
+use serde_json::Value;
 use thiserror::Error;
 
 use crate::manifest::{Backend, RuntimeKind};
@@ -18,27 +21,73 @@ pub enum RuntimeError {
     },
     #[error("runtime operation failed: {0}")]
     Io(#[from] std::io::Error),
+    #[error("runtime protocol error: {0}")]
+    Protocol(String),
+    #[error("backend returned {code}: {message}")]
+    Backend { code: String, message: String },
 }
 
 pub struct RuntimeProcess {
     child: Child,
+    stdin: ChildStdin,
+    stdout: BufReader<ChildStdout>,
+}
+
+#[derive(Serialize)]
+#[serde(rename_all = "camelCase")]
+struct BackendRequest<'a> {
+    protocol: u32,
+    id: &'a str,
+    method: &'a str,
+    params: &'a Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct BackendResponse {
+    protocol: u32,
+    id: String,
+    #[serde(default)]
+    result: Option<Value>,
+    #[serde(default)]
+    error: Option<BackendError>,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
+struct BackendError {
+    code: String,
+    message: String,
 }
 
 impl RuntimeProcess {
     pub fn start(package_root: &Path, backend: &Backend) -> Result<Self, RuntimeError> {
+        let package_root = package_root.canonicalize()?;
         let executable = match backend.runtime {
             RuntimeKind::Node => discover_node().ok_or(RuntimeError::NodeNotFound)?,
         };
-        let child = Command::new(&executable)
-            .arg(package_root.join(&backend.entry))
-            .current_dir(package_root)
-            .env("ALEX_PACKAGE_ROOT", package_root)
+        let mut child = Command::new(&executable)
+            .arg(&backend.entry)
+            .current_dir(&package_root)
+            .env("ALEX_PACKAGE_ROOT", &package_root)
             .stdin(Stdio::piped())
-            .stdout(Stdio::inherit())
+            .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()
             .map_err(|source| RuntimeError::Start { executable, source })?;
-        Ok(Self { child })
+        let stdin = child
+            .stdin
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("runtime stdin is unavailable".into()))?;
+        let stdout = child
+            .stdout
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("runtime stdout is unavailable".into()))?;
+        Ok(Self {
+            child,
+            stdin,
+            stdout: BufReader::new(stdout),
+        })
     }
 
     pub fn id(&self) -> u32 {
@@ -47,6 +96,62 @@ impl RuntimeProcess {
 
     pub fn try_wait(&mut self) -> Result<Option<ExitStatus>, RuntimeError> {
         Ok(self.child.try_wait()?)
+    }
+
+    pub fn invoke(
+        &mut self,
+        id: &str,
+        method: &str,
+        params: &Value,
+    ) -> Result<Value, RuntimeError> {
+        if let Some(status) = self.child.try_wait()? {
+            return Err(RuntimeError::Protocol(format!(
+                "runtime already exited with {status}"
+            )));
+        }
+        serde_json::to_writer(
+            &mut self.stdin,
+            &BackendRequest {
+                protocol: 1,
+                id,
+                method,
+                params,
+            },
+        )
+        .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
+        self.stdin.write_all(b"\n")?;
+        self.stdin.flush()?;
+
+        let mut line = String::new();
+        if self.stdout.read_line(&mut line)? == 0 {
+            return Err(RuntimeError::Protocol(
+                "runtime closed stdout without a response".into(),
+            ));
+        }
+        let response: BackendResponse = serde_json::from_str(&line)
+            .map_err(|error| RuntimeError::Protocol(format!("invalid response: {error}")))?;
+        if response.protocol != 1 {
+            return Err(RuntimeError::Protocol(format!(
+                "unsupported backend protocol {}",
+                response.protocol
+            )));
+        }
+        if response.id != id {
+            return Err(RuntimeError::Protocol(format!(
+                "response id mismatch: expected {id}, got {}",
+                response.id
+            )));
+        }
+        match (response.result, response.error) {
+            (Some(result), None) => Ok(result),
+            (None, Some(error)) => Err(RuntimeError::Backend {
+                code: error.code,
+                message: error.message,
+            }),
+            _ => Err(RuntimeError::Protocol(
+                "response must contain exactly one of result or error".into(),
+            )),
+        }
     }
 
     pub fn stop(&mut self) -> Result<(), RuntimeError> {
