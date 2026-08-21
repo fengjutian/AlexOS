@@ -261,8 +261,16 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Manager { install_root } => {
             // Self-hosting path: if `com.alex.manager` is installed as a
-            // plugin, prefer it. The plugin's backend then drives
-            // `system.*` calls through the host's permission pipeline.
+            // plugin, prefer it. We delegate to `shell::run` (same path
+            // as `alex plugin <id>` without `--headless`) so the plugin
+            // gets a real WebView to render its frontend; the WebView
+            // talks to the host through the regular `window.alex`
+            // transport, and the host-side `ApiRouter` enforces the
+            // plugin's `system.*` permissions. `plugin::run` is the
+            // reverse-IPC path (backend asks host a question) and
+            // does NOT open a WebView, so it is not appropriate for a
+            // user-facing manager UI.
+            //
             // Fallback: built-in `ManagerRouter` keeps 0.1 working
             // before users have installed the manager plugin.
             if let Ok(Some(plugin_path)) =
@@ -273,10 +281,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                     "alex manager: launching self-hosted plugin {} {}",
                     manifest.id, manifest.version
                 );
-                // The self-hosted manager runs through the same
-                // shell/webview path as a regular plugin, so it keeps
-                // the normal permission-prompt UX (headless=false).
-                plugin::run(&plugin_path, &manifest, &install_root, false)?;
+                shell::run(&plugin_path, manifest, Some(&install_root))?;
             } else {
                 let manager = LocalAppManager::open(&install_root)?;
                 let router = Arc::new(ManagerRouter::new(Arc::new(manager)));

@@ -245,7 +245,11 @@ pub fn run(
         if let Some(status) = process.try_wait()? {
             eprintln!(
                 "alex plugin: backend {} after {} ticks ({} ms)",
-                if status.success() { "exited cleanly" } else { "exited with non-zero status" },
+                if status.success() {
+                    "exited cleanly"
+                } else {
+                    "exited with non-zero status"
+                },
                 ticks,
                 ticks as u64 * 100,
             );
