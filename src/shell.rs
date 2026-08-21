@@ -24,7 +24,7 @@ mod windows {
 
     use tao::{
         event::{Event, WindowEvent},
-        event_loop::{ControlFlow, EventLoop},
+        event_loop::{ControlFlow, EventLoopBuilder},
         window::WindowBuilder,
     };
     use wry::{
@@ -66,7 +66,7 @@ mod windows {
         package_root: &Path,
         manifest: AppManifest,
     ) -> Result<(), Box<dyn std::error::Error>> {
-        let event_loop = EventLoop::<UserEvent>::with_user_event();
+        let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
         let window = WindowBuilder::new()
             .with_title(&manifest.name)
@@ -108,7 +108,7 @@ mod windows {
                 }
                 _ => {}
             }
-        });
+        })
     }
 
     fn asset_response(

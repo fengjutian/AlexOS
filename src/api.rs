@@ -19,6 +19,7 @@ pub struct ApiRouter {
 
 impl ApiRouter {
     pub fn new(package_root: PathBuf, manifest: AppManifest) -> Self {
+        let package_root = package_root.canonicalize().unwrap_or(package_root);
         Self {
             package_root,
             manifest,
