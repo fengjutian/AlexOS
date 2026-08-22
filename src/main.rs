@@ -188,6 +188,19 @@ enum PermissionCommands {
         #[arg(long)]
         root: PathBuf,
     },
+    /// Show the most recent permission decisions for an app from
+    /// the audit log (JSONL). `transient` ("Allow Once") grants
+    /// are not audited by design, so this only reflects the
+    /// persisted history.
+    Audit {
+        id: String,
+        #[arg(long)]
+        root: PathBuf,
+        /// Cap the number of records displayed. Defaults to 50;
+        /// pass 0 to read the whole log.
+        #[arg(long, default_value = "50")]
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -231,6 +244,57 @@ fn main() {
         eprintln!("error: {error}");
         std::process::exit(1);
     }
+}
+
+/// Format a Unix epoch in milliseconds as an ISO-8601 / UTC
+/// string. Used by `alex permissions audit` so each line is
+/// sortable with `sort -k1` and unambiguous across time zones.
+///
+/// Returned in the shape `YYYY-MM-DDTHH:MM:SSZ` so it stays a
+/// single field per line in tab-separated output.
+fn format_unix_millis_iso8601(millis: u64) -> String {
+    use std::time::{Duration, UNIX_EPOCH};
+    let Some(dt) = UNIX_EPOCH.checked_add(Duration::from_millis(millis)) else {
+        return "0000-00-00T00:00:00Z".into();
+    };
+    let secs = dt
+        .duration_since(UNIX_EPOCH)
+        .map(|d| d.as_secs())
+        .unwrap_or(0);
+    // Manual breakdown so we don't need a date crate. Good
+    // enough for the audit log; sub-second precision is dropped.
+    let (year, month, day, hour, minute, second) = epoch_seconds_to_calendar(secs);
+    format!(
+        "{:04}-{:02}-{:02}T{:02}:{:02}:{:02}Z",
+        year, month, day, hour, minute, second
+    )
+}
+
+/// Civil-from-days / days-from-civil (Howard Hinnant's
+/// `days_from_civil`, public domain). Avoids pulling in
+/// `chrono` for what is a one-off formatting helper.
+fn epoch_seconds_to_calendar(secs: u64) -> (i32, u32, u32, u32, u32, u32) {
+    let days = (secs / 86_400) as i64;
+    let secs_of_day = (secs % 86_400) as u32;
+    let hour = secs_of_day / 3600;
+    let minute = (secs_of_day % 3600) / 60;
+    let second = secs_of_day % 60;
+    let (y, m, d) = days_from_civil(days);
+    (y, m as u32, d as u32, hour, minute, second)
+}
+
+fn days_from_civil(z: i64) -> (i32, i32, i32) {
+    let z = z + 719_468;
+    let era = if z >= 0 { z } else { z - 146_096 } / 146_097;
+    let doe = (z - era * 146_097) as u64;
+    let yoe = (doe - doe / 1460 + doe / 36524 - doe / 146_096) / 365;
+    let y = (yoe as i64) + era * 400;
+    let doy = doe - (365 * yoe + yoe / 4 - yoe / 100);
+    let mp = (5 * doy + 2) / 153;
+    let d = (doy - (153 * mp + 2) / 5 + 1) as i32;
+    let m = if mp < 10 { mp + 3 } else { mp - 9 } as i32;
+    let y = if m <= 2 { y + 1 } else { y } as i32;
+    (y, m, d)
 }
 
 /// Pre-flight check used by every command that opens a WebView.
@@ -577,6 +641,29 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 PermissionStore::open_at(&root, &id)?
                     .set(&permission, PermissionDecision::Denied)?;
                 println!("revoked {} from {}", permission, id);
+            }
+            PermissionCommands::Audit { id, root, limit } => {
+                let store = PermissionStore::open_at(&root, &id)?;
+                let report = store.recent_audit(limit)?;
+                if report.entries.is_empty() && report.skipped == 0 {
+                    println!("(no audit entries for {id})");
+                } else {
+                    // Tab-separated; pipes cleanly into cut/awk.
+                    println!("timestamp\tpermission\tdecision");
+                    for entry in &report.entries {
+                        // ISO-8601 / UTC: 2026-08-22T12:30:45Z.
+                        // Kept on one line so the file stays
+                        // sortable with `sort -k1`.
+                        let iso = format_unix_millis_iso8601(entry.timestamp_ms);
+                        println!("{}\t{}\t{:?}", iso, entry.permission, entry.decision);
+                    }
+                    if report.skipped > 0 {
+                        eprintln!(
+                            "warning: {} audit line(s) skipped (malformed JSON)",
+                            report.skipped
+                        );
+                    }
+                }
             }
         },
         Commands::Trust { action } => match action {

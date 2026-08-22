@@ -218,6 +218,67 @@ impl PermissionStore {
         writeln!(output, "{}", serde_json::to_string(&record)?)?;
         Ok(())
     }
+
+    /// Read up to `limit` most-recent audit entries for this app.
+    ///
+    /// The audit log is a JSONL file (one record per line). Lines
+    /// that fail to parse — which can happen if a user manually
+    /// edits the file, or if the format ever changes between
+    /// versions — are silently dropped so a single bad record
+    /// does not take the whole `alex permissions audit` command
+    /// down. The skipped count travels back in the result struct
+    /// so the CLI can surface a warning without losing the
+    /// parseable entries.
+    ///
+    /// Returns an empty entries vec (and 0 skipped) when the
+    /// audit file does not exist yet — the common case for
+    /// freshly installed apps.
+    pub fn recent_audit(&self, limit: usize) -> Result<AuditReport, AuthorizationError> {
+        if !self.audit_path.is_file() {
+            return Ok(AuditReport::default());
+        }
+        let content = fs::read_to_string(&self.audit_path)?;
+        let mut entries: Vec<AuditEntry> = Vec::new();
+        let mut skipped: usize = 0;
+        for line in content.lines() {
+            let trimmed = line.trim();
+            if trimmed.is_empty() {
+                continue;
+            }
+            match serde_json::from_str::<AuditEntry>(trimmed) {
+                Ok(entry) => entries.push(entry),
+                Err(_) => skipped += 1,
+            }
+        }
+        if entries.len() > limit {
+            let drop = entries.len() - limit;
+            entries.drain(..drop);
+        }
+        Ok(AuditReport { entries, skipped })
+    }
+}
+
+/// Result of reading the audit log. `skipped` counts lines that
+/// did not parse — the host should surface this to the user
+/// (typically as a stderr warning) so a corrupted audit log
+/// never goes silently unnoticed.
+#[derive(Debug, Default, Clone)]
+pub struct AuditReport {
+    pub entries: Vec<AuditEntry>,
+    pub skipped: usize,
+}
+
+/// One line of the JSONL audit log. The wire format is fixed —
+/// changing it is a breaking change for any operator who has
+/// already grep'd audit files.
+#[derive(Debug, Clone, Serialize, Deserialize)]
+pub struct AuditEntry {
+    #[serde(rename = "timestampMs")]
+    pub timestamp_ms: u64,
+    #[serde(rename = "appId")]
+    pub app_id: String,
+    pub permission: String,
+    pub decision: PermissionDecision,
 }
 
 #[cfg(test)]
@@ -355,5 +416,76 @@ mod tests {
             reopened.decision("clipboard.write"),
             PermissionDecision::Prompt
         );
+    }
+
+    #[test]
+    fn recent_audit_is_empty_when_no_log_file() {
+        // The common case for a freshly installed app: it has
+        // never had a `set` call, so no audit file exists.
+        let (_workspace, store) = open_fresh("com.alex.test");
+        let report = store.recent_audit(50).expect("recent_audit");
+        assert!(report.entries.is_empty());
+        assert_eq!(report.skipped, 0);
+    }
+
+    #[test]
+    fn recent_audit_returns_most_recent_n_records() {
+        // 3 decisions; ask for the last 2 and verify ordering.
+        let (_workspace, store) = open_fresh("com.alex.test");
+        store
+            .set("filesystem.read", PermissionDecision::Granted)
+            .unwrap();
+        store
+            .set("clipboard.read", PermissionDecision::Denied)
+            .unwrap();
+        store
+            .set("dialog.open", PermissionDecision::Granted)
+            .unwrap();
+
+        let report = store.recent_audit(2).expect("recent_audit");
+        assert_eq!(report.entries.len(), 2);
+        // Newest writes come last in the JSONL.
+        assert_eq!(report.entries[0].permission, "clipboard.read");
+        assert_eq!(report.entries[1].permission, "dialog.open");
+        assert_eq!(report.skipped, 0);
+    }
+
+    #[test]
+    fn recent_audit_skips_malformed_lines() {
+        let (workspace, store) = open_fresh("com.alex.test");
+        store
+            .set("filesystem.read", PermissionDecision::Granted)
+            .unwrap();
+
+        // Append a deliberately bad line + a blank line directly
+        // to the audit file. They must be reported as skipped,
+        // not crash the read.
+        let audit = workspace
+            .path()
+            .join("permissions")
+            .join("com.alex.test.audit.jsonl");
+        let mut content = std::fs::read_to_string(&audit).expect("read");
+        content.push_str("not-json\n");
+        content.push('\n');
+        std::fs::write(&audit, content).expect("rewrite");
+
+        let report = store.recent_audit(50).expect("recent_audit");
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].permission, "filesystem.read");
+        assert_eq!(report.skipped, 1);
+    }
+
+    #[test]
+    fn recent_audit_does_not_include_transient_grants() {
+        // By design: the audit log is the persisted history;
+        // "Allow Once" never lands in it.
+        let (_workspace, store) = open_fresh("com.alex.test");
+        store
+            .set("filesystem.read", PermissionDecision::Granted)
+            .unwrap();
+        store.set_transient("clipboard.read", PermissionDecision::Granted);
+        let report = store.recent_audit(50).expect("recent_audit");
+        assert_eq!(report.entries.len(), 1);
+        assert_eq!(report.entries[0].permission, "filesystem.read");
     }
 }
