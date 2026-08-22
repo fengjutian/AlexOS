@@ -1,3 +1,9 @@
+---
+layout: default
+title: 文档首页
+nav_order: 1
+---
+
 # Alex OS 文档
 
 本目录是 Alex OS 的**项目级设计文档**，记录当前系统能做什么、不能做什么，以及未来方向的取舍。

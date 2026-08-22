@@ -1,3 +1,9 @@
+---
+layout: default
+title: App Manager UI 设计
+nav_order: 6
+---
+
 # Alex OS 应用管理 UI 设计
 
 状态：设计提案  

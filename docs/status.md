@@ -1,3 +1,9 @@
+---
+layout: default
+title: 实现状态
+nav_order: 2
+---
+
 # Alex OS 实现状态
 
 > 本文档是 Alex OS 当前代码能够支持的行为的**事实性描述**。任何"已实现"都对应 `src/` 下的

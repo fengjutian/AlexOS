@@ -1,3 +1,9 @@
+---
+layout: default
+title: Alex Container 设计
+nav_order: 7
+---
+
 # Alex Container 技术实现设计
 
 状态：Draft  

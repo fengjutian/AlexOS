@@ -1,3 +1,9 @@
+---
+layout: default
+title: Reverse IPC
+nav_order: 4
+---
+
 # Reverse IPC — plugin backend → host 协议
 
 > 0.1 已实现。文档记录 wire format、host 端与 backend 端的契约,

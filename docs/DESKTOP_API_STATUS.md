@@ -1,3 +1,9 @@
+---
+layout: default
+title: Desktop API 状态
+nav_order: 5
+---
+
 # Desktop API status (2026-08-21)
 
 The previous turn shipped a large batch of P0+P1 desktop API

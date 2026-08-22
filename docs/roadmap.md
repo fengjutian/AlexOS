@@ -1,3 +1,9 @@
+---
+layout: default
+title: 路线图
+nav_order: 3
+---
+
 # Alex OS 路线图
 
 > 本文档只描述**未开发**的功能和未来方向。当前代码已实现的能力在 [`status.md`](./status.md) 中。

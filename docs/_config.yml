@@ -1,0 +1,19 @@
+title: AlexOS
+description: Alex OS 项目文档
+theme: just-the-docs
+color_scheme: light
+# GitHub Pages doesn't pick up `theme:`; use remote_theme instead.
+# When building locally with `bundle exec jekyll serve`, `theme:` is used.
+remote_theme: just-the-docs/just-the-docs@v0.7.0
+
+# We don't want Jekyll to drop files starting with `_` (we have nothing in
+# docs/ that needs excluding), but we do want to skip the moved-aside file
+# from status-and-roadmap so the sidebar stays clean.
+exclude:
+  - status-and-roadmap.md.moved-2026-08-22
+
+permalink: /:title
+
+# Search
+search_enabled: true
+search.heading_level: 2
