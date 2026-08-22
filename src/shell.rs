@@ -293,6 +293,13 @@ pub mod windows {
         frontend: &str,
         uri_path: &str,
     ) -> HttpResponse<std::borrow::Cow<'static, [u8]>> {
+        // Browsers (and WebView2) auto-request /favicon.ico in
+        // parallel with the page, before the <link rel="icon">
+        // link is parsed. Silently answer 204 so the resource
+        // panel stays clean for apps that ship no favicon.
+        if uri_path == "/favicon.ico" {
+            return response(204, "text/plain", Vec::new());
+        }
         let relative = if uri_path == "/" {
             PathBuf::from(frontend)
         } else {
