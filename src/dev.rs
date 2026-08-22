@@ -166,7 +166,8 @@ mod windows {
         let root = package_root.to_path_buf();
         let frontend = manifest.frontend.entry.clone();
         let package_id = serde_json::to_string(&manifest.id)?;
-        let init_script = BRIDGE.replace("__ALEX_PACKAGE_ID__", &package_id);
+        let init_script = BRIDGE.replace("__ALEX_PACKAGE_ID__", &package_id)
+            + &crate::permission_shim::shim_source(&manifest.permissions);
 
         let webview = WebViewBuilder::new()
             .with_initialization_script(init_script)

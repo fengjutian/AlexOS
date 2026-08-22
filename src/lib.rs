@@ -12,6 +12,7 @@ pub mod menu_tray;
 pub mod native;
 pub mod package;
 pub mod permission;
+pub mod permission_shim;
 pub mod plugin;
 pub mod process;
 pub mod proxy;
