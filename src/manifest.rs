@@ -81,6 +81,21 @@ pub struct Author {
 #[serde(deny_unknown_fields)]
 pub struct Frontend {
     pub entry: String,
+    /// Optional build descriptor. When present, `alex build`
+    /// shells out to `command` with `args` from the
+    /// `frontend/` directory so frameworks like Vite can
+    /// bundle source files into the single `entry` the host
+    /// serves at runtime.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub build: Option<FrontendBuild>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(deny_unknown_fields)]
+pub struct FrontendBuild {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 /// Backend execution mode.

@@ -51,6 +51,8 @@ pub enum PackageError {
     Version(String),
     #[error("update package id {actual} does not match installed app {expected}")]
     IdentityMismatch { expected: String, actual: String },
+    #[error("frontend build failed: {0}")]
+    Build(String),
 }
 
 #[derive(Debug, Serialize, Deserialize)]
@@ -93,7 +95,39 @@ pub struct UpdateResult {
     pub backup_retained: bool,
 }
 
+/// Template the scaffolder should generate. `Vanilla` is the
+/// existing plain-HTML + Node.js backend shape. `ReactTs` adds
+/// a Vite + React + TypeScript frontend whose build output is
+/// loaded by the host at runtime; see [`create_react_ts`] for
+/// the file layout and [`build_frontend`] for the build step.
+#[derive(Debug, Clone, Copy, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "kebab-case")]
+pub enum Template {
+    Vanilla,
+    ReactTs,
+}
+
+impl Template {
+    /// Parse the CLI string. Defaults to `Vanilla` for the empty
+    /// string so existing `--template ""` (and "default") usage
+    /// keeps working.
+    pub fn parse(value: &str) -> Self {
+        match value {
+            "react-ts" | "react" => Self::ReactTs,
+            _ => Self::Vanilla,
+        }
+    }
+}
+
 pub fn create_project(destination: &Path, package_id: &str) -> Result<(), PackageError> {
+    create_project_with_template(destination, package_id, Template::Vanilla)
+}
+
+pub fn create_project_with_template(
+    destination: &Path,
+    package_id: &str,
+    template: Template,
+) -> Result<(), PackageError> {
     let name = destination
         .file_name()
         .and_then(|value| value.to_str())
@@ -104,6 +138,15 @@ pub fn create_project(destination: &Path, package_id: &str) -> Result<(), Packag
     }
     fs::create_dir_all(destination.join("frontend"))?;
     fs::create_dir_all(destination.join("backend"))?;
+    match template {
+        Template::Vanilla => create_vanilla(destination, name, package_id)?,
+        Template::ReactTs => create_react_ts(destination, name, package_id)?,
+    }
+    load_app(destination)?;
+    Ok(())
+}
+
+fn create_vanilla(destination: &Path, name: &str, package_id: &str) -> Result<(), PackageError> {
     let manifest = serde_json::json!({
         "schemaVersion": 1,
         "id": package_id,
@@ -128,7 +171,74 @@ pub fn create_project(destination: &Path, package_id: &str) -> Result<(), Packag
         destination.join("backend/index.js"),
         "const readline=require('node:readline');\nconst input=readline.createInterface({input:process.stdin});\ninput.on('line',line=>{const r=JSON.parse(line);if(r.type==='shutdown'){input.close();return;}process.stdout.write(JSON.stringify({protocol:1,id:r.id,result:{ok:true}})+'\\n')});\n",
     )?;
-    load_app(destination)?;
+    Ok(())
+}
+
+fn create_react_ts(destination: &Path, name: &str, package_id: &str) -> Result<(), PackageError> {
+    // The manifest's frontend.entry points at the *built* output
+    // because the host serves static files. The dev template
+    // source lives in frontend/src/ but is loaded by `npm run
+    // build` from frontend/. The `frontend.build` block tells
+    // `alex build` how to invoke it without assuming npm vs pnpm
+    // vs yarn.
+    let manifest = serde_json::json!({
+        "schemaVersion": 1,
+        "id": package_id,
+        "name": name,
+        "version": "0.1.0",
+        "frontend": {
+            "entry": "frontend/index.html",
+            "build": {
+                "command": "npm",
+                "args": ["run", "build"]
+            }
+        },
+        "backend": { "runtime": "node", "entry": "backend/index.js" },
+        "permissions": [{ "name": "runtime.invoke" }, { "name": "runtime.manage" }]
+    });
+    fs::write(
+        destination.join("manifest.json"),
+        format!(
+            "{}\n",
+            serde_json::to_string_pretty(&manifest).expect("JSON value is valid")
+        ),
+    )?;
+    write_file(destination.join("frontend/index.html"), REACT_TS_INDEX_HTML)?;
+    write_file(destination.join("frontend/src/main.tsx"), REACT_TS_MAIN_TSX)?;
+    write_file(destination.join("frontend/src/App.tsx"), REACT_TS_APP_TSX)?;
+    write_file(
+        destination.join("frontend/package.json"),
+        REACT_TS_PACKAGE_JSON,
+    )?;
+    write_file(
+        destination.join("frontend/tsconfig.json"),
+        REACT_TS_TSCONFIG,
+    )?;
+    write_file(
+        destination.join("frontend/vite.config.ts"),
+        REACT_TS_VITE_CONFIG,
+    )?;
+    write_file(
+        destination.join("frontend/.alexignore"),
+        REACT_TS_ALEXIGNORE,
+    )?;
+    write_file(destination.join("frontend/README.md"), REACT_TS_README)?;
+    // Backend is the same JSON-RPC echo stub as the vanilla
+    // template so the dev host can spawn it without Node-tooling
+    // config on top of the Vite tooling.
+    fs::write(
+        destination.join("backend/index.js"),
+        "const readline=require('node:readline');\nconst input=readline.createInterface({input:process.stdin});\ninput.on('line',line=>{const r=JSON.parse(line);if(r.type==='shutdown'){input.close();return;}process.stdout.write(JSON.stringify({protocol:1,id:r.id,result:{ok:true}})+'\\n')});\n",
+    )?;
+    let _ = name; // currently unused; reserved for the README heading
+    Ok(())
+}
+
+fn write_file(path: PathBuf, body: &str) -> Result<(), PackageError> {
+    if let Some(parent) = path.parent() {
+        fs::create_dir_all(parent)?;
+    }
+    fs::write(path, body)?;
     Ok(())
 }
 
@@ -190,6 +300,216 @@ pub fn sign_payload(key_path: &Path, payload: &[u8]) -> Result<(String, String),
         ));
     }
     Ok((public_key, BASE64.encode(signing.sign(payload).to_bytes())))
+}
+
+// =====================================================================
+// React + TypeScript template (Vite + React 18)
+//
+// Constants live at the bottom so the long function bodies above
+// stay readable. All the strings are written verbatim by
+// `create_react_ts` — no template substitution, so the file
+// content is stable and unit-testable byte-for-byte.
+// =====================================================================
+
+const REACT_TS_INDEX_HTML: &str = r#"<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Alex OS App</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
+"#;
+
+const REACT_TS_MAIN_TSX: &str = r#"import React from "react";
+import { createRoot } from "react-dom/client";
+import { App } from "./App";
+
+const container = document.getElementById("root");
+if (!container) throw new Error("missing #root element in index.html");
+createRoot(container).render(
+  <React.StrictMode>
+    <App />
+  </React.StrictMode>
+);
+"#;
+
+const REACT_TS_APP_TSX: &str = r#"import { useEffect, useState } from "react";
+
+declare global {
+  interface Window {
+    alex: {
+      invoke<T = unknown>(method: string, params?: unknown): Promise<T>;
+      on(event: string, listener: (data: unknown) => void): () => void;
+    };
+  }
+}
+
+export function App() {
+  const [now, setNow] = useState(() => new Date().toISOString());
+
+  useEffect(() => {
+    const timer = window.setInterval(() => {
+      setNow(new Date().toISOString());
+    }, 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+
+  return (
+    <main style={{ fontFamily: "system-ui, sans-serif", padding: 24 }}>
+      <h1>Alex OS · React + TypeScript</h1>
+      <p>This is a React + TypeScript app running inside the Alex OS WebView.</p>
+      <p>
+        Use <code>window.alex.invoke("…", {"{…}"})</code> to call host APIs. The
+        BRIDGE is injected automatically before this module loads.
+      </p>
+      <p>Current time: <strong>{now}</strong></p>
+    </main>
+  );
+}
+"#;
+
+const REACT_TS_PACKAGE_JSON: &str = r#"{
+  "name": "alex-app",
+  "private": true,
+  "version": "0.1.0",
+  "type": "module",
+  "scripts": {
+    "dev": "vite",
+    "build": "tsc --noEmit && vite build",
+    "preview": "vite preview"
+  },
+  "dependencies": {
+    "react": "^18.3.1",
+    "react-dom": "^18.3.1"
+  },
+  "devDependencies": {
+    "@types/react": "^18.3.12",
+    "@types/react-dom": "^18.3.1",
+    "@vitejs/plugin-react": "^4.3.3",
+    "typescript": "^5.6.3",
+    "vite": "^5.4.10"
+  }
+}
+"#;
+
+const REACT_TS_TSCONFIG: &str = r#"{
+  "compilerOptions": {
+    "target": "ES2022",
+    "lib": ["ES2022", "DOM", "DOM.Iterable"],
+    "module": "ESNext",
+    "moduleResolution": "bundler",
+    "jsx": "react-jsx",
+    "strict": true,
+    "noUnusedLocals": true,
+    "noUnusedParameters": true,
+    "noFallthroughCasesInSwitch": true,
+    "skipLibCheck": true,
+    "esModuleInterop": true,
+    "allowSyntheticDefaultImports": true,
+    "resolveJsonModule": true,
+    "isolatedModules": true,
+    "moduleDetection": "force",
+    "verbatimModuleSyntax": true
+  },
+  "include": ["src"]
+}
+"#;
+
+const REACT_TS_VITE_CONFIG: &str = r#"import { defineConfig } from "vite";
+import react from "@vitejs/plugin-react";
+
+// Vite emits a single index.html at the package root (./index.html
+// relative to this config file) so the Alex OS host can serve it
+// without rewriting paths. The bundle lives next to it.
+export default defineConfig({
+  plugins: [react()],
+  build: {
+    outDir: ".",
+    emptyOutDir: true,
+    sourcemap: true,
+  },
+});
+"#;
+
+const REACT_TS_ALEXIGNORE: &str = r#"# Ignore the build artefacts and Vite cache so `alex dev`
+# does not hot-reload when the bundle regenerates.
+node_modules
+dist
+.vite
+*.tsbuildinfo
+"#;
+
+const REACT_TS_README: &str = r#"# Alex OS · React + TypeScript template
+
+Generated by `alex create --template react-ts`.
+
+## Build
+
+    cd frontend
+    npm install
+    npm run build
+
+`npm run build` runs `tsc --noEmit` first to type-check, then
+`vite build` which emits `frontend/index.html` and
+`frontend/assets/*` (the bundled JS/CSS).
+
+## Develop
+
+    alex dev .
+
+`alex dev` watches `frontend/` and reloads the WebView on
+change. Run `npm run dev` in a second terminal for the
+Vite-side hot reload (HMR), or just edit and let `alex dev`
+do a full page reload on save.
+
+## Layout
+
+    manifest.json          Alex OS package manifest
+    backend/index.js       Node.js JSON-RPC backend
+    frontend/
+      index.html           Built entry (served by host)
+      src/                 React + TypeScript source
+      package.json         Vite + React + TS toolchain
+      tsconfig.json
+      vite.config.ts
+      .alexignore          Files `alex dev` should ignore
+"#;
+
+/// Run the manifest-declared frontend build.
+///
+/// The build shape lives in the manifest under
+/// `frontend.build`: `{ command, args }`. We shell out the
+/// command from `frontend/` so `package.json` and `node_modules`
+/// resolve the way the framework expects.
+pub fn build_frontend(destination: &Path) -> Result<(), PackageError> {
+    let manifest = load_app(destination)?;
+    let build = manifest.frontend.build.as_ref().ok_or_else(|| {
+        PackageError::Build("manifest has no frontend.build block; nothing to do".into())
+    })?;
+    let frontend_dir = destination.join(
+        Path::new(&manifest.frontend.entry)
+            .parent()
+            .unwrap_or(Path::new("frontend")),
+    );
+    let mut command = std::process::Command::new(&build.command);
+    command.args(&build.args).current_dir(&frontend_dir);
+    let status = command.status().map_err(|e| {
+        PackageError::Build(format!(
+            "failed to spawn {} for frontend build: {e}",
+            build.command
+        ))
+    })?;
+    if !status.success() {
+        return Err(PackageError::Build(format!(
+            "frontend build failed with exit code {:?}",
+            status.code()
+        )));
+    }
+    Ok(())
 }
 
 fn pack_internal(

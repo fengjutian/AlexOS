@@ -176,6 +176,72 @@ fn project_scaffolding_creates_a_valid_application() {
 }
 
 #[test]
+fn react_ts_template_scaffolds_build_descriptor_and_source_tree() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = workspace.path().join("react_app");
+    package::create_project_with_template(&project, "com.alex.react", package::Template::ReactTs)
+        .unwrap();
+
+    // The manifest is loadable and the build block is wired
+    // so `alex build` can find the toolchain.
+    let manifest = load_app(&project).unwrap();
+    let build = manifest
+        .frontend
+        .build
+        .as_ref()
+        .expect("react-ts template must declare frontend.build");
+    assert_eq!(build.command, "npm");
+    assert_eq!(build.args, vec!["run", "build"]);
+
+    // The source tree matches the layout documented in the
+    // generated README.
+    for relative in [
+        "frontend/index.html",
+        "frontend/src/main.tsx",
+        "frontend/src/App.tsx",
+        "frontend/package.json",
+        "frontend/tsconfig.json",
+        "frontend/vite.config.ts",
+        "frontend/.alexignore",
+        "frontend/README.md",
+        "backend/index.js",
+    ] {
+        assert!(
+            project.join(relative).is_file(),
+            "missing {relative} in react-ts scaffold"
+        );
+    }
+
+    // The Vite config emits a bundle next to the entry so
+    // the host can serve it without rewriting paths.
+    let vite =
+        std::fs::read_to_string(project.join("frontend/vite.config.ts")).expect("vite.config.ts");
+    assert!(vite.contains("outDir"));
+    assert!(vite.contains("react()"));
+}
+
+#[test]
+fn vanilla_template_omits_build_descriptor() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = workspace.path().join("vanilla_app");
+    package::create_project(&project, "com.alex.vanilla").unwrap();
+    let manifest = load_app(&project).unwrap();
+    assert!(
+        manifest.frontend.build.is_none(),
+        "vanilla scaffold should not declare a build step"
+    );
+}
+
+#[test]
+fn build_frontend_rejects_a_manifest_with_no_build_block() {
+    let workspace = tempfile::tempdir().unwrap();
+    let project = workspace.path().join("no_build");
+    package::create_project(&project, "com.alex.no_build").unwrap();
+    let error = package::build_frontend(&project).unwrap_err().to_string();
+    assert!(error.contains("no frontend.build"));
+}
+
+#[test]
 fn installed_applications_can_be_listed_and_safely_uninstalled() {
     let workspace = tempfile::tempdir().unwrap();
     let source = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");

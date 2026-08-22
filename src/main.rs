@@ -31,7 +31,20 @@ enum Commands {
         path: PathBuf,
         #[arg(long)]
         id: String,
+        /// Scaffold template. `vanilla` is the plain HTML +
+        /// Node.js layout (default). `react-ts` generates a
+        /// Vite + React + TypeScript frontend that `alex
+        /// build` will bundle into the package root.
+        #[arg(long, default_value = "vanilla")]
+        template: String,
     },
+    /// Build the frontend declared in the manifest. The
+    /// build command and arguments come from
+    /// `frontend.build` in `manifest.json`; this is a thin
+    /// wrapper that runs them from the `frontend/` directory
+    /// so the framework's toolchain (Vite, webpack, etc.)
+    /// resolves `package.json` correctly.
+    Build { path: PathBuf },
     /// Validate an Alex application package.
     Validate { path: PathBuf },
     /// Show the normalized application manifest.
@@ -313,9 +326,19 @@ fn require_webview2() -> Result<(), Box<dyn std::error::Error>> {
 fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Create { path, id } => {
-            package::create_project(&path, &id)?;
-            println!("created {}", path.display());
+        Commands::Create { path, id, template } => {
+            let parsed = package::Template::parse(&template);
+            package::create_project_with_template(&path, &id, parsed)?;
+            println!(
+                "created {} (template: {:?})\n  next: cd {} && alex dev .",
+                path.display(),
+                parsed,
+                path.display()
+            );
+        }
+        Commands::Build { path } => {
+            package::build_frontend(&path)?;
+            println!("built frontend at {}", path.display());
         }
         Commands::Validate { path } => {
             let app = load_app(&path)?;
