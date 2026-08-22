@@ -1,8 +1,0 @@
-{
-  "ALEX_APP_ID": "test",
-  "ALEX_APP_DATA_DIR": null,
-  "ALEX_APP_CACHE_DIR": null,
-  "ALEX_APP_LOG_DIR": null,
-  "ALEX_SERVICE_PORT": "12345",
-  "ALEX_RUNTIME_TOKEN": null
-}
