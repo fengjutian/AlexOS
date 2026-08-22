@@ -169,7 +169,13 @@ mod windows {
 
         let webview = WebViewBuilder::new()
             .with_initialization_script(init_script)
-            .with_devtools(cfg!(debug_assertions) && std::env::var_os("ALEX_DEVTOOLS").is_some())
+            // `alex dev` IS the dev mode: DevTools are always
+            // on (debug build) without needing ALEX_DEVTOOLS.
+            // Production shells (src/shell.rs,
+            // src/manager_webview.rs) keep the env gate so a
+            // developer can still attach F12 in dev / opt out
+            // in shipping.
+            .with_devtools(cfg!(debug_assertions))
             .with_incognito(true)
             .with_clipboard(false)
             .with_navigation_handler(|url| crate::is_internal_webview_url(&url, "app"))
@@ -180,7 +186,26 @@ mod windows {
                 let proxy = proxy.clone();
                 let body = request.body().clone();
                 std::thread::spawn(move || {
+                    // IPC Inspector: log each round-trip to stderr
+                    // so the dev can tail the dev shell to see
+                    // exactly which calls the page is making and
+                    // which permission path each one took. Kept
+                    // short (truncated params) to keep the
+                    // terminal readable while a page is polling.
+                    let method = serde_json::from_str::<crate::ipc::Request>(&body)
+                        .ok()
+                        .map(|req| {
+                            let params = truncate_params(&req.params, 160);
+                            format!("{}.{} params={params}", req.source, req.method)
+                        })
+                        .unwrap_or_else(|| "(unparseable)".to_string());
                     let response = router.dispatch_json(&body);
+                    let outcome = if response.error.is_some() {
+                        "err"
+                    } else {
+                        "ok"
+                    };
+                    eprintln!("alex dev: ipc {method} -> {outcome}");
                     if let Ok(json) = serde_json::to_string(&response) {
                         let _ = proxy.send_event(UserEvent::IpcResponse(json));
                     }
@@ -380,6 +405,33 @@ mod windows {
         None
     }
 
+    /// Render a JSON `Value` as a single-line, length-bounded
+    /// string for the IPC inspector stderr log. Keeps the
+    /// developer-facing log readable when a page is polling a
+    /// method every 16ms; the original `Value` is unaffected
+    /// because we only ever read it for logging.
+    fn truncate_params(value: &serde_json::Value, max_bytes: usize) -> String {
+        let rendered = match value {
+            serde_json::Value::Null => "null".to_string(),
+            serde_json::Value::Bool(b) => b.to_string(),
+            serde_json::Value::Number(n) => n.to_string(),
+            serde_json::Value::String(s) => format!("\"{}\"", s),
+            // Compound types fall through to the full
+            // serializer so the dev can see the shape.
+            other => other.to_string(),
+        };
+        if rendered.len() <= max_bytes {
+            return rendered;
+        }
+        // Cut at a char boundary that respects UTF-8 so the
+        // terminal doesn't print a half-codepoint.
+        let mut end = max_bytes;
+        while end > 0 && !rendered.is_char_boundary(end) {
+            end -= 1;
+        }
+        format!("{}…", &rendered[..end])
+    }
+
     #[cfg(test)]
     mod tests {
         use super::*;
@@ -485,6 +537,54 @@ mod windows {
                 classify_change(&frontend, backend, &manifest, &manifest),
                 Some(DevCommand::ManifestChanged)
             );
+        }
+
+        #[test]
+        fn truncate_params_passes_short_values_through() {
+            let v = serde_json::json!({"path": "/tmp/hi.txt"});
+            assert_eq!(truncate_params(&v, 200), "{\"path\":\"/tmp/hi.txt\"}");
+        }
+
+        #[test]
+        fn truncate_params_cuts_long_values() {
+            let big = "x".repeat(5000);
+            let v = serde_json::json!({ "data": big });
+            let out = truncate_params(&v, 80);
+            // The `…` ellipsis is 3 UTF-8 bytes, so the total
+            // length is at most `max_bytes + 3`.
+            assert!(
+                out.len() <= 80 + "…".len(),
+                "got len {} = {:?}",
+                out.len(),
+                out
+            );
+            assert!(out.ends_with('…'), "missing ellipsis: {out:?}");
+        }
+
+        #[test]
+        fn truncate_params_keeps_scalar_shape() {
+            // Booleans, numbers, and null must render as their
+            // bare form so the dev can `grep 'ipc .* -> ok'`
+            // without parsing JSON.
+            assert_eq!(truncate_params(&serde_json::json!(true), 100), "true");
+            assert_eq!(truncate_params(&serde_json::json!(42), 100), "42");
+            assert_eq!(truncate_params(&serde_json::json!(null), 100), "null");
+            assert_eq!(
+                truncate_params(&serde_json::json!("hello"), 100),
+                "\"hello\""
+            );
+        }
+
+        #[test]
+        fn truncate_params_respects_utf8_boundaries() {
+            // 4-byte emoji at the cut point must not be split
+            // mid-codepoint.
+            let emoji = "🎉"; // 4 bytes in UTF-8
+            let value = serde_json::json!({ "k": emoji.repeat(100) });
+            let out = truncate_params(&value, 12);
+            assert!(out.ends_with('…'));
+            // Re-encoding the prefix must not panic.
+            let _ = serde_json::from_str::<serde_json::Value>(&out.trim_end_matches('…'));
         }
     }
 }
