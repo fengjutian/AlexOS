@@ -1,37 +1,26 @@
 {
-  "backend": {
-    "entry": "backend/index.js",
-    "runtime": "node"
-  },
-  "frontend": {
-    "build": {
-      "args": [
-        "run",
-        "build"
-      ],
-      "command": "npm"
-    },
-    "entry": "frontend/dist/index.html"
-  },
+  "schemaVersion": 1,
   "id": "com.example.react",
   "name": "my-react-app",
-  "permissions": [
-    {
-      "name": "runtime.invoke"
-    },
-    {
-      "name": "runtime.manage"
-    },
-    {
-      "name": "storage"
-    },
-    {
-      "name": "clipboard.write"
-    },
-    {
-      "name": "window.manage"
+  "version": "0.1.0",
+  "frontend": {
+    "entry": "frontend/dist/index.html",
+    "build": {
+      "command": "npm",
+      "args": ["run", "build"]
     }
-  ],
-  "schemaVersion": 1,
-  "version": "0.1.0"
+  },
+  "backend": {
+    "runtime": "node",
+    "entry": "backend/index.js",
+    "mode": "service",
+    "healthCheck": { "path": "/health", "timeoutMs": 5000 }
+  },
+  "permissions": [
+    { "name": "runtime.invoke" },
+    { "name": "runtime.manage" },
+    { "name": "storage" },
+    { "name": "clipboard.write" },
+    { "name": "window.manage" }
+  ]
 }

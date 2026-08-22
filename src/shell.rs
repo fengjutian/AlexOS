@@ -350,7 +350,15 @@ pub mod windows {
             .status(status)
             .header(CONTENT_TYPE, content_type)
             .header("X-Content-Type-Options", "nosniff")
-            .header("Content-Security-Policy", "default-src 'self'; script-src 'self'; style-src 'self'; img-src 'self' data:; connect-src 'self'; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'")
+            // WebView2 rewrites the custom protocol to http://alex.<authority>
+            // before the navigation callback sees it (see lib.rs), so the
+            // CSP must allow both the native scheme and the rewritten
+            // http://alex.app/ origin. `connect-src` needs them both for
+            // `fetch('alex://app/api/...')` to clear the policy check.
+            .header(
+                "Content-Security-Policy",
+                "default-src 'self' alex: http://alex.app; script-src 'self' alex: http://alex.app; style-src 'self' alex: http://alex.app; img-src 'self' data:; connect-src 'self' alex: http://alex.app; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'",
+            )
             .body(body.into())
             .expect("static response is valid")
     }
