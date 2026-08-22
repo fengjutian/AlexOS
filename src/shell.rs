@@ -171,40 +171,39 @@ pub mod windows {
         // proxy. We need the host-allocated endpoint in scope before
         // building the WebView, so we resolve it from the runtime
         // status right after start.
-        let service_endpoint: Option<crate::runtime::ServiceEndpoint> = if let Some(backend) =
-            &manifest.backend
-        {
-            if matches!(backend.mode, crate::manifest::BackendMode::Service) {
-                let spec = crate::runtime::RuntimeSpec {
-                    app_id: manifest.id.clone(),
-                    package_root: package_root.to_path_buf(),
-                    backend: backend.clone(),
-                    data_dir: None,
-                    cache_dir: None,
-                };
-                let handle = RuntimeHandle::start_with_spec(spec)?;
-                let status = handle.status(Duration::from_secs(20))?;
-                if !matches!(status.state, crate::runtime::RuntimeState::Ready) {
-                    return Err(format!(
+        let service_endpoint: Option<crate::runtime::ServiceEndpoint> =
+            if let Some(backend) = &manifest.backend {
+                if matches!(backend.mode, crate::manifest::BackendMode::Service) {
+                    let spec = crate::runtime::RuntimeSpec {
+                        app_id: manifest.id.clone(),
+                        package_root: package_root.to_path_buf(),
+                        backend: backend.clone(),
+                        data_dir: None,
+                        cache_dir: None,
+                    };
+                    let handle = RuntimeHandle::start_with_spec(spec)?;
+                    let status = handle.status(Duration::from_secs(20))?;
+                    if !matches!(status.state, crate::runtime::RuntimeState::Ready) {
+                        return Err(format!(
                         "service backend {} failed to reach Ready within handshake window: {:?}",
                         manifest.id, status.last_error
                     )
                     .into());
-                }
-                router = router.with_runtime(handle);
-                match (status.port, status.token) {
-                    (Some(port), Some(token)) => {
-                        Some(crate::runtime::ServiceEndpoint { port, token })
                     }
-                    _ => None,
+                    router = router.with_runtime(handle);
+                    match (status.port, status.token) {
+                        (Some(port), Some(token)) => {
+                            Some(crate::runtime::ServiceEndpoint { port, token })
+                        }
+                        _ => None,
+                    }
+                } else {
+                    router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
+                    None
                 }
             } else {
-                router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
                 None
-            }
-        } else {
-            None
-        };
+            };
         let router = Arc::new(router);
         let ipc_router = Arc::clone(&router);
         let root = package_root.to_path_buf();

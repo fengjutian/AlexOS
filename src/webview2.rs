@@ -35,8 +35,7 @@ const WEBVIEW2_PRODUCT_GUID: &str = "{F3017226-FE2A-4295-8BDF-00C3A9A7E4C5}";
 /// Microsoft's official Evergreen Bootstrapper. The `?form=MAFJA`
 /// is the "machine-friendly auto-download" form that doesn't render
 /// the web landing page and triggers the actual MSI / exe.
-pub const WEBVIEW2_BOOTSTRAP_URL: &str =
-    "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
+pub const WEBVIEW2_BOOTSTRAP_URL: &str = "https://go.microsoft.com/fwlink/p/?LinkId=2124703";
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct WebView2Status {
@@ -67,9 +66,7 @@ pub enum RegistrySource {
 impl RegistrySource {
     pub fn as_reg_path(self) -> &'static str {
         match self {
-            Self::HklmWow6432 => {
-                "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients"
-            }
+            Self::HklmWow6432 => "HKLM\\SOFTWARE\\WOW6432Node\\Microsoft\\EdgeUpdate\\Clients",
             Self::Hklm => "HKLM\\SOFTWARE\\Microsoft\\EdgeUpdate\\Clients",
             Self::Hkcu => "HKCU\\Software\\Microsoft\\EdgeUpdate\\Clients",
         }
@@ -82,8 +79,9 @@ pub enum WebView2Error {
         "Microsoft Edge WebView2 Runtime is not installed.\n\
          Alex OS renders every page through WebView2 and cannot start\n\
          without it. Install the Evergreen Bootstrapper from:\n  \
-         {url}\n\
-         then re-run this command."
+         {0}\n\
+         then re-run this command.",
+        WEBVIEW2_BOOTSTRAP_URL
     )]
     NotInstalled,
     #[error("reg.exe query for {path} failed: {message}")]
@@ -132,9 +130,7 @@ fn query_hive(source: RegistrySource) -> Result<Option<WebView2Status>, WebView2
     // expected "this hive doesn't have it" path, not an error.
     if !output.status.success() {
         let stderr = String::from_utf8_lossy(&output.stderr).trim().to_string();
-        if stderr.contains("unable to find the specified registry key")
-            || stderr.is_empty()
-        {
+        if stderr.contains("unable to find the specified registry key") || stderr.is_empty() {
             return Ok(None);
         }
         return Err(WebView2Error::RegFailed {

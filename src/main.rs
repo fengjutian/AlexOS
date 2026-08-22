@@ -226,6 +226,19 @@ fn main() {
     }
 }
 
+/// Pre-flight check used by every command that opens a WebView.
+/// `wry` / WebView2 itself will fail with a cryptic COM error when
+/// the runtime is missing; this gives the user a single, actionable
+/// message instead. Detection is the same code path as
+/// `alex doctor`, so the surfaced message is identical.
+fn require_webview2() -> Result<(), Box<dyn std::error::Error>> {
+    if let Err(error) = alex::webview2::detect() {
+        eprintln!("error: {error}");
+        return Err(error.into());
+    }
+    Ok(())
+}
+
 fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
@@ -298,10 +311,12 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             }
         }
         Commands::Shell { path } => {
+            require_webview2()?;
             let app = load_app(&path)?;
             shell::run(&path, app, None)?;
         }
         Commands::Dev { path } => {
+            require_webview2()?;
             let app = load_app(&path)?;
             dev::run(&path, app)?;
         }
@@ -309,6 +324,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             install_root,
             trust_root,
         } => {
+            require_webview2()?;
             // Self-hosting path: if `com.alex.manager` is installed as a
             // plugin, prefer it. We delegate to `shell::run` (same path
             // as `alex plugin <id>` without `--headless`) so the plugin
