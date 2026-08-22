@@ -319,3 +319,11 @@ Manager/Shell 收口到 ContainerService。验收：旧示例行为不变，重�
 
 开始 L2/OCI 前需用 ADR 确认：是否开放多实例、是否随 Alex 分发固定 Node、CPU 默认 hard cap
 还是 weight、数据保留策略、Firewall 与 WFP 的选择，以及 OCI 后端选择。
+
+## 关联文档
+
+- [`status.md`](./status.md) — 0.1 现有 runtime / lifecycle / proxy 的事实基线（§2.4 运行时生命周期、§2.9 Service 反向代理、§2.7 应用包/签名/信任）。本文档 §14 的"现有代码迁移"小节引用的模块都对应 status.md 里的子章节。
+- [`roadmap.md`](./roadmap.md) — L1 Job Object 对应 P0 §3.1 Runtime 可靠性；L2 AppContainer 对应 roadmap 未来阶段（待 P0 完成后立项）；L3 OCI 适配器对应 P2 §3.8 跨平台（但通过 WSL2/containerd 而非自行实现）。
+- [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) — 0.2 计划新增的 `system.container.*` 路由（本文档 §10 内部 API）以及 `process.spawn` / `process.kill` 等 wired 状态；本文档"现有代码迁移"提到的 `src/api.rs` 新增 `system.container.*` 应在 DESKTOP_API_STATUS.md 也补一行。
+- [`app-manager-ui-design.md`](./app-manager-ui-design.md) — Manager plugin 在容器化后应改用本文档 §10 定义的 `ContainerService` trait，而不是直接调用 0.1 的 `RuntimeSupervisor`。`alex container ps/inspect/logs` 的 UI 即 App Manager 的容器视图。
+- [`README.md`](./README.md) — 文档阅读路径与本文档在整体中的位置。
