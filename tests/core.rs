@@ -113,6 +113,40 @@ fn router_rejects_spoofed_package_identity() {
 }
 
 #[test]
+fn router_permission_logging_toggle_does_not_break_dispatch() {
+    // The `with_permission_logging` builder flips a flag the
+    // dev terminal uses to surface the "permission call panel".
+    // We can't observe the flag directly from outside the crate,
+    // but we can confirm the builder compiles, the resulting
+    // router still dispatches a normal request, and a
+    // permission-granted path still resolves to `Granted`
+    // through the new code path.
+    let workspace = tempfile::tempdir().unwrap();
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
+    let app = load_app(&root).unwrap();
+    let store = PermissionStore::open_at(workspace.path(), &app.id).unwrap();
+    store
+        .set("filesystem.read", PermissionDecision::Granted)
+        .unwrap();
+    let router = ApiRouter::new(root, app)
+        .with_permission_store(store)
+        .with_permission_logging(true);
+    let response = router.dispatch(Request {
+        protocol: 1,
+        id: "logged".into(),
+        source: "com.alex.hello".into(),
+        method: "filesystem.readText".into(),
+        params: json!({ "path": "data/message.txt" }),
+        deadline_ms: None,
+    });
+    assert!(response.error.is_none(), "{response:?}");
+    assert_eq!(
+        response.result.unwrap()["content"],
+        "Hello from the permission-checked Alex API.\n"
+    );
+}
+
+#[test]
 fn router_rejects_oversized_ipc_messages() {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/hello");
     let app = load_app(&root).unwrap();

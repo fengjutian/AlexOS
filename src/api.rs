@@ -50,6 +50,11 @@ pub struct ApiRouter {
     menu_store: Arc<MenuStore>,
     process_registry: Arc<ProcessRegistry>,
     inflight: Arc<Mutex<InflightTracker>>,
+    /// When true, every call to `permission_granted` is echoed
+    /// to stderr with the resolved decision. `alex dev` flips
+    /// this on; the production shell does not. Off by default
+    /// because a polling page would otherwise log every frame.
+    permission_log: Arc<std::sync::atomic::AtomicBool>,
 }
 
 #[derive(Default)]
@@ -111,6 +116,7 @@ impl ApiRouter {
             menu_store,
             process_registry,
             inflight: Arc::new(Mutex::new(InflightTracker::default())),
+            permission_log: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
 
@@ -121,6 +127,16 @@ impl ApiRouter {
 
     pub fn with_permission_store(mut self, store: PermissionStore) -> Self {
         self.permission_store = Some(store);
+        self
+    }
+
+    /// Enable verbose permission-decision logging on stderr.
+    /// Used by `alex dev` to surface the "permission call panel"
+    /// in the dev terminal without making it the production
+    /// default. See `permission_granted` for the log format.
+    pub fn with_permission_logging(mut self, enabled: bool) -> Self {
+        self.permission_log
+            .store(enabled, std::sync::atomic::Ordering::Relaxed);
         self
     }
 
@@ -1788,12 +1804,43 @@ impl ApiRouter {
 
     fn permission_granted(&self, name: &str) -> bool {
         let Some(store) = &self.permission_store else {
+            // No store attached (e.g. an internal helper path
+            // during startup): silently allow. This branch is
+            // intentionally not logged because the dev does not
+            // see internal calls; the public path is
+            // `with_permission_store` which is set by every
+            // host entry point.
             return true;
         };
+        let perm_log = self
+            .permission_log
+            .load(std::sync::atomic::Ordering::Relaxed);
         match store.decision(name) {
-            PermissionDecision::Granted => true,
-            PermissionDecision::Denied => false,
+            PermissionDecision::Granted => {
+                if perm_log {
+                    eprintln!(
+                        "{}",
+                        format_permission_decision("cached-grant", name, &self.manifest.name,)
+                    );
+                }
+                true
+            }
+            PermissionDecision::Denied => {
+                if perm_log {
+                    eprintln!(
+                        "{}",
+                        format_permission_decision("cached-deny", name, &self.manifest.name,)
+                    );
+                }
+                false
+            }
             PermissionDecision::Prompt => {
+                if perm_log {
+                    eprintln!(
+                        "{}",
+                        format_permission_decision("prompt", name, &self.manifest.name)
+                    );
+                }
                 let granted =
                     native::confirm_permission(&self.manifest.name, name).unwrap_or(false);
                 let decision = if granted {
@@ -1802,10 +1849,32 @@ impl ApiRouter {
                     PermissionDecision::Denied
                 };
                 let _ = store.set(name, decision);
+                if perm_log {
+                    eprintln!(
+                        "{}",
+                        format_permission_decision(
+                            if granted {
+                                "answered-yes"
+                            } else {
+                                "answered-no"
+                            },
+                            name,
+                            &self.manifest.name,
+                        )
+                    );
+                }
                 granted
             }
         }
     }
+}
+
+/// One line of the dev-mode permission call panel. Kept as a
+/// free function so the format is unit-testable without
+/// capturing stderr (which is fragile in `cargo test`'s
+/// parallel runner).
+fn format_permission_decision(stage: &str, permission: &str, app_name: &str) -> String {
+    format!("alex: permission {permission} on {app_name} -> {stage}")
 }
 
 type ApiResult = Result<Value, (&'static str, String)>;
@@ -2030,4 +2099,39 @@ fn copy_dir_recursive(from: &Path, to: &Path) -> std::io::Result<()> {
         }
     }
     Ok(())
+}
+
+#[cfg(test)]
+mod tests {
+    use super::format_permission_decision;
+
+    #[test]
+    fn permission_log_cached_grant_includes_permission_and_app() {
+        let line = format_permission_decision("cached-grant", "fs.readText", "com.alex.demo");
+        assert_eq!(
+            line,
+            "alex: permission fs.readText on com.alex.demo -> cached-grant"
+        );
+    }
+
+    #[test]
+    fn permission_log_cached_deny_uses_distinct_stage_token() {
+        let grant = format_permission_decision("cached-grant", "net.fetch", "a");
+        let deny = format_permission_decision("cached-deny", "net.fetch", "a");
+        let answered_yes = format_permission_decision("answered-yes", "net.fetch", "a");
+        let answered_no = format_permission_decision("answered-no", "net.fetch", "a");
+        let prompt = format_permission_decision("prompt", "net.fetch", "a");
+        assert_ne!(grant, deny);
+        assert_ne!(answered_yes, answered_no);
+        assert_ne!(prompt, answered_yes);
+        assert!(grant.contains("cached-grant"));
+        assert!(answered_no.ends_with(" -> answered-no"));
+    }
+
+    #[test]
+    fn permission_log_preserves_long_permission_names_verbatim() {
+        let name = "system.manageApps.withQuotaOverride";
+        let line = format_permission_decision("cached-grant", name, "com.alex.demo");
+        assert!(line.contains(name));
+    }
 }

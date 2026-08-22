@@ -154,6 +154,7 @@ mod windows {
         let permissions = PermissionStore::for_app(&manifest.id)?;
         let mut router = ApiRouter::new(package_root.to_path_buf(), manifest.clone())
             .with_permission_store(permissions)
+            .with_permission_logging(true) // dev mode = permission call panel on
             .with_native_host(Arc::new(WindowHost {
                 proxy: proxy.clone(),
             }));
