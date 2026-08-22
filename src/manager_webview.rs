@@ -134,21 +134,30 @@ enum ManagerEvent {
 }
 
 fn serve_system_asset(uri_path: &str) -> HttpResponse<std::borrow::Cow<'static, [u8]>> {
-    if uri_path == "/" || uri_path.is_empty() {
+    // The manager WebView is loaded at `alex://system/app-manager/`,
+    // so every asset path arrives prefixed with `/app-manager/`.
+    // Strip that prefix so the rest of the routing uses the bare
+    // asset paths declared in the placeholder HTML.
+    let stripped = uri_path
+        .strip_prefix("/app-manager/")
+        .or_else(|| uri_path.strip_prefix("/app-manager"))
+        .unwrap_or(uri_path);
+    let stripped = if stripped.is_empty() { "/" } else { stripped };
+    if stripped == "/" {
         return response(
             200,
             "text/html; charset=utf-8",
             PLACEHOLDER_HTML.as_bytes().to_vec(),
         );
     }
-    if uri_path == "/placeholder" {
+    if stripped == "/placeholder" {
         return response(
             200,
             "text/html; charset=utf-8",
             PLACEHOLDER_HTML.as_bytes().to_vec(),
         );
     }
-    if uri_path == "/manager_placeholder.css" {
+    if stripped == "/manager_placeholder.css" {
         return response(
             200,
             "text/css; charset=utf-8",
