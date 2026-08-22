@@ -1190,29 +1190,29 @@ impl ApiRouter {
                 ));
             }
         };
-        self.require_permission(
-            |permission| {
-                matches!(
-                    (permission, kind),
-                    (Permission::MediaCamera, "media.camera")
-                        | (Permission::MediaMicrophone, "media.microphone")
-                        | (Permission::Geolocation, "geolocation")
-                )
-            },
-            method_name,
-        )?;
-        let granted = native::confirm_permission(&self.manifest.name, method_name)
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
-        if let Some(store) = &self.permission_store {
-            let decision = if granted {
-                PermissionDecision::Granted
-            } else {
-                PermissionDecision::Denied
-            };
-            store
-                .set(method_name, decision)
-                .map_err(|error| ("AUTHORIZATION_ERROR", error.to_string()))?;
+        // The manifest must declare the matching WebView-level
+        // permission. The page-side shim is a thin wrapper around
+        // the host's normal permission flow, so a manifest that
+        // does not opt in cannot get a dialog through this path.
+        let declared = self.manifest.permissions.iter().any(|permission| {
+            matches!(
+                (permission, kind),
+                (Permission::MediaCamera, "media.camera")
+                    | (Permission::MediaMicrophone, "media.microphone")
+                    | (Permission::Geolocation, "geolocation")
+            )
+        });
+        if !declared {
+            return Err((
+                "PERMISSION_DENIED",
+                format!("{method_name} is not declared in manifest"),
+            ));
         }
+        // `permission_granted` already handles the persisted
+        // store, the first-use dialog, and the audit log entry
+        // — calling `native::confirm_permission` again would
+        // show a second dialog and double-write the decision.
+        let granted = self.permission_granted(method_name);
         Ok(json!({ "granted": granted }))
     }
 

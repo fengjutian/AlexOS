@@ -200,6 +200,12 @@ enum PermissionCommands {
         permission: String,
         #[arg(long)]
         root: PathBuf,
+        /// Wipe every persisted decision for this app. The
+        /// `permission` argument is ignored when this is set.
+        /// Use to fully reset an app's permission state
+        /// without uninstalling it.
+        #[arg(long)]
+        all: bool,
     },
     /// Show the most recent permission decisions for an app from
     /// the audit log (JSONL). `transient` ("Allow Once") grants
@@ -660,10 +666,16 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 id,
                 permission,
                 root,
+                all,
             } => {
-                PermissionStore::open_at(&root, &id)?
-                    .set(&permission, PermissionDecision::Denied)?;
-                println!("revoked {} from {}", permission, id);
+                let store = PermissionStore::open_at(&root, &id)?;
+                if all {
+                    let cleared = store.revoke_all()?;
+                    println!("revoked all ({cleared}) permissions from {id}");
+                } else {
+                    store.set(&permission, PermissionDecision::Denied)?;
+                    println!("revoked {} from {}", permission, id);
+                }
             }
             PermissionCommands::Audit { id, root, limit } => {
                 let store = PermissionStore::open_at(&root, &id)?;

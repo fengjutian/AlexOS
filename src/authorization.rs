@@ -200,6 +200,36 @@ impl PermissionStore {
             .unwrap_or_default()
     }
 
+    /// Wipe every persisted decision for this app. Transient
+    /// grants are not touched (they live in memory only and
+    /// are scoped to the current session). The audit log is
+    /// also untouched — the historical record remains for
+    /// the operator even after the user clears their grants.
+    ///
+    /// Returns the number of decisions that were cleared.
+    /// Used by `alex permissions revoke --all` and the
+    /// future host-side "reset permissions" UI panel.
+    pub fn revoke_all(&self) -> Result<usize, AuthorizationError> {
+        let cleared = {
+            let mut values = self.decisions.lock().expect("permission lock poisoned");
+            let count = values.len();
+            values.clear();
+            count
+        };
+        if cleared > 0 {
+            // Re-serialise an empty map so the file on disk
+            // matches the in-memory state. Without this the
+            // .json file would still hold the old decisions
+            // and a reopen would resurrect them.
+            let empty: BTreeMap<String, PermissionDecision> = BTreeMap::new();
+            let serialized = serde_json::to_vec_pretty(&empty)?;
+            let temporary = self.state_path.with_extension("json.tmp");
+            fs::write(&temporary, serialized)?;
+            fs::rename(temporary, &self.state_path)?;
+        }
+        Ok(cleared)
+    }
+
     fn audit(
         &self,
         permission: &str,
@@ -487,5 +517,82 @@ mod tests {
         let report = store.recent_audit(50).expect("recent_audit");
         assert_eq!(report.entries.len(), 1);
         assert_eq!(report.entries[0].permission, "filesystem.read");
+    }
+
+    #[test]
+    fn revoke_all_clears_every_persisted_decision() {
+        let (_workspace, store) = open_fresh("com.alex.test");
+        store
+            .set("filesystem.read", PermissionDecision::Granted)
+            .unwrap();
+        store
+            .set("clipboard.read", PermissionDecision::Denied)
+            .unwrap();
+        store
+            .set("dialog.open", PermissionDecision::Granted)
+            .unwrap();
+        let cleared = store.revoke_all().expect("revoke_all");
+        assert_eq!(cleared, 3);
+        assert!(store.list().is_empty());
+    }
+
+    #[test]
+    fn revoke_all_persists_the_empty_state() {
+        // After clearing, reopening the store must not bring
+        // the old decisions back. The on-disk file is the
+        // ground truth; in-memory clearing without a
+        // re-serialise would let the JSON file resurrect
+        // everything on the next open.
+        let (workspace, store) = open_fresh("com.alex.test");
+        store
+            .set("filesystem.read", PermissionDecision::Granted)
+            .unwrap();
+        store
+            .set("clipboard.read", PermissionDecision::Granted)
+            .unwrap();
+        let cleared = store.revoke_all().expect("revoke_all");
+        assert_eq!(cleared, 2);
+
+        let reopened = PermissionStore::open_at(workspace.path(), "com.alex.test").expect("reopen");
+        assert!(reopened.list().is_empty());
+        // Every call resolves to Prompt again.
+        assert_eq!(
+            reopened.decision("filesystem.read"),
+            PermissionDecision::Prompt
+        );
+        assert_eq!(
+            reopened.decision("clipboard.read"),
+            PermissionDecision::Prompt
+        );
+    }
+
+    #[test]
+    fn revoke_all_on_empty_store_is_a_noop() {
+        let (_workspace, store) = open_fresh("com.alex.test");
+        // No `set` calls — the JSON file does not exist yet.
+        let cleared = store.revoke_all().expect("revoke_all");
+        assert_eq!(cleared, 0);
+    }
+
+    #[test]
+    fn revoke_all_does_not_touch_transient_grants() {
+        // The persisted layer is wiped; the transient layer
+        // is in-memory only and not affected.
+        let (_workspace, store) = open_fresh("com.alex.test");
+        store
+            .set("filesystem.read", PermissionDecision::Granted)
+            .unwrap();
+        store.set_transient("clipboard.read", PermissionDecision::Granted);
+        let cleared = store.revoke_all().expect("revoke_all");
+        assert_eq!(cleared, 1);
+        // Persisted is gone, transient is intact.
+        assert_eq!(
+            store.decision("filesystem.read"),
+            PermissionDecision::Prompt
+        );
+        assert_eq!(
+            store.decision("clipboard.read"),
+            PermissionDecision::Granted
+        );
     }
 }
