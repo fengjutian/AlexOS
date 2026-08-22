@@ -187,7 +187,7 @@ fn create_react_ts(destination: &Path, name: &str, package_id: &str) -> Result<(
         "name": name,
         "version": "0.1.0",
         "frontend": {
-            "entry": "frontend/index.html",
+            "entry": "frontend/dist/index.html",
             "build": {
                 "command": "npm",
                 "args": ["run", "build"]
@@ -423,17 +423,17 @@ const REACT_TS_TSCONFIG: &str = r#"{
 const REACT_TS_VITE_CONFIG: &str = r#"import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
 
-// Vite emits a single index.html at the package root (./index.html
-// relative to this config file) so the Alex OS host can serve it
-// without rewriting paths. The bundle lives next to it.
-// `base: "./"` makes the build emit relative URLs in index.html
-// (e.g. `./assets/index-XXX.js`) so the alex://app/ asset router
-// can resolve them via the existing path-join mapping.
+// Source lives at frontend/src/ with the Vite entry in
+// frontend/index.html. `outDir: "dist"` keeps the build output
+// in frontend/dist/ so it doesn't clobber the source files
+// (Vite warns and `emptyOutDir: true` would wipe them). The
+// manifest's `frontend.entry` points at frontend/dist/index.html
+// so the Alex OS host serves the built bundle.
 export default defineConfig({
   plugins: [react()],
   base: "./",
   build: {
-    outDir: ".",
+    outDir: "dist",
     emptyOutDir: true,
     sourcemap: true,
   },

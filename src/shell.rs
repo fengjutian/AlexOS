@@ -308,9 +308,10 @@ pub mod windows {
         // — the same shape Vite's `base: "./"` build emits, and the
         // shape the React scaffold uses.
         let entry = Path::new(frontend);
-        let asset_root = root.join(entry.parent().unwrap_or_else(|| Path::new("")));
+        let asset_root = root.join(entry.parent().unwrap_or(Path::new("")));
         let entry_basename = entry
             .file_name()
+            .map(Path::new)
             .map(Path::to_path_buf)
             .unwrap_or_else(|| PathBuf::from("index.html"));
         let relative = if uri_path == "/" {

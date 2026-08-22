@@ -11,7 +11,7 @@
       ],
       "command": "npm"
     },
-    "entry": "frontend/index.html"
+    "entry": "frontend/dist/index.html"
   },
   "id": "com.example.react",
   "name": "my-react-app",
@@ -21,6 +21,15 @@
     },
     {
       "name": "runtime.manage"
+    },
+    {
+      "name": "storage"
+    },
+    {
+      "name": "clipboard.write"
+    },
+    {
+      "name": "window.manage"
     }
   ],
   "schemaVersion": 1,
