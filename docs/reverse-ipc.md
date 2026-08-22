@@ -219,4 +219,4 @@ ApiRouter 校验 source=com.alex.manager、permission granted
 - [`app-manager-ui-design.md`](./app-manager-ui-design.md) — §7 Self-hosting 全景中"自托管 App Manager plugin 替换内置 `alex manager`"的能力以本文档 reverse IPC 为前提;plugin 调 `system.listApps / system.install` 的权限来源与 UI 权限模型设计在 app-manager-ui-design.md。
 - [`roadmap.md`](./roadmap.md) — P1 §3.5 插件系统的"扩展点、菜单、面板、命令贡献"是 reverse IPC 的下一阶段(从"问一个问题"扩展到"注册一个长生命周期能力")。
 - [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) — 任何 `system.*` 方法的可调用性以 DESKTOP_API_STATUS.md 为准;reverse IPC 调用 `system.*` 时,host 仍按文档中的"fully wired / registry-only / planned"分类执行。
-- [`README.md`](./README.md) — 文档阅读路径(本文档是"先读"档)。
+- [`index.md`](./index.md) — 文档阅读路径(本文档是"先读"档)。

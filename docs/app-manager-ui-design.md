@@ -298,4 +298,4 @@ queued → validating → verifyingSignature → downloading → extracting
 - [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) — 本文 §5 提到的 Manifest 字段（icons / author / license）需要"系统"支持读取；`window.setTitle` 等窗口 API 的 wired 状态以 DESKTOP_API_STATUS.md 为准。
 - [`reverse-ipc.md`](./reverse-ipc.md) — 当 App Manager 以自托管 plugin 形式运行（替代内置 `alex manager`）时，frontend 通过普通 Alex IPC 调 `system.listApps / system.install / system.uninstall`，走和普通 app 完全一样的 dispatch 路径；详见 reverse-ipc.md §7 self-hosting 全景。
 - [`alex-container-design.md`](./alex-container-design.md) — 0.2 起 Manager plugin 应改用 `ContainerService` trait（见容器设计 §10 内部 API），而不是直接调用 0.1 的 `RuntimeSupervisor`。
-- [`README.md`](./README.md) — 文档阅读路径与本文档在整体中的位置。
+- [`index.md`](./index.md) — 文档阅读路径与本文档在整体中的位置。

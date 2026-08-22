@@ -73,4 +73,4 @@ test that proves the side effect.
 - [`app-manager-ui-design.md`](./app-manager-ui-design.md) — tells you which of the `system.*` / `dialog.*` / `window.*` / `storage.*` rows the App Manager UI actually needs to call. Use it to prioritise the "wired but not driven by any UI yet" rows in the registry table.
 - [`reverse-ipc.md`](./reverse-ipc.md) — every `system.*` row here is also reachable from a Node plugin backend via reverse IPC, not just from a WebView page. The dispatcher and permission gate are the same code path in both directions.
 - [`roadmap.md`](./roadmap.md) — most of the "In registry but not wired" rows above are tracked as P0 §3.2 权限和 WebView 安全闭环 or P1 §3.5 插件系统 work items. Use it to see which stubs are actively scheduled.
-- [`README.md`](./README.md) — entry point and reading order.
+- [`index.md`](./index.md) — entry point and reading order.

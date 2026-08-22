@@ -326,4 +326,4 @@ Manager/Shell 收口到 ContainerService。验收：旧示例行为不变，重�
 - [`roadmap.md`](./roadmap.md) — L1 Job Object 对应 P0 §3.1 Runtime 可靠性；L2 AppContainer 对应 roadmap 未来阶段（待 P0 完成后立项）；L3 OCI 适配器对应 P2 §3.8 跨平台（但通过 WSL2/containerd 而非自行实现）。
 - [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) — 0.2 计划新增的 `system.container.*` 路由（本文档 §10 内部 API）以及 `process.spawn` / `process.kill` 等 wired 状态；本文档"现有代码迁移"提到的 `src/api.rs` 新增 `system.container.*` 应在 DESKTOP_API_STATUS.md 也补一行。
 - [`app-manager-ui-design.md`](./app-manager-ui-design.md) — Manager plugin 在容器化后应改用本文档 §10 定义的 `ContainerService` trait，而不是直接调用 0.1 的 `RuntimeSupervisor`。`alex container ps/inspect/logs` 的 UI 即 App Manager 的容器视图。
-- [`README.md`](./README.md) — 文档阅读路径与本文档在整体中的位置。
+- [`index.md`](./index.md) — 文档阅读路径与本文档在整体中的位置。
