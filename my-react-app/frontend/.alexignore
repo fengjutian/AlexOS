@@ -1,0 +1,6 @@
+# Ignore the build artefacts and Vite cache so `alex dev`
+# does not hot-reload when the bundle regenerates.
+node_modules
+dist
+.vite
+*.tsbuildinfo

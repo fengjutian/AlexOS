@@ -1,0 +1,28 @@
+{
+  "backend": {
+    "entry": "backend/index.js",
+    "runtime": "node"
+  },
+  "frontend": {
+    "build": {
+      "args": [
+        "run",
+        "build"
+      ],
+      "command": "npm"
+    },
+    "entry": "frontend/index.html"
+  },
+  "id": "com.example.react",
+  "name": "my-react-app",
+  "permissions": [
+    {
+      "name": "runtime.invoke"
+    },
+    {
+      "name": "runtime.manage"
+    }
+  ],
+  "schemaVersion": 1,
+  "version": "0.1.0"
+}

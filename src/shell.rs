@@ -299,13 +299,21 @@ pub mod windows {
             PathBuf::from(uri_path.trim_start_matches('/'))
         };
         let candidate = root.join(relative);
-        let safe = candidate
+        // Distinguish "file does not exist" (404) from "path escapes
+        // the package root" (403). A non-existent file fails
+        // `canonicalize`, so it must not be reported as Forbidden.
+        if !candidate.exists() {
+            return response(404, "text/plain", b"Not found".to_vec());
+        }
+        let canonical_root = root
             .canonicalize()
-            .ok()
-            .filter(|path| path.starts_with(root.canonicalize().unwrap_or_else(|_| root.into())));
-        let Some(path) = safe else {
-            return response(403, "text/plain", b"Forbidden".to_vec());
+            .unwrap_or_else(|_| root.to_path_buf());
+        let Some(path) = candidate.canonicalize().ok() else {
+            return response(404, "text/plain", b"Not found".to_vec());
         };
+        if !path.starts_with(&canonical_root) {
+            return response(403, "text/plain", b"Forbidden".to_vec());
+        }
         match std::fs::read(&path) {
             Ok(body) => response(200, content_type(&path), body),
             Err(_) => response(404, "text/plain", b"Not found".to_vec()),
