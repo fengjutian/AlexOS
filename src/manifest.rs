@@ -324,7 +324,10 @@ mod backend_mode_tests {
 
     #[test]
     fn mode_serializes_lowercase() {
-        assert_eq!(serde_json::to_value(BackendMode::Rpc).unwrap(), json!("rpc"));
+        assert_eq!(
+            serde_json::to_value(BackendMode::Rpc).unwrap(),
+            json!("rpc")
+        );
         assert_eq!(
             serde_json::to_value(BackendMode::Service).unwrap(),
             json!("service")

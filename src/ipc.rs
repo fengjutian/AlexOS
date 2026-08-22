@@ -70,7 +70,12 @@ pub struct EventEnvelope {
 }
 
 impl EventEnvelope {
-    pub fn new(event: impl Into<String>, subscription_id: impl Into<String>, sequence: u64, payload: Value) -> Self {
+    pub fn new(
+        event: impl Into<String>,
+        subscription_id: impl Into<String>,
+        sequence: u64,
+        payload: Value,
+    ) -> Self {
         Self {
             protocol: PROTOCOL_VERSION,
             kind: "event",

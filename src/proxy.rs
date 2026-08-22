@@ -208,10 +208,7 @@ fn parse_upstream_response(raw: &[u8]) -> Response<Cow<'static, [u8]>> {
         }
     }
     builder.body(Cow::Owned(body)).unwrap_or_else(|_| {
-        text_response(
-            StatusCode::INTERNAL_SERVER_ERROR,
-            "response build failed",
-        )
+        text_response(StatusCode::INTERNAL_SERVER_ERROR, "response build failed")
     })
 }
 

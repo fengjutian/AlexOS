@@ -31,7 +31,7 @@ use super::model::{
 };
 use super::process;
 use super::store::ContainerStore;
-use super::volume::{data_local_dir, ContainerDirs};
+use super::volume::{ContainerDirs, data_local_dir};
 
 #[derive(Debug, Clone)]
 pub struct ContainerContext {
@@ -41,11 +41,9 @@ pub struct ContainerContext {
 
 impl ContainerContext {
     pub fn with_default_data_root(install_root: PathBuf) -> Result<Self, ContainerError> {
-        let data_root = data_local_dir()
-            .map(|p| p.join("AlexOS"))
-            .ok_or_else(|| {
-                ContainerError::Backend("could not resolve a per-user data root".into())
-            })?;
+        let data_root = data_local_dir().map(|p| p.join("AlexOS")).ok_or_else(|| {
+            ContainerError::Backend("could not resolve a per-user data root".into())
+        })?;
         Ok(Self {
             install_root,
             data_root,
@@ -271,10 +269,11 @@ impl ContainerService for DefaultContainerService {
             path: dirs.instance_root.clone(),
             source,
         })?;
-        dirs.reset_runtime_slot().map_err(|source| ContainerError::Io {
-            path: dirs.runtime.clone(),
-            source,
-        })?;
+        dirs.reset_runtime_slot()
+            .map_err(|source| ContainerError::Io {
+                path: dirs.runtime.clone(),
+                source,
+            })?;
         let install_path = self.ctx.install_root.join(&entry.state.app_id);
         let manifest_path = install_path.join("manifest.json");
         if !manifest_path.is_file() {
@@ -286,15 +285,17 @@ impl ContainerService for DefaultContainerService {
                 ),
             });
         }
-        let manifest =
-            crate::load_app(&install_path).map_err(|error| ContainerError::Launch {
-                step: LaunchStep::ValidateSpec,
-                message: error.to_string(),
-            })?;
-        let backend = manifest.backend.clone().ok_or_else(|| ContainerError::Launch {
+        let manifest = crate::load_app(&install_path).map_err(|error| ContainerError::Launch {
             step: LaunchStep::ValidateSpec,
-            message: "manifest has no backend runtime".into(),
+            message: error.to_string(),
         })?;
+        let backend = manifest
+            .backend
+            .clone()
+            .ok_or_else(|| ContainerError::Launch {
+                step: LaunchStep::ValidateSpec,
+                message: "manifest has no backend runtime".into(),
+            })?;
         // Phase A: let the runtime pick the port itself. See the
         // long comment in `process::launch_backend`.
         let launched = process::launch_backend(process::LaunchRequest {
@@ -370,7 +371,11 @@ impl ContainerService for DefaultContainerService {
         entry.state.endpoint = None;
         entry.state.updated_at = iso8601_now();
         store.save(entry.state.clone())?;
-        self.record_event_locked(entry, EventKind::StopRequested, "stop requested".to_string());
+        self.record_event_locked(
+            entry,
+            EventKind::StopRequested,
+            "stop requested".to_string(),
+        );
         Ok(ContainerView::from_state(
             &entry.state,
             entry.instance_dir.clone(),
@@ -423,7 +428,10 @@ impl ContainerService for DefaultContainerService {
         if let Some(live) = &entry.live {
             state.pid = Some(live.pid);
         }
-        Ok(ContainerView::from_state(&state, entry.instance_dir.clone()))
+        Ok(ContainerView::from_state(
+            &state,
+            entry.instance_dir.clone(),
+        ))
     }
 
     fn list(&self, filter: &ContainerFilter) -> ServiceResult<Vec<ContainerView>> {
@@ -538,7 +546,9 @@ impl CreateRequest {
             instance_id,
             app_id: self.app_id,
             app_version: self.app_version,
-            isolation: self.isolation.unwrap_or_else(IsolationLevel::default_for_manifest),
+            isolation: self
+                .isolation
+                .unwrap_or_else(IsolationLevel::default_for_manifest),
             resources: Default::default(),
             filesystem: Default::default(),
             network: Default::default(),

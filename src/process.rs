@@ -233,10 +233,7 @@ impl ProcessRegistry {
         // not the registry, so the reaper can finish
         // after the registry has been dropped.
         let entry_for_thread = {
-            let entry = state
-                .entries
-                .get(&pid_for_lookup)
-                .expect("just inserted");
+            let entry = state.entries.get(&pid_for_lookup).expect("just inserted");
             ProcessEntry {
                 child: entry.child.clone(),
                 pid: entry.pid,

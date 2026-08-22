@@ -31,10 +31,10 @@ pub use model::{
     VolumeMount,
 };
 pub use network::{
-    allocate_loopback_port, NetworkError, SERVICE_PORT_RANGE_END, SERVICE_PORT_RANGE_START,
+    NetworkError, SERVICE_PORT_RANGE_END, SERVICE_PORT_RANGE_START, allocate_loopback_port,
 };
 pub use service::{
     ContainerContext, ContainerService, CreateRequest, DefaultContainerService, ServiceResult,
 };
 pub use store::{ContainerStore, StoreError};
-pub use volume::{data_local_dir, ContainerDirs};
+pub use volume::{ContainerDirs, data_local_dir};

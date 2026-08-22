@@ -11,7 +11,8 @@
 //! read-modify-write can detect concurrent writers.
 
 use std::{
-    fs, io::Write,
+    fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -94,12 +95,25 @@ impl ContainerStore {
     }
 
     /// Persist `state`. Writes to a temp file, fsyncs, then renames
-    /// onto the live path. Bumps `generation` if the caller didn't
-    /// already. Returns the new generation count so the caller can
-    /// record the difference.
+    /// onto the live path. Bumps `generation` based on the on-disk
+    /// state, not the caller's field — so a caller that re-saves
+    /// the same in-memory `state` after a previous save still gets
+    /// a strictly larger `generation` (the read-modify-write
+    /// contract the design calls out under §4).
     pub fn save(&self, mut state: ContainerState) -> Result<u64, StoreError> {
         let path = self.state_path();
-        state.generation = state.generation.saturating_add(1);
+        // Read the current generation off disk. If the file does
+        // not exist (first save for this instance) we treat it as
+        // generation 0. The on-disk value wins over the caller's
+        // value because the caller is the one racing — the disk
+        // is the source of truth.
+        let disk_generation = match self.load()? {
+            Some(existing) => existing.generation,
+            None => 0,
+        };
+        let caller_generation = state.generation;
+        let next = disk_generation.max(caller_generation).saturating_add(1);
+        state.generation = next;
         let file = StateFile {
             version: STATE_FILE_VERSION,
             state: state.clone(),
@@ -125,10 +139,12 @@ impl ContainerStore {
                     path: tmp.clone(),
                     source,
                 })?;
-            output.write_all(&bytes).map_err(|source| StoreError::Write {
-                path: tmp.clone(),
-                source,
-            })?;
+            output
+                .write_all(&bytes)
+                .map_err(|source| StoreError::Write {
+                    path: tmp.clone(),
+                    source,
+                })?;
             output.flush().map_err(|source| StoreError::Write {
                 path: tmp.clone(),
                 source,
@@ -162,10 +178,11 @@ impl ContainerStore {
                 });
             }
         };
-        let file: StateFile = serde_json::from_slice(&bytes).map_err(|source| StoreError::Parse {
-            path: path.clone(),
-            source,
-        })?;
+        let file: StateFile =
+            serde_json::from_slice(&bytes).map_err(|source| StoreError::Parse {
+                path: path.clone(),
+                source,
+            })?;
         if file.version != STATE_FILE_VERSION {
             return Err(StoreError::Parse {
                 path: path.clone(),
@@ -185,9 +202,7 @@ impl ContainerStore {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::container::model::{
-        ContainerState, DesiredState, IsolationLevel, ObservedState,
-    };
+    use crate::container::model::{ContainerState, DesiredState, IsolationLevel, ObservedState};
     use semver::Version;
 
     fn fixture_state() -> ContainerState {

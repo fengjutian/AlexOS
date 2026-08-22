@@ -712,10 +712,7 @@ fn manager_permissions_round_trip() {
         )
         .unwrap();
     let after = manager.permissions("com.alex.hello").unwrap();
-    let read = after
-        .iter()
-        .find(|s| s.name == "filesystem.read")
-        .unwrap();
+    let read = after.iter().find(|s| s.name == "filesystem.read").unwrap();
     assert_eq!(read.decision, PermissionDecision::Denied);
 
     let error = manager
@@ -1754,8 +1751,14 @@ fn permission_store_migrates_legacy_ipc_method_name_keys() {
     // Reopen — migration should be idempotent (no work, no rewrite).
     let _ = PermissionStore::open_at(root, app_id).unwrap();
     let second = store.list();
-    assert_eq!(second.get("clipboard.read").copied(), Some(PermissionDecision::Granted));
-    assert_eq!(second.get("filesystem.read").copied(), Some(PermissionDecision::Prompt));
+    assert_eq!(
+        second.get("clipboard.read").copied(),
+        Some(PermissionDecision::Granted)
+    );
+    assert_eq!(
+        second.get("filesystem.read").copied(),
+        Some(PermissionDecision::Prompt)
+    );
 }
 
 #[test]
@@ -1813,7 +1816,9 @@ fn api_system_uninstall_refuses_to_remove_the_running_app_manager() {
     let error = response.error.expect("self-uninstall must be rejected");
     assert_eq!(error.code, "OPERATION_FAILED");
     assert!(
-        error.message.contains("refusing to uninstall the running App Manager"),
+        error
+            .message
+            .contains("refusing to uninstall the running App Manager"),
         "rejection message should mention the self-protection: {}",
         error.message
     );
@@ -1828,19 +1833,17 @@ fn iso8601_strings_round_trip_through_javascript_date() {
     // in 1970. Sample a few instants across the year boundary to
     // catch a hard-coded value or a UTC vs local-time bug.
     let candidates = [
-        0,                     // 1970-01-01T00:00:00Z
-        86_400,                // 1970-01-02T00:00:00Z
-        1_577_836_800,         // 2020-01-01T00:00:00Z
-        1_704_067_200,         // 2024-01-01T00:00:00Z
-        1_704_153_600,         // 2024-01-02T00:00:00Z
-        1_893_456_000,         // 2030-01-01T00:00:00Z (close to the 2038 wrap)
+        0,             // 1970-01-01T00:00:00Z
+        86_400,        // 1970-01-02T00:00:00Z
+        1_577_836_800, // 2020-01-01T00:00:00Z
+        1_704_067_200, // 2024-01-01T00:00:00Z
+        1_704_153_600, // 2024-01-02T00:00:00Z
+        1_893_456_000, // 2030-01-01T00:00:00Z (close to the 2038 wrap)
     ];
     for secs in candidates {
-        let formatted =
-            alex::manager::format_epoch_seconds_as_iso8601(secs);
-        let parsed = chrono_like_parse(&formatted).unwrap_or_else(|| {
-            panic!("iso8601 string did not parse: {formatted}")
-        });
+        let formatted = alex::manager::format_epoch_seconds_as_iso8601(secs);
+        let parsed = chrono_like_parse(&formatted)
+            .unwrap_or_else(|| panic!("iso8601 string did not parse: {formatted}"));
         assert_eq!(
             parsed, secs,
             "round-trip mismatch: formatted={formatted}, original={secs}"
@@ -1925,13 +1928,21 @@ fn api_filesystem_binary_round_trip() {
         json!({ "path": "data/blob.bin", "data": encoded }),
     );
     assert!(write.error.is_none(), "writeBinary: {:?}", write.error);
-    let read = call(&router, "filesystem.readBinary", json!({ "path": "data/blob.bin" }));
+    let read = call(
+        &router,
+        "filesystem.readBinary",
+        json!({ "path": "data/blob.bin" }),
+    );
     let result = read.result.expect("readBinary result");
     let data_b64 = result["data"].as_str().expect("base64 string");
     let decoded = base64::Engine::decode(&base64::engine::general_purpose::STANDARD, data_b64)
         .expect("decode base64");
     assert_eq!(decoded, payload);
-    let stat = call(&router, "filesystem.stat", json!({ "path": "data/blob.bin" }));
+    let stat = call(
+        &router,
+        "filesystem.stat",
+        json!({ "path": "data/blob.bin" }),
+    );
     let stat_value = stat.result.expect("stat result");
     assert_eq!(stat_value["type"], "file");
     assert_eq!(stat_value["size"], payload.len() as u64);
@@ -1983,14 +1994,22 @@ fn api_filesystem_create_remove_rename_copy() {
         json!({ "path": "data/sub/note-renamed.txt" }),
     );
     assert!(remove.result.is_some(), "remove file: {:?}", remove.error);
-    let exists = call(&router, "filesystem.exists", json!({ "path": "data/sub/note-renamed.txt" }));
+    let exists = call(
+        &router,
+        "filesystem.exists",
+        json!({ "path": "data/sub/note-renamed.txt" }),
+    );
     assert_eq!(exists.result.unwrap()["exists"], json!(false));
     let remove_dir = call(
         &router,
         "filesystem.remove",
         json!({ "path": "data/sub", "recursive": true }),
     );
-    assert!(remove_dir.result.is_some(), "remove dir: {:?}", remove_dir.error);
+    assert!(
+        remove_dir.result.is_some(),
+        "remove dir: {:?}",
+        remove_dir.error
+    );
 }
 
 #[test]
@@ -2006,7 +2025,9 @@ fn api_filesystem_remove_blocks_recursive_root() {
         "filesystem.remove",
         json!({ "path": "..", "recursive": true }),
     );
-    let err = result.error.expect("expected error for recursive root delete");
+    let err = result
+        .error
+        .expect("expected error for recursive root delete");
     assert!(
         err.code == "PATH_ERROR" || err.code == "PERMISSION_DENIED",
         "unexpected error code: {err:?}"
@@ -2050,8 +2071,7 @@ fn api_paths_return_local_app_data() {
         let result = call(&router, method, json!({}));
         let path = result
             .result
-            .unwrap_or_else(|| panic!("{method} failed: {:?}", result.error))
-            ["path"]
+            .unwrap_or_else(|| panic!("{method} failed: {:?}", result.error))["path"]
             .as_str()
             .unwrap()
             .to_owned();
@@ -2070,8 +2090,14 @@ fn api_events_subscribe_and_unsubscribe() {
     let result = sub.result.unwrap_or_else(|| {
         panic!(
             "subscribe failed: code={} message={}",
-            sub.error.as_ref().map(|e| &e.code).unwrap_or(&String::new()),
-            sub.error.as_ref().map(|e| &e.message).unwrap_or(&String::new())
+            sub.error
+                .as_ref()
+                .map(|e| &e.code)
+                .unwrap_or(&String::new()),
+            sub.error
+                .as_ref()
+                .map(|e| &e.message)
+                .unwrap_or(&String::new())
         )
     });
     let id = result["subscriptionId"].as_str().unwrap().to_owned();
@@ -2106,8 +2132,16 @@ fn api_filesystem_watch_returns_subscription() {
     let payload = result.result.unwrap_or_else(|| {
         panic!(
             "watch failed: code={} message={}",
-            result.error.as_ref().map(|e| &e.code).unwrap_or(&String::new()),
-            result.error.as_ref().map(|e| &e.message).unwrap_or(&String::new())
+            result
+                .error
+                .as_ref()
+                .map(|e| &e.code)
+                .unwrap_or(&String::new()),
+            result
+                .error
+                .as_ref()
+                .map(|e| &e.message)
+                .unwrap_or(&String::new())
         )
     });
     let sub_id = payload["subscriptionId"]
@@ -2129,10 +2163,8 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
     let payload = result.result.unwrap();
     let available = payload["capabilities"].as_array().unwrap().clone();
     let experimental = payload["experimental"].as_array().unwrap().clone();
-    let available_names: Vec<&str> =
-        available.iter().map(|v| v.as_str().unwrap()).collect();
-    let experimental_names: Vec<&str> =
-        experimental.iter().map(|v| v.as_str().unwrap()).collect();
+    let available_names: Vec<&str> = available.iter().map(|v| v.as_str().unwrap()).collect();
+    let experimental_names: Vec<&str> = experimental.iter().map(|v| v.as_str().unwrap()).collect();
     // Wired end-to-end: filesystem, dialog, clipboard, system.openExternal,
     // window.manage, notification.show, runtime.
     for required in [
@@ -2223,11 +2255,7 @@ fn api_window_lifecycle_isolates_apps() {
     let windows = list.result.unwrap()["windows"].as_array().unwrap().clone();
     assert_eq!(windows.len(), 1);
     assert_eq!(windows[0]["id"].as_u64().unwrap(), id);
-    let bounds = call(
-        &router,
-        "window.getBounds",
-        json!({ "windowId": id }),
-    );
+    let bounds = call(&router, "window.getBounds", json!({ "windowId": id }));
     assert_eq!(bounds.result.unwrap()["width"], 1024);
     let update = call(
         &router,
@@ -2247,23 +2275,11 @@ fn api_window_lifecycle_isolates_apps() {
         json!({ "windowId": id, "fullscreen": true }),
     );
     assert_eq!(full.result.unwrap()["fullscreen"], json!(true));
-    let is_full = call(
-        &router,
-        "window.isFullscreen",
-        json!({ "windowId": id }),
-    );
+    let is_full = call(&router, "window.isFullscreen", json!({ "windowId": id }));
     assert_eq!(is_full.result.unwrap()["fullscreen"], json!(true));
-    let destroy = call(
-        &router,
-        "window.destroy",
-        json!({ "windowId": id }),
-    );
+    let destroy = call(&router, "window.destroy", json!({ "windowId": id }));
     assert_eq!(destroy.result.unwrap()["destroyed"], json!(true));
-    let gone = call(
-        &router,
-        "window.getBounds",
-        json!({ "windowId": id }),
-    );
+    let gone = call(&router, "window.getBounds", json!({ "windowId": id }));
     assert!(gone.error.is_some());
 }
 
@@ -2293,7 +2309,11 @@ fn api_menu_set_application_menu_persists() {
             ]
         }),
     );
-    assert!(result.result.is_some(), "setApplicationMenu: {:?}", result.error);
+    assert!(
+        result.result.is_some(),
+        "setApplicationMenu: {:?}",
+        result.error
+    );
 }
 
 #[test]
@@ -2345,7 +2365,10 @@ fn api_tray_rejects_icon_outside_package() {
             "tooltip": "host file"
         }),
     );
-    assert!(result.error.is_some(), "expected error for absolute icon path");
+    assert!(
+        result.error.is_some(),
+        "expected error for absolute icon path"
+    );
 }
 
 #[test]
@@ -2464,10 +2487,7 @@ fn api_process_spawn_real_kill_real() {
         eprintln!("skipping: process.spawn failed: {error:?}");
         return;
     }
-    let info = result
-        .result
-        .expect("process.spawn result")
-        .clone();
+    let info = result.result.expect("process.spawn result").clone();
     let pid = info["pid"].as_str().expect("pid string").to_owned();
     assert!(info["started"].as_bool().unwrap_or(false));
     let kill = call(&router, "process.kill", json!({ "pid": pid }));

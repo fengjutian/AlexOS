@@ -1,5 +1,6 @@
 pub mod api;
 pub mod authorization;
+pub mod container;
 pub mod dev;
 pub mod event_bus;
 pub mod file_token;
@@ -20,6 +21,7 @@ pub mod storage;
 pub mod trust;
 pub mod update;
 pub mod watcher;
+pub mod webview2;
 pub mod window_manager;
 pub mod windows;
 

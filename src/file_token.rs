@@ -108,9 +108,7 @@ impl FileTokenStore {
         path: &std::path::Path,
         ops: &[FileOp],
     ) -> Result<FileToken, TokenError> {
-        let canonical = path
-            .canonicalize()
-            .map_err(|_| TokenError::Unknown)?;
+        let canonical = path.canonicalize().map_err(|_| TokenError::Unknown)?;
         let now_ms = now_ms();
         let expires_at_ms = now_ms.saturating_add(self.default_ttl.as_millis() as u64);
         let token = format!(
@@ -125,10 +123,12 @@ impl FileTokenStore {
             ops: ops.to_vec(),
             expires_at_ms,
         };
-        self.state
-            .lock()
-            .expect("file token lock poisoned")
-            .insert(token, Issued { bound: bound.clone() });
+        self.state.lock().expect("file token lock poisoned").insert(
+            token,
+            Issued {
+                bound: bound.clone(),
+            },
+        );
         Ok(bound)
     }
 

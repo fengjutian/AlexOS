@@ -237,7 +237,9 @@ pub fn resolve_scoped_path(
     permission: &Permission,
     operation: &str,
 ) -> Result<PathBuf, PathError> {
-    let roots = permission.paths_for(operation).ok_or(PathError::NotAllowed)?;
+    let roots = permission
+        .paths_for(operation)
+        .ok_or(PathError::NotAllowed)?;
     if roots.is_empty() {
         return Err(PathError::NotAllowed);
     }
@@ -286,7 +288,8 @@ pub fn resolve_scoped_path(
     }
     // Reject anything that escapes every granted root.
     let inside = roots.iter().any(|allowed| {
-        let normalized = normalize(allowed, &canonical_root).unwrap_or_else(|| canonical_root.clone());
+        let normalized =
+            normalize(allowed, &canonical_root).unwrap_or_else(|| canonical_root.clone());
         canonical.starts_with(&normalized)
     });
     if !inside {
@@ -319,7 +322,9 @@ pub enum PathError {
 impl std::fmt::Display for PathError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            PathError::NotAllowed => formatter.write_str("operation is not allowed by this permission"),
+            PathError::NotAllowed => {
+                formatter.write_str("operation is not allowed by this permission")
+            }
             PathError::NotFound(path) => {
                 write!(formatter, "path not found: {}", path.display())
             }

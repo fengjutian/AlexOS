@@ -10,7 +10,7 @@ use alex::{
     load_app,
     manager::{LocalAppManager, ManagerRouter},
     manager_webview, package, plugin,
-    runtime::{compute_app_dirs, RuntimeHandle, RuntimeProcess, RuntimeSpec},
+    runtime::{RuntimeHandle, RuntimeProcess, RuntimeSpec, compute_app_dirs},
     shell,
     trust::TrustStore,
     update::{self, UpdateChannel},
@@ -158,6 +158,8 @@ enum Commands {
         #[command(subcommand)]
         action: TrustCommands,
     },
+    /// Diagnose host prerequisites (WebView2 runtime, Node, etc.).
+    Doctor,
 }
 
 #[derive(Debug, Subcommand)]
@@ -262,15 +264,17 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             let auto_dirs = compute_app_dirs(&app.id).ok();
             let (data_dir, cache_dir, log_dir) = match &auto_dirs {
                 Some(dirs) => {
-                    dirs.ensure()
-                        .map_err(|e| format!("ensure app dirs: {e}"))?;
-                    (Some(dirs.data.as_path()), Some(dirs.cache.as_path()), Some(dirs.logs.as_path()))
+                    dirs.ensure().map_err(|e| format!("ensure app dirs: {e}"))?;
+                    (
+                        Some(dirs.data.as_path()),
+                        Some(dirs.cache.as_path()),
+                        Some(dirs.logs.as_path()),
+                    )
                 }
                 None => (None, None, None),
             };
-            let logs = std::sync::Arc::new(std::sync::Mutex::new(
-                std::collections::VecDeque::new(),
-            ));
+            let logs =
+                std::sync::Arc::new(std::sync::Mutex::new(std::collections::VecDeque::new()));
             let (mut runtime, endpoint) = RuntimeProcess::start_with_spec(
                 &spec,
                 data_dir,
@@ -335,15 +339,11 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 let permissions_root = std::env::var_os("ALEX_DATA_DIR")
                     .map(PathBuf::from)
                     .or_else(|| {
-                        std::env::var_os("LOCALAPPDATA")
-                            .map(|p| PathBuf::from(p).join("AlexOS"))
+                        std::env::var_os("LOCALAPPDATA").map(|p| PathBuf::from(p).join("AlexOS"))
                     })
                     .unwrap_or_else(|| install_root.clone());
-                let manager = LocalAppManager::open_with_trust(
-                    &install_root,
-                    permissions_root,
-                    trust_root,
-                )?;
+                let manager =
+                    LocalAppManager::open_with_trust(&install_root, permissions_root, trust_root)?;
                 let router = Arc::new(ManagerRouter::new(Arc::new(manager)));
                 manager_webview::run(router)?;
             }
@@ -568,7 +568,56 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         },
+        Commands::Doctor => run_doctor()?,
     }
+    Ok(())
+}
+
+fn run_doctor() -> Result<(), Box<dyn std::error::Error>> {
+    println!("Alex OS host diagnostics\n");
+
+    // WebView2 — required for every page render.
+    print!("  WebView2 Runtime ... ");
+    match alex::webview2::detect() {
+        Ok(status) => {
+            println!("ok");
+            println!("    name        : {}", status.name);
+            println!("    version     : {}", status.version);
+            println!("    install path: {}", status.install_path.display());
+            println!("    registry    : {}", status.source.as_reg_path());
+        }
+        Err(alex::webview2::WebView2Error::NotInstalled) => {
+            println!("MISSING");
+            println!();
+            println!("    Alex OS renders every page through WebView2 and");
+            println!("    cannot start without it. Install the Evergreen");
+            println!("    Bootstrapper from:");
+            println!("      {}", alex::webview2::WEBVIEW2_BOOTSTRAP_URL);
+            println!("    then re-run `alex doctor`.");
+            return Err(alex::webview2::WebView2Error::NotInstalled.into());
+        }
+        Err(other) => {
+            println!("ERROR");
+            println!("    {other}");
+            return Err(other.into());
+        }
+    }
+
+    // Node — required for app backends.
+    print!("  Node.js .......... ");
+    let node_result = std::process::Command::new("node").arg("--version").output();
+    match node_result {
+        Ok(out) if out.status.success() => {
+            let v = String::from_utf8_lossy(&out.stdout);
+            println!("ok ({})", v.trim());
+        }
+        _ => {
+            println!("NOT FOUND");
+            println!("    App backends expect `node` on PATH (or set");
+            println!("    `ALEX_NODE`). Install Node.js or set the env var.");
+        }
+    }
+
     Ok(())
 }
 

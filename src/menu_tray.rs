@@ -139,17 +139,17 @@ impl MenuStore {
     ) -> Result<(), MenuError> {
         validate_template(&template)?;
         let mut state = self.state.lock().expect("menu lock poisoned");
-        state
-            .menus
-            .insert(app_id.to_owned(), AppMenu { app_id: app_id.to_owned(), template });
+        state.menus.insert(
+            app_id.to_owned(),
+            AppMenu {
+                app_id: app_id.to_owned(),
+                template,
+            },
+        );
         Ok(())
     }
 
-    pub fn set_context_menu(
-        &self,
-        app_id: &str,
-        template: MenuTemplate,
-    ) -> Result<(), MenuError> {
+    pub fn set_context_menu(&self, app_id: &str, template: MenuTemplate) -> Result<(), MenuError> {
         // The data model is the same; the shell layer decides
         // where to attach the menu. We key by a different
         // prefix to keep both menus addressable.
@@ -191,13 +191,22 @@ impl MenuStore {
             icon: spec.icon,
             tooltip: spec.tooltip,
         };
-        state.tray.insert(id, AppTray { app_id: app_id.to_owned(), info: info.clone() });
+        state.tray.insert(
+            id,
+            AppTray {
+                app_id: app_id.to_owned(),
+                info: info.clone(),
+            },
+        );
         Ok(info)
     }
 
     pub fn destroy_tray(&self, app_id: &str, tray_id: &str) -> Result<(), MenuError> {
         let mut state = self.state.lock().expect("menu lock poisoned");
-        let owned = state.tray.get(tray_id).ok_or_else(|| MenuError::UnknownTray(tray_id.to_owned()))?;
+        let owned = state
+            .tray
+            .get(tray_id)
+            .ok_or_else(|| MenuError::UnknownTray(tray_id.to_owned()))?;
         if owned.app_id != app_id {
             return Err(MenuError::UnknownTray(tray_id.to_owned()));
         }
@@ -205,11 +214,7 @@ impl MenuStore {
         Ok(())
     }
 
-    pub fn register_shortcut(
-        &self,
-        app_id: &str,
-        accelerator: &str,
-    ) -> Result<(), MenuError> {
+    pub fn register_shortcut(&self, app_id: &str, accelerator: &str) -> Result<(), MenuError> {
         let normalized = normalize_accelerator(accelerator)?;
         let mut state = self.state.lock().expect("menu lock poisoned");
         if let Some(owner) = state.shortcuts.get(&normalized) {
@@ -218,7 +223,9 @@ impl MenuStore {
             }
             return Err(MenuError::ShortcutConflict(normalized));
         }
-        state.shortcuts.insert(normalized.clone(), app_id.to_owned());
+        state
+            .shortcuts
+            .insert(normalized.clone(), app_id.to_owned());
         state
             .app_shortcuts
             .entry(app_id.to_owned())
@@ -245,11 +252,7 @@ impl MenuStore {
     /// diagnostics / capability listing.
     pub fn app_shortcuts(&self, app_id: &str) -> Vec<String> {
         let state = self.state.lock().expect("menu lock poisoned");
-        state
-            .app_shortcuts
-            .get(app_id)
-            .cloned()
-            .unwrap_or_default()
+        state.app_shortcuts.get(app_id).cloned().unwrap_or_default()
     }
 }
 

@@ -121,11 +121,7 @@ impl WindowRegistry {
 
     /// Register a new window for `app_id`. The host assigns the
     /// id; the spec's URL/title/dimensions are normalized here.
-    pub fn create(
-        &self,
-        app_id: &str,
-        spec: CreateWindowSpec,
-    ) -> Result<WindowInfo, WindowError> {
+    pub fn create(&self, app_id: &str, spec: CreateWindowSpec) -> Result<WindowInfo, WindowError> {
         if spec.url.is_empty() {
             return Err(WindowError::Invalid("url is empty".into()));
         }

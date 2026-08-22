@@ -291,11 +291,7 @@ impl EventEnvelope {
 
 /// Translate a `subscribe` IPC request into a `Response` that hands
 /// the subscription id back to the page. Used by `ApiRouter`.
-pub fn handle_subscribe(
-    bus: &EventBus,
-    request: &Request,
-    event_name: &str,
-) -> Response {
+pub fn handle_subscribe(bus: &EventBus, request: &Request, event_name: &str) -> Response {
     let parsed: Result<SubscribeRequest, _> = serde_json::from_value(request.params.clone());
     let parsed = match parsed {
         Ok(value) => value,
@@ -396,10 +392,7 @@ mod tests {
     fn drain_pending_returns_event_name_with_each_delivery() {
         let bus = EventBus::new();
         bus.subscribe("filesystem.changed", None).unwrap();
-        bus.deliver(
-            "filesystem.changed",
-            &serde_json::json!({ "path": "a" }),
-        );
+        bus.deliver("filesystem.changed", &serde_json::json!({ "path": "a" }));
         let drained = bus.drain_pending();
         assert_eq!(drained.len(), 1);
         assert_eq!(drained[0].0, "filesystem.changed");

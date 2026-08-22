@@ -71,7 +71,10 @@ fn default_restart_policy() -> crate::manifest::RestartPolicy {
 /// the supervisor can use without unwrapping `Option` everywhere.
 #[allow(dead_code)]
 fn effective_policy(spec: &RuntimeSpec) -> crate::manifest::RestartPolicy {
-    spec.backend.restart.clone().unwrap_or_else(default_restart_policy)
+    spec.backend
+        .restart
+        .clone()
+        .unwrap_or_else(default_restart_policy)
 }
 
 /// True when the policy allows a restart given the previous exit
@@ -81,7 +84,10 @@ fn effective_policy(spec: &RuntimeSpec) -> crate::manifest::RestartPolicy {
 /// version that introduces a new policy name does not silently
 /// disable restarts.
 #[allow(dead_code)]
-fn policy_allows_restart(policy: &crate::manifest::RestartPolicy, last_exit_code: Option<i32>) -> bool {
+fn policy_allows_restart(
+    policy: &crate::manifest::RestartPolicy,
+    last_exit_code: Option<i32>,
+) -> bool {
     match policy.policy.as_str() {
         "never" => false,
         "always" => true,
@@ -111,10 +117,7 @@ fn compute_backoff(
         ));
     }
     if restart_count >= policy.max_retries {
-        return Err(format!(
-            "max retries ({}) exceeded",
-            policy.max_retries
-        ));
+        return Err(format!("max retries ({}) exceeded", policy.max_retries));
     }
     Ok(match last_exit_at {
         Some(last) => {
@@ -274,9 +277,7 @@ pub fn compute_app_dirs(app_id: &str) -> Result<AppDirs, RuntimeError> {
         )));
     }
     let base = data_local_dir()
-        .ok_or_else(|| {
-            RuntimeError::Protocol("local data directory is not available".into())
-        })?
+        .ok_or_else(|| RuntimeError::Protocol("local data directory is not available".into()))?
         .join("AlexOS")
         .join("apps")
         .join(app_id);
@@ -298,8 +299,7 @@ fn data_local_dir() -> Option<PathBuf> {
         std::env::var_os("XDG_DATA_HOME")
             .map(PathBuf::from)
             .or_else(|| {
-                std::env::var_os("HOME")
-                    .map(|h| PathBuf::from(h).join(".local").join("share"))
+                std::env::var_os("HOME").map(|h| PathBuf::from(h).join(".local").join("share"))
             })
     }
 }
@@ -536,12 +536,7 @@ fn runtime_manager(
             } => {
                 if process.is_none() {
                     let policy = effective_policy(&spec);
-                    match compute_backoff(
-                        &policy,
-                        restart_count,
-                        &last_exit_at,
-                        last_exit_code,
-                    ) {
+                    match compute_backoff(&policy, restart_count, &last_exit_at, last_exit_code) {
                         Ok(wait) => {
                             if !wait.is_zero() {
                                 thread::sleep(wait);
@@ -601,7 +596,12 @@ fn runtime_manager(
                 let _ = response.send(result);
             }
             RuntimeCommand::Status { response } => {
-                refresh(&mut process, &mut last_error, &mut last_exit_at, &mut last_exit_code);
+                refresh(
+                    &mut process,
+                    &mut last_error,
+                    &mut last_exit_at,
+                    &mut last_exit_code,
+                );
                 current_pid.store(
                     process.as_ref().map(RuntimeProcess::id).unwrap_or(0),
                     Ordering::Release,
@@ -626,10 +626,7 @@ fn runtime_manager(
                 // still refuses the restart.
                 let policy = effective_policy(&spec);
                 if !policy_allows_restart(&policy, last_exit_code) {
-                    last_error = Some(format!(
-                        "restart denied by policy ({})",
-                        policy.policy
-                    ));
+                    last_error = Some(format!("restart denied by policy ({})", policy.policy));
                     let _ = response.send(Err(last_error.clone().unwrap()));
                     continue;
                 }
@@ -646,13 +643,7 @@ fn runtime_manager(
                     endpoint = new_endpoint;
                     restart_count += 1;
                     last_error = None;
-                    snapshot(
-                        &process,
-                        &endpoint,
-                        restart_count,
-                        &last_error,
-                        &logs,
-                    )
+                    snapshot(&process, &endpoint, restart_count, &last_error, &logs)
                 })
                 .map_err(|error| {
                     current_pid.store(0, Ordering::Release);
@@ -901,10 +892,7 @@ impl RuntimeProcess {
             //     `127.0.0.1:<port><path>` and require a 2xx
             //     response within `timeoutMs`.
             if let Some(health) = &spec.backend.health_check {
-                let token = endpoint
-                    .as_ref()
-                    .map(|e| e.token.as_str())
-                    .unwrap_or("");
+                let token = endpoint.as_ref().map(|e| e.token.as_str()).unwrap_or("");
                 match probe_health(reported_port, health) {
                     Ok(()) => {}
                     Err(error) => {
@@ -919,7 +907,15 @@ impl RuntimeProcess {
         let service = endpoint.is_some().then(|| ServiceState {
             ready: ready_flag.unwrap_or_else(|| Arc::new(AtomicBool::new(false))),
         });
-        Ok((Self { child, stdin, stdout, service }, endpoint))
+        Ok((
+            Self {
+                child,
+                stdin,
+                stdout,
+                service,
+            },
+            endpoint,
+        ))
     }
 
     pub fn id(&self) -> u32 {
@@ -953,7 +949,8 @@ impl RuntimeProcess {
     ) -> Result<Value, RuntimeError> {
         if self.service.is_some() {
             return Err(RuntimeError::Protocol(
-                "invoke is unavailable for service-mode backends; talk to the backend over HTTP".into(),
+                "invoke is unavailable for service-mode backends; talk to the backend over HTTP"
+                    .into(),
             ));
         }
         if let Some(status) = self.child.try_wait()? {
@@ -1100,9 +1097,7 @@ fn stderr_pump(
             Ok(0) => break,
             Ok(_) => {
                 let trimmed = line.trim_end();
-                if !signalled
-                    && let Some(port) = try_parse_ready_signal(trimmed)
-                {
+                if !signalled && let Some(port) = try_parse_ready_signal(trimmed) {
                     signalled = true;
                     if let Some(flag) = &ready_flag {
                         flag.store(true, Ordering::Release);
@@ -1133,10 +1128,7 @@ fn stderr_pump(
 /// Each line is tagged `[stdout]` so the App Manager can show the
 /// stream a log line came from. EOF (or any read error) terminates
 /// the pump and the child holds onto the other end until it exits.
-fn stdout_pump(
-    stdout: std::process::ChildStdout,
-    logs: Arc<Mutex<VecDeque<String>>>,
-) {
+fn stdout_pump(stdout: std::process::ChildStdout, logs: Arc<Mutex<VecDeque<String>>>) {
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
     loop {
@@ -1179,12 +1171,12 @@ fn probe_health(port: u16, health: &crate::manifest::HealthCheck) -> Result<(), 
 
     let mut stream = TcpStream::connect_timeout(&addr, timeout)
         .map_err(|error| RuntimeError::Protocol(format!("health probe connect: {error}")))?;
-    stream
-        .set_read_timeout(Some(timeout))
-        .map_err(|error| RuntimeError::Protocol(format!("health probe set_read_timeout: {error}")))?;
-    stream
-        .set_write_timeout(Some(timeout))
-        .map_err(|error| RuntimeError::Protocol(format!("health probe set_write_timeout: {error}")))?;
+    stream.set_read_timeout(Some(timeout)).map_err(|error| {
+        RuntimeError::Protocol(format!("health probe set_read_timeout: {error}"))
+    })?;
+    stream.set_write_timeout(Some(timeout)).map_err(|error| {
+        RuntimeError::Protocol(format!("health probe set_write_timeout: {error}"))
+    })?;
 
     // HTTP/1.0 with `Connection: close` so the server's response
     // terminates the stream after the body. `health.path` is
@@ -1224,15 +1216,17 @@ fn probe_health(port: u16, health: &crate::manifest::HealthCheck) -> Result<(), 
                 "health probe: timeout before status line".into(),
             ));
         }
-        stream
-            .set_read_timeout(Some(remaining))
-            .map_err(|error| RuntimeError::Protocol(format!("health probe set_read_timeout: {error}")))?;
+        stream.set_read_timeout(Some(remaining)).map_err(|error| {
+            RuntimeError::Protocol(format!("health probe set_read_timeout: {error}"))
+        })?;
         match stream.read(&mut head[total..]) {
             Ok(0) => break,
             Ok(n) => total += n,
             Err(error) if error.kind() == std::io::ErrorKind::TimedOut => break,
             Err(error) => {
-                return Err(RuntimeError::Protocol(format!("health probe read: {error}")))
+                return Err(RuntimeError::Protocol(format!(
+                    "health probe read: {error}"
+                )));
             }
         }
         // If we have the full headers we can stop early.
@@ -1254,7 +1248,9 @@ fn probe_health(port: u16, health: &crate::manifest::HealthCheck) -> Result<(), 
         .next()
         .ok_or_else(|| RuntimeError::Protocol("health probe: missing status code".into()))?
         .parse()
-        .map_err(|error| RuntimeError::Protocol(format!("health probe: bad status code: {error}")))?;
+        .map_err(|error| {
+            RuntimeError::Protocol(format!("health probe: bad status code: {error}"))
+        })?;
     if !http_version.starts_with("HTTP/") {
         return Err(RuntimeError::Protocol(format!(
             "health probe: unexpected status line {status_line:?}"
@@ -1502,8 +1498,7 @@ mod lifecycle_tests {
             policy: "on-failure".into(),
             max_retries: 5,
         };
-        let wait = compute_backoff(&policy, 0, &None, Some(1))
-            .expect("cold start allowed");
+        let wait = compute_backoff(&policy, 0, &None, Some(1)).expect("cold start allowed");
         assert_eq!(wait, Duration::ZERO);
     }
 
@@ -1518,8 +1513,8 @@ mod lifecycle_tests {
             max_retries: 5,
         };
         let long_ago = Instant::now() - Duration::from_secs(30);
-        let wait = compute_backoff(&policy, 3, &Some(long_ago), Some(1))
-            .expect("policy allows restart");
+        let wait =
+            compute_backoff(&policy, 3, &Some(long_ago), Some(1)).expect("policy allows restart");
         assert_eq!(wait, Duration::ZERO);
     }
 }
@@ -1642,7 +1637,10 @@ mod service_runtime_tests {
 
     #[test]
     fn ready_signal_parser_rejects_wrong_type() {
-        assert_eq!(try_parse_ready_signal(r#"{"type":"http.request","method":"GET"}"#), None);
+        assert_eq!(
+            try_parse_ready_signal(r#"{"type":"http.request","method":"GET"}"#),
+            None
+        );
         // A non-string `type` (e.g. number) must not be mistaken for
         // the ready marker; only the exact string counts.
         assert_eq!(try_parse_ready_signal(r#"{"type":1}"#), None);
@@ -1701,7 +1699,12 @@ mod service_runtime_tests {
         let (ready_tx_for_thread, flag_for_thread) = (ready_tx, Arc::clone(&flag));
         let logs_for_thread = Arc::clone(&logs);
         let handle = std::thread::spawn(move || {
-            stderr_pump(stderr, logs_for_thread, Some(ready_tx_for_thread), Some(flag_for_thread));
+            stderr_pump(
+                stderr,
+                logs_for_thread,
+                Some(ready_tx_for_thread),
+                Some(flag_for_thread),
+            );
         });
         let received = ready_rx
             .recv_timeout(Duration::from_secs(2))
@@ -1769,18 +1772,12 @@ mod service_runtime_tests {
             .expect("resolve")
             .next()
             .expect("addr");
-        let mut stream = TcpStream::connect_timeout(&addr, Duration::from_secs(2))
-            .expect("connect to /health");
+        let mut stream =
+            TcpStream::connect_timeout(&addr, Duration::from_secs(2)).expect("connect to /health");
+        stream.set_read_timeout(Some(Duration::from_secs(2))).ok();
+        stream.set_write_timeout(Some(Duration::from_secs(2))).ok();
         stream
-            .set_read_timeout(Some(Duration::from_secs(2)))
-            .ok();
-        stream
-            .set_write_timeout(Some(Duration::from_secs(2)))
-            .ok();
-        stream
-            .write_all(
-                b"GET /health HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n",
-            )
+            .write_all(b"GET /health HTTP/1.0\r\nHost: localhost\r\nConnection: close\r\n\r\n")
             .expect("write request");
         let mut response = String::new();
         stream.read_to_string(&mut response).expect("read response");
@@ -1792,8 +1789,7 @@ mod service_runtime_tests {
         // Data dir was auto-created and the backend wrote boot.json
         // into it during startup. We resolve the same path the host
         // would have used and confirm the file is real.
-        let app_dirs =
-            compute_app_dirs(&manifest.id).expect("compute_app_dirs for service-hello");
+        let app_dirs = compute_app_dirs(&manifest.id).expect("compute_app_dirs for service-hello");
         let boot_json = app_dirs.data.join("boot.json");
         assert!(
             boot_json.is_file(),
@@ -1819,7 +1815,10 @@ mod service_runtime_tests {
         // We invoke the proxy module directly here so the test
         // doesn't need a WebView2 host; `shell::run` wires the
         // same call into the `with_custom_protocol` handler.
-        let endpoint = ServiceEndpoint { port, token: token.clone() };
+        let endpoint = ServiceEndpoint {
+            port,
+            token: token.clone(),
+        };
         let request = Request::get("alex://app/api/info")
             .header("accept", "application/json")
             .body(Vec::new())
@@ -1894,23 +1893,24 @@ mod service_runtime_tests {
         assert_eq!(status.state, RuntimeState::Ready);
         let port = status.port.expect("notes reports a port");
         let token = status.token.expect("notes reports a token");
-        let endpoint = ServiceEndpoint { port, token: token.clone() };
+        let endpoint = ServiceEndpoint {
+            port,
+            token: token.clone(),
+        };
 
         // POST a new note via the proxy.
         let create = Request::post("alex://app/api/notes")
             .header("content-type", "application/json")
-            .body(
-                br#"{"title":"first","body":"hello from the e2e test"}"#
-                    .to_vec(),
-            )
+            .body(br#"{"title":"first","body":"hello from the e2e test"}"#.to_vec())
             .expect("post request");
-        let created = crate::proxy::proxy_to_service(
-            &endpoint,
-            &manifest.id,
-            "/api/notes",
-            &create,
+        let created =
+            crate::proxy::proxy_to_service(&endpoint, &manifest.id, "/api/notes", &create);
+        assert_eq!(
+            created.status().as_u16(),
+            201,
+            "create: {:?}",
+            created.body()
         );
-        assert_eq!(created.status().as_u16(), 201, "create: {:?}", created.body());
         let created_body: serde_json::Value =
             serde_json::from_slice(created.body()).expect("create returns JSON");
         let note_id = created_body["id"]
@@ -1922,18 +1922,11 @@ mod service_runtime_tests {
         let list = Request::get("alex://app/api/notes")
             .body(Vec::new())
             .expect("get request");
-        let listed = crate::proxy::proxy_to_service(
-            &endpoint,
-            &manifest.id,
-            "/api/notes",
-            &list,
-        );
+        let listed = crate::proxy::proxy_to_service(&endpoint, &manifest.id, "/api/notes", &list);
         assert_eq!(listed.status().as_u16(), 200);
         let listed_body: serde_json::Value =
             serde_json::from_slice(listed.body()).expect("list returns JSON");
-        let notes = listed_body["notes"]
-            .as_array()
-            .expect("notes is an array");
+        let notes = listed_body["notes"].as_array().expect("notes is an array");
         assert!(
             notes.iter().any(|n| n["id"].as_u64() == Some(note_id)),
             "list missing id={note_id}: {listed_body}"
@@ -1943,12 +1936,8 @@ mod service_runtime_tests {
         let delete = Request::delete("alex://app/api/notes/9999")
             .body(Vec::new())
             .expect("delete request");
-        let gone = crate::proxy::proxy_to_service(
-            &endpoint,
-            &manifest.id,
-            "/api/notes/9999",
-            &delete,
-        );
+        let gone =
+            crate::proxy::proxy_to_service(&endpoint, &manifest.id, "/api/notes/9999", &delete);
         assert_eq!(gone.status().as_u16(), 404);
 
         let delete2 = Request::delete(format!("alex://app/api/notes/{note_id}"))

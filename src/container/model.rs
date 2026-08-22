@@ -459,7 +459,9 @@ pub struct EndpointState {
 pub enum ModelError {
     #[error("invalid isolation level: {0:?}")]
     InvalidIsolation(String),
-    #[error("invalid volume name {0:?}; expected ASCII alnum/underscore, not starting with a digit")]
+    #[error(
+        "invalid volume name {0:?}; expected ASCII alnum/underscore, not starting with a digit"
+    )]
     InvalidVolumeName(String),
     #[error("invalid instance id {0:?}; must not be empty or contain path separators")]
     InvalidInstanceId(String),
@@ -489,7 +491,10 @@ mod tests {
 
     #[test]
     fn from_str_accepts_legacy_aliases() {
-        assert_eq!("job".parse::<IsolationLevel>().unwrap(), IsolationLevel::Job);
+        assert_eq!(
+            "job".parse::<IsolationLevel>().unwrap(),
+            IsolationLevel::Job
+        );
         assert_eq!(
             "app-container".parse::<IsolationLevel>().unwrap(),
             IsolationLevel::AppContainer

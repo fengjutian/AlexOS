@@ -31,12 +31,7 @@ pub struct ContainerDirs {
 }
 
 impl ContainerDirs {
-    pub fn resolve(
-        data_root: &Path,
-        instance_id: &str,
-        app_id: &str,
-        app_version: &str,
-    ) -> Self {
+    pub fn resolve(data_root: &Path, instance_id: &str, app_id: &str, app_version: &str) -> Self {
         let instance_root = data_root.join("containers").join(instance_id);
         let events = instance_root.join("events");
         let app_dirs: AppDirs = AppDirs {
@@ -45,10 +40,7 @@ impl ContainerDirs {
             logs: instance_root.join("logs"),
             runtime: instance_root.join("runtime"),
         };
-        let application_root = data_root
-            .join("packages")
-            .join(app_id)
-            .join(app_version);
+        let application_root = data_root.join("packages").join(app_id).join(app_version);
         Self {
             instance_root,
             data: app_dirs.data,

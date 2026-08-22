@@ -78,8 +78,7 @@ impl CancellationToken {
         }
     }
     fn cancel(&self) {
-        self.flag
-            .store(true, std::sync::atomic::Ordering::Release);
+        self.flag.store(true, std::sync::atomic::Ordering::Release);
     }
 }
 
@@ -359,30 +358,31 @@ impl ApiRouter {
                 format!("{operation} is not declared by this package"),
             ))?;
         if !self.permission_granted(operation) {
-            return Err((
-                "PERMISSION_DENIED",
-                format!("{operation} was revoked"),
-            ));
+            return Err(("PERMISSION_DENIED", format!("{operation} was revoked")));
         }
         let requested = PathBuf::from(path);
-        crate::permission::resolve_scoped_path(&self.package_root, &requested, permission, operation)
-            .map_err(|error| match error {
-                crate::permission::PathError::NotAllowed => (
-                    "PERMISSION_DENIED",
-                    format!("{operation} is not declared by this package"),
-                ),
-                crate::permission::PathError::NotFound(_) => (
-                    "PATH_NOT_FOUND",
-                    format!("path not found: {path}"),
-                ),
-                crate::permission::PathError::Escape => {
-                    ("PATH_ERROR", "path escapes the package root".into())
-                }
-                crate::permission::PathError::OutsideScope => (
-                    "PERMISSION_DENIED",
-                    format!("{path} is outside the granted scope"),
-                ),
-            })
+        crate::permission::resolve_scoped_path(
+            &self.package_root,
+            &requested,
+            permission,
+            operation,
+        )
+        .map_err(|error| match error {
+            crate::permission::PathError::NotAllowed => (
+                "PERMISSION_DENIED",
+                format!("{operation} is not declared by this package"),
+            ),
+            crate::permission::PathError::NotFound(_) => {
+                ("PATH_NOT_FOUND", format!("path not found: {path}"))
+            }
+            crate::permission::PathError::Escape => {
+                ("PATH_ERROR", "path escapes the package root".into())
+            }
+            crate::permission::PathError::OutsideScope => (
+                "PERMISSION_DENIED",
+                format!("{path} is outside the granted scope"),
+            ),
+        })
     }
 
     fn resolve_with_token(
@@ -430,7 +430,8 @@ impl ApiRouter {
 
     fn read_binary(&self, params: &Value) -> ApiResult {
         let params: PathParams = parse_params(params)?;
-        let resolved = self.resolve_with_token(&params.path, params.access_token.as_deref(), FileOp::Read)?;
+        let resolved =
+            self.resolve_with_token(&params.path, params.access_token.as_deref(), FileOp::Read)?;
         let bytes = fs::read(&resolved)
             .map_err(|error| ("IO_ERROR", format!("cannot read binary: {error}")))?;
         if bytes.len() > MAX_BINARY_VALUE_BYTES {
@@ -632,8 +633,7 @@ impl ApiRouter {
             fs::create_dir_all(parent)
                 .map_err(|error| ("IO_ERROR", format!("cannot create parent: {error}")))?;
         }
-        fs::rename(&from, &to)
-            .map_err(|error| ("IO_ERROR", format!("cannot rename: {error}")))?;
+        fs::rename(&from, &to).map_err(|error| ("IO_ERROR", format!("cannot rename: {error}")))?;
         Ok(json!({ "renamed": true }))
     }
 
@@ -717,10 +717,7 @@ impl ApiRouter {
         self.require_storage()?;
         let params: KeyValueParams = parse_params(params)?;
         if params.key.len() > 128 {
-            return Err((
-                "INVALID_PARAMS",
-                "key length must be <= 128 bytes".into(),
-            ));
+            return Err(("INVALID_PARAMS", "key length must be <= 128 bytes".into()));
         }
         let store = self
             .storage
@@ -830,12 +827,7 @@ impl ApiRouter {
     // Dialogs
     // ------------------------------------------------------------------
 
-    fn dialog_open_file(
-        &self,
-        params: &Value,
-        multiple: bool,
-        directory: bool,
-    ) -> ApiResult {
+    fn dialog_open_file(&self, params: &Value, multiple: bool, directory: bool) -> ApiResult {
         if directory {
             self.require_permission(
                 |permission| matches!(permission, Permission::DialogOpen),
@@ -861,29 +853,43 @@ impl ApiRouter {
             multiple,
             directory,
         };
-        let paths = native::pick_paths(spec)
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        let paths =
+            native::pick_paths(spec).map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         if directory {
             // Directory pick returns paths with full access
             // (read + write). The page can use these to call
             // readBinary / writeText without an extra dialog.
             let minted: Vec<Value> = paths
                 .into_iter()
-                .map(|p| mint_token_entry(&self.file_tokens, &self.manifest.id, &p, &[FileOp::Read, FileOp::Write]))
+                .map(|p| {
+                    mint_token_entry(
+                        &self.file_tokens,
+                        &self.manifest.id,
+                        &p,
+                        &[FileOp::Read, FileOp::Write],
+                    )
+                })
                 .collect();
             return Ok(json!({ "paths": minted }));
         }
         if multiple {
             let minted: Vec<Value> = paths
                 .into_iter()
-                .map(|p| mint_token_entry(&self.file_tokens, &self.manifest.id, &p, &[FileOp::Read]))
+                .map(|p| {
+                    mint_token_entry(&self.file_tokens, &self.manifest.id, &p, &[FileOp::Read])
+                })
                 .collect();
             return Ok(json!({ "paths": minted }));
         }
         let Some(first) = paths.into_iter().next() else {
             return Ok(json!({ "path": Value::Null, "token": Value::Null }));
         };
-        let minted = mint_token_entry(&self.file_tokens, &self.manifest.id, &first, &[FileOp::Read]);
+        let minted = mint_token_entry(
+            &self.file_tokens,
+            &self.manifest.id,
+            &first,
+            &[FileOp::Read],
+        );
         Ok(minted)
     }
 
@@ -904,10 +910,7 @@ impl ApiRouter {
         if let Some(name) = params.suggested_name.as_ref()
             && name.len() > 200
         {
-            return Err((
-                "INVALID_PARAMS",
-                "suggestedName is too long".into(),
-            ));
+            return Err(("INVALID_PARAMS", "suggestedName is too long".into()));
         }
         let filters = filters_from_params(params.filters.as_ref());
         let spec = SaveDialogSpec {
@@ -916,8 +919,8 @@ impl ApiRouter {
             filters,
             suggested_name: params.suggested_name.clone(),
         };
-        let chosen = native::pick_save_path(spec)
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        let chosen =
+            native::pick_save_path(spec).map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         let Some(path) = chosen else {
             return Ok(json!({ "path": Value::Null, "token": Value::Null }));
         };
@@ -1247,9 +1250,7 @@ impl ApiRouter {
         if id == crate::manager::MANAGER_PLUGIN_ID {
             return Err((
                 "OPERATION_FAILED",
-                format!(
-                    "refusing to uninstall the running App Manager ({id})"
-                ),
+                format!("refusing to uninstall the running App Manager ({id})"),
             ));
         }
         crate::package::uninstall(id, install_root)
@@ -1527,11 +1528,7 @@ impl ApiRouter {
             .ok_or_else(|| ("INVALID_PARAMS", "missing `accelerator`".to_owned()))?;
         let normalized = crate::menu_tray::normalize_accelerator_public(accelerator)
             .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
-        let mut state = self
-            .menu_store
-            .state
-            .lock()
-            .expect("menu lock poisoned");
+        let mut state = self.menu_store.state.lock().expect("menu lock poisoned");
         if state
             .shortcuts
             .get(&normalized)
@@ -1668,10 +1665,7 @@ impl ApiRouter {
             ));
         }
         if !self.permission_granted("network.fetch") {
-            return Err((
-                "PERMISSION_DENIED",
-                "network.fetch was revoked".into(),
-            ));
+            return Err(("PERMISSION_DENIED", "network.fetch was revoked".into()));
         }
         // The 0.2 P1 slice does not actually perform the
         // request; the host layer in shell.rs is the one
@@ -2005,12 +1999,7 @@ fn filters_from_params(filters: Option<&Vec<DialogFilterParam>>) -> Vec<DialogFi
         .unwrap_or_default()
 }
 
-fn mint_token_entry(
-    store: &FileTokenStore,
-    app_id: &str,
-    path: &Path,
-    ops: &[FileOp],
-) -> Value {
+fn mint_token_entry(store: &FileTokenStore, app_id: &str, path: &Path, ops: &[FileOp]) -> Value {
     match store.issue(app_id, path, ops) {
         Ok(token) => json!({
             "path": path.to_string_lossy(),

@@ -11,7 +11,8 @@
 //! cares about correctness of the file layout and the JSON shape.
 
 use std::{
-    fs, io::Write,
+    fs,
+    io::Write,
     path::{Path, PathBuf},
 };
 
@@ -237,8 +238,17 @@ impl EventLog {
             let Some(name) = name.to_str() else {
                 continue;
             };
-            if name.starts_with(ROTATED_PREFIX) && name.ends_with(ROTATED_SUFFIX) {
-                out.push(name.to_owned());
+            // A rotated file is `events.<digits>.jsonl`; the active
+            // file is `events.jsonl` (no numeric segment) and must
+            // be excluded so `tail` does not double-read it.
+            if name.len() > ROTATED_PREFIX.len() + ROTATED_SUFFIX.len()
+                && name.starts_with(ROTATED_PREFIX)
+                && name.ends_with(ROTATED_SUFFIX)
+            {
+                let mid = &name[ROTATED_PREFIX.len()..name.len() - ROTATED_SUFFIX.len()];
+                if mid.chars().all(|c| c.is_ascii_digit()) {
+                    out.push(name.to_owned());
+                }
             }
         }
         Ok(out)
@@ -307,12 +317,10 @@ mod tests {
         let dir = tempfile::tempdir().unwrap();
         let events_dir = dir.path().join("events");
         let mut log = EventLog::new(events_dir);
-        log.append(&evt(EventKind::Created, "spec saved"))
-            .unwrap();
+        log.append(&evt(EventKind::Created, "spec saved")).unwrap();
         log.append(&evt(EventKind::Start, "user requested start"))
             .unwrap();
-        log.append(&evt(EventKind::Spawned, "pid=42"))
-            .unwrap();
+        log.append(&evt(EventKind::Spawned, "pid=42")).unwrap();
         let tail = log.tail(10).unwrap();
         assert_eq!(tail.len(), 3);
         assert_eq!(tail[0].kind, EventKind::Created);
@@ -325,7 +333,8 @@ mod tests {
         let events_dir = dir.path().join("events");
         let mut log = EventLog::new(events_dir);
         for i in 0..5 {
-            log.append(&evt(EventKind::Note, &format!("line {i}"))).unwrap();
+            log.append(&evt(EventKind::Note, &format!("line {i}")))
+                .unwrap();
         }
         let tail = log.tail(2).unwrap();
         assert_eq!(tail.len(), 2);

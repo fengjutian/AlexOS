@@ -684,11 +684,7 @@ impl AppManager for LocalAppManager {
     ) -> Result<(), ManagerError> {
         let install_path = self.install_root.join(id);
         let manifest = load_app(&install_path)?;
-        if !manifest
-            .permissions
-            .iter()
-            .any(|p| p.name() == permission)
-        {
+        if !manifest.permissions.iter().any(|p| p.name() == permission) {
             return Err(ManagerError::UndeclaredPermission(permission.to_owned()));
         }
         let store = PermissionStore::open_at(&self.permissions_root, id)?;
@@ -717,9 +713,7 @@ impl AppManager for LocalAppManager {
         // succeeded — a registry write failure here is a soft error:
         // we log it but do not roll back the runtime.
         if let Err(error) = self.registry.touch_last_launched(id) {
-            eprintln!(
-                "alex manager: failed to record launch time for {id}: {error}"
-            );
+            eprintln!("alex manager: failed to record launch time for {id}: {error}");
         }
         Ok(status)
     }
@@ -854,7 +848,9 @@ impl RuntimeSupervisor {
         handle.cancel();
         for _ in 0..40 {
             match handle.status(Duration::from_millis(50)) {
-                Ok(status) if matches!(status.state, RuntimeState::Stopped | RuntimeState::Crashed) => {
+                Ok(status)
+                    if matches!(status.state, RuntimeState::Stopped | RuntimeState::Crashed) =>
+                {
                     return;
                 }
                 _ => {}
@@ -1261,7 +1257,10 @@ mod supervisor_launch_env_injection_tests {
             return;
         }
         let workspace = std::path::PathBuf::from(env!("CARGO_MANIFEST_DIR"));
-        let fixture = workspace.join("tests").join("fixtures").join("smoke-env.js");
+        let fixture = workspace
+            .join("tests")
+            .join("fixtures")
+            .join("smoke-env.js");
         if !fixture.is_file() {
             eprintln!("skipping: {} not built", fixture.display());
             return;

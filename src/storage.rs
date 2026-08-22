@@ -120,11 +120,7 @@ impl AppStorage {
             state.remove(key).is_some()
         };
         if removed {
-            let snapshot = self
-                .state
-                .lock()
-                .map(|s| s.clone())
-                .unwrap_or_default();
+            let snapshot = self.state.lock().map(|s| s.clone()).unwrap_or_default();
             persist(&self.store_path, &snapshot)?;
         }
         Ok(removed)
@@ -192,10 +188,7 @@ mod tests {
         store
             .set("user.name", Value::String("Alex".into()))
             .unwrap();
-        assert_eq!(
-            store.get("user.name"),
-            Some(Value::String("Alex".into()))
-        );
+        assert_eq!(store.get("user.name"), Some(Value::String("Alex".into())));
         let keys = store.keys();
         assert!(keys.contains(&"user.name".to_string()));
         assert!(store.delete("user.name").unwrap());
@@ -206,9 +199,7 @@ mod tests {
     fn set_rejects_invalid_key() {
         let tmp = tempfile::tempdir().unwrap();
         let store = AppStorage::open(tmp.path()).unwrap();
-        let err = store
-            .set("bad key with spaces", Value::Null)
-            .unwrap_err();
+        let err = store.set("bad key with spaces", Value::Null).unwrap_err();
         assert!(matches!(err, StorageError::InvalidKeyChar(_)));
     }
 

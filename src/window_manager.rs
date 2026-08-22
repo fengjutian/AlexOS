@@ -109,7 +109,7 @@ impl WindowStateHandle {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::windows::{WindowInfo, WindowId};
+    use crate::windows::{WindowId, WindowInfo};
 
     fn info(id: u64, title: &str) -> WindowInfo {
         WindowInfo {
