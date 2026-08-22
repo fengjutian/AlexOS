@@ -300,12 +300,25 @@ pub mod windows {
         if uri_path == "/favicon.ico" {
             return response(204, "text/plain", Vec::new());
         }
+        // The frontend directory declared by the manifest entry is
+        // the document root for the WebView. Stripping the
+        // frontend-prefix from the manifest entry and using its
+        // parent as the asset root means a URL like
+        // `/src/main.tsx` resolves to `<root>/frontend/src/main.tsx`
+        // — the same shape Vite's `base: "./"` build emits, and the
+        // shape the React scaffold uses.
+        let entry = Path::new(frontend);
+        let asset_root = root.join(entry.parent().unwrap_or_else(|| Path::new("")));
+        let entry_basename = entry
+            .file_name()
+            .map(Path::to_path_buf)
+            .unwrap_or_else(|| PathBuf::from("index.html"));
         let relative = if uri_path == "/" {
-            PathBuf::from(frontend)
+            entry_basename
         } else {
             PathBuf::from(uri_path.trim_start_matches('/'))
         };
-        let candidate = root.join(relative);
+        let candidate = asset_root.join(relative);
         // Distinguish "file does not exist" (404) from "path escapes
         // the package root" (403). A non-existent file fails
         // `canonicalize`, so it must not be reported as Forbidden.
@@ -344,12 +357,21 @@ pub mod windows {
     pub fn content_type(path: &Path) -> &'static str {
         match path.extension().and_then(|value| value.to_str()) {
             Some("html") => "text/html; charset=utf-8",
-            Some("js") => "text/javascript; charset=utf-8",
+            Some("js" | "mjs" | "ts" | "tsx" | "jsx") => {
+                "text/javascript; charset=utf-8"
+            }
             Some("css") => "text/css; charset=utf-8",
-            Some("json") => "application/json; charset=utf-8",
+            Some("json" | "map") => "application/json; charset=utf-8",
             Some("svg") => "image/svg+xml",
             Some("png") => "image/png",
             Some("jpg" | "jpeg") => "image/jpeg",
+            Some("gif") => "image/gif",
+            Some("webp") => "image/webp",
+            Some("ico") => "image/x-icon",
+            Some("woff") => "font/woff",
+            Some("woff2") => "font/woff2",
+            Some("wasm") => "application/wasm",
+            Some("txt") => "text/plain; charset=utf-8",
             _ => "application/octet-stream",
         }
     }

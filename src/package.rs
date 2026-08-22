@@ -316,6 +316,7 @@ const REACT_TS_INDEX_HTML: &str = r#"<!doctype html>
   <head>
     <meta charset="utf-8" />
     <title>Alex OS App</title>
+    <link rel="icon" href="data:," />
   </head>
   <body>
     <div id="root"></div>
@@ -425,8 +426,12 @@ import react from "@vitejs/plugin-react";
 // Vite emits a single index.html at the package root (./index.html
 // relative to this config file) so the Alex OS host can serve it
 // without rewriting paths. The bundle lives next to it.
+// `base: "./"` makes the build emit relative URLs in index.html
+// (e.g. `./assets/index-XXX.js`) so the alex://app/ asset router
+// can resolve them via the existing path-join mapping.
 export default defineConfig({
   plugins: [react()],
+  base: "./",
   build: {
     outDir: ".",
     emptyOutDir: true,
