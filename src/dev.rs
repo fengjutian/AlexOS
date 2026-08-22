@@ -101,12 +101,18 @@ mod windows {
     const RUNTIME_RESTART_TIMEOUT: Duration = Duration::from_secs(2);
 
     /// Signal emitted by the file watcher to the event loop.
-    #[derive(Debug, Clone, Copy)]
+    #[derive(Debug, Clone, Copy, PartialEq, Eq)]
     enum DevCommand {
         /// Frontend file changed — reload the webview page.
         ReloadFrontend,
         /// Backend file changed — restart the Node runtime.
         RestartRuntime,
+        /// `manifest.json` changed — most fields (permissions,
+        /// backend entry, frontend entry, runtime mode) require
+        /// a host restart to take effect, so we surface a clear
+        /// "please restart" message and shut the loop down
+        /// cleanly.
+        ManifestChanged,
     }
 
     pub fn run(
@@ -124,13 +130,20 @@ mod windows {
         let backend_dir = manifest.backend.as_ref().map(|backend| {
             canonical_root.join(Path::new(&backend.entry).parent().unwrap_or(Path::new("")))
         });
+        let manifest_path = canonical_root.join("manifest.json");
 
         // Capacity-1 channel: a burst of file events collapses into the most
         // recent signal, so we never queue redundant reloads.
         let (dev_tx, dev_rx) = mpsc::sync_channel::<DevCommand>(1);
 
         let matcher = load_alexignore(&canonical_root);
-        spawn_watcher(frontend_dir.clone(), backend_dir.clone(), matcher, dev_tx);
+        spawn_watcher(
+            frontend_dir.clone(),
+            backend_dir.clone(),
+            manifest_path.clone(),
+            matcher,
+            dev_tx,
+        );
 
         let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
@@ -228,41 +241,65 @@ mod windows {
             if last_poll.elapsed() >= DEV_POLL_INTERVAL {
                 last_poll = Instant::now();
                 while let Ok(command) = dev_rx.try_recv() {
-                    handle_dev_command(&webview, &router, command);
+                    if handle_dev_command(&webview, &router, command) {
+                        *control_flow = ControlFlow::Exit;
+                    }
                 }
             }
         })
     }
 
-    fn handle_dev_command(webview: &wry::WebView, router: &ApiRouter, command: DevCommand) {
+    /// Returns `true` when the event loop should exit. The only
+    /// command that does this today is `ManifestChanged` — the
+    /// rest mutate the running shell in place.
+    fn handle_dev_command(webview: &wry::WebView, router: &ApiRouter, command: DevCommand) -> bool {
         match command {
             DevCommand::ReloadFrontend => {
                 let _ = webview.evaluate_script("location.reload()");
                 eprintln!("alex dev: reloaded frontend");
+                false
             }
             DevCommand::RestartRuntime => match router.restart_runtime(RUNTIME_RESTART_TIMEOUT) {
-                Some(Ok(())) => eprintln!("alex dev: restarted backend runtime"),
-                Some(Err(error)) => eprintln!("alex dev: backend restart failed: {error}"),
-                None => eprintln!("alex dev: no runtime to restart"),
+                Some(Ok(())) => {
+                    eprintln!("alex dev: restarted backend runtime");
+                    false
+                }
+                Some(Err(error)) => {
+                    eprintln!("alex dev: backend restart failed: {error}");
+                    false
+                }
+                None => {
+                    eprintln!("alex dev: no runtime to restart");
+                    false
+                }
             },
+            DevCommand::ManifestChanged => {
+                eprintln!(
+                    "alex dev: manifest.json changed — restart `alex dev` to pick up \
+                     new permissions, backend, or runtime mode"
+                );
+                true
+            }
         }
     }
 
     fn spawn_watcher(
         frontend_dir: PathBuf,
         backend_dir: Option<PathBuf>,
+        manifest_path: PathBuf,
         matcher: Option<Gitignore>,
         dev_tx: mpsc::SyncSender<DevCommand>,
     ) {
         thread::Builder::new()
             .name("alex-dev-watcher".into())
-            .spawn(move || run_watcher(frontend_dir, backend_dir, matcher, dev_tx))
+            .spawn(move || run_watcher(frontend_dir, backend_dir, manifest_path, matcher, dev_tx))
             .expect("dev watcher thread should start");
     }
 
     fn run_watcher(
         frontend_dir: PathBuf,
         backend_dir: Option<PathBuf>,
+        manifest_path: PathBuf,
         matcher: Option<Gitignore>,
         dev_tx: mpsc::SyncSender<DevCommand>,
     ) {
@@ -284,6 +321,15 @@ mod windows {
             eprintln!("alex dev: cannot watch {}: {error}", backend.display());
             return;
         }
+        // Watch the manifest itself. We use NonRecursive because
+        // manifest.json is a single file at a known path; the
+        // notify crate accepts that for any path.
+        if let Err(error) = watcher.watch(&manifest_path, RecursiveMode::NonRecursive) {
+            eprintln!(
+                "alex dev: cannot watch {}: {error}",
+                manifest_path.display()
+            );
+        }
         // Hold the watcher until the channel closes (i.e. until the
         // process exits and the receiver is dropped). Dropping the watcher
         // releases the OS file handles.
@@ -303,7 +349,9 @@ mod windows {
                 if is_ignored(&matcher_ref, &package_root, path) {
                     continue;
                 }
-                if let Some(signal) = classify_change(&frontend_dir, backend_dir.as_deref(), path) {
+                if let Some(signal) =
+                    classify_change(&frontend_dir, backend_dir.as_deref(), &manifest_path, path)
+                {
                     // Capacity-1 channel: older signals are dropped, only
                     // the most recent command reaches the event loop.
                     let _ = dev_tx.try_send(signal);
@@ -315,8 +363,12 @@ mod windows {
     fn classify_change(
         frontend_dir: &Path,
         backend_dir: Option<&Path>,
+        manifest_path: &Path,
         path: &Path,
     ) -> Option<DevCommand> {
+        if path == manifest_path {
+            return Some(DevCommand::ManifestChanged);
+        }
         if path.starts_with(frontend_dir) {
             return Some(DevCommand::ReloadFrontend);
         }
@@ -326,5 +378,113 @@ mod windows {
             return Some(DevCommand::RestartRuntime);
         }
         None
+    }
+
+    #[cfg(test)]
+    mod tests {
+        use super::*;
+        use std::path::PathBuf;
+
+        fn p(s: &str) -> PathBuf {
+            PathBuf::from(s)
+        }
+
+        #[test]
+        fn classify_change_flags_manifest_path() {
+            let manifest = p("/app/manifest.json");
+            let frontend = p("/app/frontend");
+            let backend = Some(p("/app/backend"));
+            assert_eq!(
+                classify_change(&frontend, backend.as_deref(), &manifest, &manifest),
+                Some(DevCommand::ManifestChanged)
+            );
+        }
+
+        #[test]
+        fn classify_change_flags_frontend_paths() {
+            let manifest = p("/app/manifest.json");
+            let frontend = p("/app/frontend");
+            let backend = Some(p("/app/backend"));
+            assert_eq!(
+                classify_change(
+                    &frontend,
+                    backend.as_deref(),
+                    &manifest,
+                    &p("/app/frontend/index.html"),
+                ),
+                Some(DevCommand::ReloadFrontend)
+            );
+            assert_eq!(
+                classify_change(
+                    &frontend,
+                    backend.as_deref(),
+                    &manifest,
+                    &p("/app/frontend/app/main.js"),
+                ),
+                Some(DevCommand::ReloadFrontend)
+            );
+        }
+
+        #[test]
+        fn classify_change_flags_backend_paths() {
+            let manifest = p("/app/manifest.json");
+            let frontend = p("/app/frontend");
+            let backend = Some(p("/app/backend"));
+            assert_eq!(
+                classify_change(
+                    &frontend,
+                    backend.as_deref(),
+                    &manifest,
+                    &p("/app/backend/index.js"),
+                ),
+                Some(DevCommand::RestartRuntime)
+            );
+        }
+
+        #[test]
+        fn classify_change_handles_no_backend() {
+            // Frontend-only app (no backend declared) — the
+            // backend slot is None and any change outside the
+            // frontend tree is a no-op.
+            let manifest = p("/app/manifest.json");
+            let frontend = p("/app/frontend");
+            assert_eq!(
+                classify_change(&frontend, None, &manifest, &p("/app/anything/else")),
+                None
+            );
+        }
+
+        #[test]
+        fn classify_change_ignores_unrelated_paths() {
+            let manifest = p("/app/manifest.json");
+            let frontend = p("/app/frontend");
+            let backend = Some(p("/app/backend"));
+            assert_eq!(
+                classify_change(
+                    &frontend,
+                    backend.as_deref(),
+                    &manifest,
+                    &p("/elsewhere/something.txt"),
+                ),
+                None
+            );
+        }
+
+        #[test]
+        fn manifest_path_takes_precedence_over_overlapping_dirs() {
+            // Defensive: if the user happens to also place
+            // manifest.json under their frontend dir (a mistake
+            // we still want to handle), the manifest signal must
+            // win so the user gets the "restart required"
+            // message instead of a silent reload that drops the
+            // new permission set.
+            let manifest = p("/app/frontend/manifest.json");
+            let frontend = p("/app/frontend");
+            let backend = None;
+            assert_eq!(
+                classify_change(&frontend, backend, &manifest, &manifest),
+                Some(DevCommand::ManifestChanged)
+            );
+        }
     }
 }
