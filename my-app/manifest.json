@@ -1,7 +1,9 @@
 {
   "backend": {
     "entry": "backend/index.js",
-    "runtime": "node"
+    "runtime": "node",
+    "mode": "service",
+    "healthCheck": { "path": "/health", "timeoutMs": 3000 }
   },
   "frontend": {
     "entry": "frontend/index.html"
@@ -9,9 +11,7 @@
   "id": "com.example.my_app",
   "name": "my-app",
   "permissions": [
-    {
-      "name": "runtime.invoke"
-    }
+    { "name": "runtime.invoke" }
   ],
   "schemaVersion": 1,
   "version": "0.1.0"

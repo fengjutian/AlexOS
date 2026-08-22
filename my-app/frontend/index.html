@@ -1,1 +1,75 @@
-<!doctype html><meta charset="utf-8"><h1>Alex OS App</h1>
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>my-app</title>
+    <link rel="stylesheet" href="frontend/app.css" />
+  </head>
+  <body>
+    <h1>my-app — Express demo</h1>
+    <p>前端通过 <code>fetch('alex://app/api/...')</code> 调到 Express,host 反代到 127.0.0.1:&lt;host 分配的端口&gt;。</p>
+
+    <section>
+      <h2>GET /api/hello</h2>
+      <button id="btn-hello">调用</button>
+      <pre id="out-hello">—</pre>
+    </section>
+
+    <section>
+      <h2>GET /api/items</h2>
+      <button id="btn-items">调用</button>
+      <ul id="out-items"></ul>
+    </section>
+
+    <section>
+      <h2>POST /api/echo</h2>
+      <input id="echo-input" value='{"msg":"hi"}' />
+      <button id="btn-echo">发送</button>
+      <pre id="out-echo">—</pre>
+    </section>
+
+    <script>
+      const $ = (id) => document.getElementById(id);
+
+      async function call(method, path, body) {
+        const res = await fetch(`alex://app${path}`, {
+          method,
+          headers: body ? { 'content-type': 'application/json' } : {},
+          body: body ? JSON.stringify(body) : undefined,
+        });
+        const text = await res.text();
+        let pretty = text;
+        try { pretty = JSON.stringify(JSON.parse(text), null, 2); } catch {}
+        return { status: res.status, body: pretty };
+      }
+
+      $('btn-hello').onclick = async () => {
+        const r = await call('GET', '/api/hello');
+        $('out-hello').textContent = `HTTP ${r.status}\n${r.body}`;
+      };
+
+      $('btn-items').onclick = async () => {
+        const r = await call('GET', '/api/items');
+        $('out-items').innerHTML = '';
+        try {
+          const { items } = JSON.parse(r.body);
+          for (const it of items) {
+            const li = document.createElement('li');
+            li.textContent = `${it.id}. ${it.name}`;
+            $('out-items').appendChild(li);
+          }
+        } catch {
+          $('out-items').textContent = r.body;
+        }
+      };
+
+      $('btn-echo').onclick = async () => {
+        let body;
+        try { body = JSON.parse($('echo-input').value); }
+        catch { $('out-echo').textContent = '输入不是合法 JSON'; return; }
+        const r = await call('POST', '/api/echo', body);
+        $('out-echo').textContent = `HTTP ${r.status}\n${r.body}`;
+      };
+    </script>
+  </body>
+</html>
