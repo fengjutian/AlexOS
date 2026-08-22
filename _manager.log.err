@@ -1,0 +1,7 @@
+src\runtime\net.rs:30:5: warning: unused imports: `Stdio` and `path::Path`
+src\runtime\net.rs:116:9: warning: unused import: `std::io::Write`
+warning: `alex` (lib) generated 2 warnings (run `cargo fix --lib -p alex` to apply 2 suggestions)
+    Finished `dev` profile [unoptimized + debuginfo] target(s) in 0.31s
+     Running `target\debug\alex.exe manager`
+alex manager: launching self-hosted plugin com.alex.manager 0.1.0
+error: process didn't exit successfully: `target\debug\alex.exe manager` (exit code: 0xffffffff)

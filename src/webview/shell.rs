@@ -159,6 +159,28 @@ pub mod windows {
             .build(&event_loop)?;
 
         let permissions = PermissionStore::for_app(&manifest.id)?;
+        // Plugin manifests declare their `system.*` permissions up
+        // front, and the user opted in by installing the plugin. The
+        // IPC handler runs in a non-STA thread (rfd's modal dialogs
+        // need STA + a message pump to render), so a fresh
+        // `PermissionDecision::Prompt` would block forever without
+        // ever showing a dialog. Pre-grant `system.*` for plugins
+        // and let non-system permissions keep their normal
+        // prompt-on-first-use flow.
+        if matches!(manifest.kind, crate::core::manifest::PackageKind::Plugin) {
+            for permission in &manifest.permissions {
+                let name = permission.name();
+                if name.starts_with("system.")
+                    && matches!(
+                        permissions.decision(name),
+                        crate::api::authorization::PermissionDecision::Prompt
+                    )
+                {
+                    let _ = permissions
+                        .set(name, crate::api::authorization::PermissionDecision::Granted);
+                }
+            }
+        }
         let mut router = ApiRouter::new(package_root.to_path_buf(), manifest.clone())
             .with_permission_store(permissions)
             .with_native_host(Arc::new(WindowHost {
