@@ -134,7 +134,7 @@ impl ApiRouter {
     /// Used by `alex dev` to surface the "permission call panel"
     /// in the dev terminal without making it the production
     /// default. See `permission_granted` for the log format.
-    pub fn with_permission_logging(mut self, enabled: bool) -> Self {
+    pub fn with_permission_logging(self, enabled: bool) -> Self {
         self.permission_log
             .store(enabled, std::sync::atomic::Ordering::Relaxed);
         self

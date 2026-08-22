@@ -15,8 +15,8 @@
 //! path for the Windows Job Object provider.
 
 use std::collections::HashMap;
-use std::path::{Path, PathBuf};
-use std::sync::{Arc, Mutex};
+use std::path::PathBuf;
+use std::sync::Mutex;
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
 use semver::Version;
@@ -57,6 +57,7 @@ pub type ServiceResult<T> = Result<T, ContainerError>;
 /// running.
 struct LiveHandle {
     pid: u32,
+    #[allow(dead_code)]
     port: Option<u16>,
     #[allow(dead_code)]
     runtime_handle: usize,
@@ -153,6 +154,7 @@ impl DefaultContainerService {
         }
     }
 
+    #[allow(dead_code)]
     fn write_state(&self, slot: &InstanceSlot) -> Result<(), ContainerError> {
         let store = ContainerStore::new(slot.instance_dir.clone());
         let generation = store.save(slot.state.clone())?;

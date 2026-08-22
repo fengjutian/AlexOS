@@ -41,7 +41,7 @@ pub fn launch_backend(request: LaunchRequest<'_>) -> Result<Launched, ContainerL
         backend,
         data_dir,
         cache_dir,
-        log_dir,
+        log_dir: _,
         port: _,
         token: _,
     } = request;
