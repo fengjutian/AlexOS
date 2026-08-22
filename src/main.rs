@@ -174,6 +174,13 @@ enum PermissionCommands {
         permission: String,
         #[arg(long)]
         root: PathBuf,
+        /// Install a session-scoped "Allow Once" grant. The
+        /// decision is held in memory only and is dropped when
+        /// the host's `PermissionStore` is dropped. This is
+        /// what the first-use prompt dialog writes when the
+        /// user picks "Allow Once".
+        #[arg(long)]
+        transient: bool,
     },
     Revoke {
         id: String,
@@ -544,10 +551,23 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 id,
                 permission,
                 root,
+                transient,
             } => {
-                PermissionStore::open_at(&root, &id)?
-                    .set(&permission, PermissionDecision::Granted)?;
-                println!("granted {} to {}", permission, id);
+                let store = PermissionStore::open_at(&root, &id)?;
+                if transient {
+                    // The transient grant lives until this
+                    // process exits. CLI users typically run a
+                    // single alex invocation, so the grant
+                    // effectively scopes to that invocation.
+                    store.set_transient(&permission, PermissionDecision::Granted);
+                    println!(
+                        "granted (transient) {} to {} for this session",
+                        permission, id
+                    );
+                } else {
+                    store.set(&permission, PermissionDecision::Granted)?;
+                    println!("granted {} to {}", permission, id);
+                }
             }
             PermissionCommands::Revoke {
                 id,
