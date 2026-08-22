@@ -24,7 +24,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::ipc::{PROTOCOL_VERSION, Request, Response};
+use crate::api::ipc::{PROTOCOL_VERSION, Request, Response};
 
 /// Per-app subscription table. The router holds one of these and
 /// passes the handle to whichever subsystem wants to push events

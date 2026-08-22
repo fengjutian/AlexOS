@@ -1226,7 +1226,7 @@ fn app_manager_html_does_not_use_unsafe_inline_csp() {
     // allow inline scripts or styles. Validate the live header string
     // that the shell would emit (we cannot exercise the WebView in a
     // headless test, but the CSP source-of-truth is a string literal).
-    let csp = std::include_str!("../src/shell.rs");
+    let csp = std::include_str!("../src/webview/shell.rs");
     let header = csp
         .lines()
         .find(|line| line.contains("Content-Security-Policy"))
@@ -1241,7 +1241,7 @@ fn app_manager_html_does_not_use_unsafe_inline_csp() {
 
 #[test]
 fn manager_webview_does_not_use_unsafe_inline_csp() {
-    let csp = std::include_str!("../src/manager_webview.rs");
+    let csp = std::include_str!("../src/webview/manager_webview.rs");
     let header = csp
         .lines()
         .find(|line| line.contains("Content-Security-Policy"))

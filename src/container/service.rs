@@ -561,6 +561,8 @@ impl CreateRequest {
 
 #[cfg(test)]
 mod tests {
+    use std::path::Path;
+
     use super::*;
     use crate::container::model::{FilesystemPolicy, NetworkPolicy, ResourceLimits};
 

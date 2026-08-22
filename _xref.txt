@@ -1,0 +1,14 @@
+﻿
+src\authorization.rs:13:use crate::permission::Permission;
+src\event_bus.rs:27:use crate::ipc::{PROTOCOL_VERSION, Request, Response};
+src\manager.rs:1237:    use crate::manifest::{Backend, RuntimeKind};
+src\net.rs:39:use crate::permission::Permission;
+src\net.rs:257:    use crate::permission::Permission;
+src\permission_shim.rs:30:use crate::permission::Permission;
+src\proxy.rs:29:use crate::runtime::ServiceEndpoint;
+src\runtime.rs:21:use crate::manifest::{Backend, BackendMode, RuntimeKind};
+src\watcher.rs:18:use crate::event_bus::EventBus;
+src\window_manager.rs:18:use crate::windows::WindowInfo;
+src\window_manager.rs:112:    use crate::windows::{WindowId, WindowInfo};
+
+

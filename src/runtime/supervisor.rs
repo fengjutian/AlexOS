@@ -18,7 +18,7 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::manifest::{Backend, BackendMode, RuntimeKind};
+use crate::core::manifest::{Backend, BackendMode, RuntimeKind};
 
 const MAX_LOG_LINES: usize = 200;
 /// Private TCP range the host allocates service-mode backends from.

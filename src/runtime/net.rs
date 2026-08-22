@@ -36,7 +36,7 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use url::Url;
 
-use crate::permission::Permission;
+use crate::api::permission::Permission;
 
 const MAX_BODY_BYTES: usize = 16 * 1024 * 1024;
 const REQUEST_TIMEOUT_SECS: u64 = 30;
@@ -254,7 +254,7 @@ pub fn build_envelope(result: &FetchResult) -> Value {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::permission::Permission;
+    use crate::api::permission::Permission;
 
     fn perms_with_origin(origin: &str) -> Vec<Permission> {
         vec![Permission::NetworkFetch {

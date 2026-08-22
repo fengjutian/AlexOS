@@ -1,30 +1,21 @@
+// Top-level modules are grouped by responsibility. The subdirs own the
+// concrete file layout; we re-export the moved modules at the crate
+// root so `use crate::shell`, `use crate::api::ApiRouter`, etc. keep
+// working unchanged after the reorganization.
+pub mod core;
+pub mod webview;
 pub mod api;
-pub mod authorization;
-pub mod container;
-pub mod dev;
-pub mod event_bus;
-pub mod file_token;
-pub mod ipc;
-pub mod manager;
-pub mod manager_webview;
-pub mod manifest;
-pub mod menu_tray;
-pub mod native;
-pub mod package;
-pub mod permission;
-pub mod permission_shim;
-pub mod plugin;
-pub mod process;
-pub mod proxy;
 pub mod runtime;
-pub mod shell;
-pub mod storage;
-pub mod trust;
-pub mod update;
-pub mod watcher;
-pub mod webview2;
-pub mod window_manager;
-pub mod windows;
+pub mod data;
+pub mod container;
+
+pub use core::{manager, manifest, package, plugin, trust, update};
+pub use webview::{dev, manager_webview, native, shell, webview2};
+pub use api::{authorization, ipc, permission, permission_shim};
+pub use runtime::{
+    event_bus, menu_tray, net, process, proxy, watcher, window_manager, windows,
+};
+pub use data::{file_token, storage};
 
 use std::path::{Path, PathBuf};
 
