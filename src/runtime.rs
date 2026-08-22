@@ -893,7 +893,7 @@ impl RuntimeProcess {
             //     response within `timeoutMs`.
             if let Some(health) = &spec.backend.health_check {
                 let token = endpoint.as_ref().map(|e| e.token.as_str()).unwrap_or("");
-                match probe_health(reported_port, health) {
+                match probe_health(reported_port, token, health) {
                     Ok(()) => {}
                     Err(error) => {
                         let _ = child.kill();
@@ -1158,7 +1158,11 @@ fn stdout_pump(stdout: std::process::ChildStdout, logs: Arc<Mutex<VecDeque<Strin
 /// `2xx` status. On timeout, refused connection, parse failure, or
 /// non-2xx, returns a `Protocol` error that the caller turns into a
 /// hard kill + `RuntimeError::ServiceReadyTimeout`-shaped failure.
-fn probe_health(port: u16, health: &crate::manifest::HealthCheck) -> Result<(), RuntimeError> {
+fn probe_health(
+    port: u16,
+    token: &str,
+    health: &crate::manifest::HealthCheck,
+) -> Result<(), RuntimeError> {
     use std::io::{Read, Write};
     use std::net::{TcpStream, ToSocketAddrs};
 
@@ -1196,9 +1200,19 @@ fn probe_health(port: u16, health: &crate::manifest::HealthCheck) -> Result<(), 
             health.path
         )));
     }
+    // Include the runtime token when the host has issued one.
+    // Backends like `examples/notes` authenticate every route
+    // including `/health`; without the token the probe gets 401
+    // and the start sequence times out.
+    let token_header = if token.is_empty() {
+        String::new()
+    } else {
+        format!("X-Alx-Token: {token}\r\n")
+    };
     let request = format!(
-        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\nConnection: close\r\n\r\n",
-        path = health.path
+        "GET {path} HTTP/1.0\r\nHost: 127.0.0.1\r\n{token_header}Connection: close\r\n\r\n",
+        path = health.path,
+        token_header = token_header,
     );
     stream
         .write_all(request.as_bytes())
