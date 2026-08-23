@@ -278,6 +278,8 @@ impl ApiRouter {
             "system.uninstall" => self.system_uninstall(&request.params),
             "system.listApps" => self.system_list_apps(),
             "system.listExtensions" => self.system_list_extensions(),
+            "system.listPermissions" => self.system_list_permissions(&request.params),
+            "system.setPermission" => self.system_set_permission(&request.params),
             // ---- window ----------------------------------------------------
             "window.setTitle" => self.window_set_title(&request.params),
             "window.minimize" => self.window_command(HostCommand::MinimizeWindow),
@@ -1329,6 +1331,111 @@ impl ApiRouter {
             })
             .collect();
         Ok(json!({ "extensions": entries }))
+    }
+
+    // ------------------------------------------------------------------
+    // system.listPermissions / system.setPermission
+    //
+    // Read and write the persisted `PermissionStore` decisions for any
+    // installed app. The calling plugin is itself trusted (it has
+    // `system.managePermissions` and the source identity is bound by
+    // `require_plugin()`), so this is an operator-level action — we
+    // do not prompt the user again for the right to manage other
+    // apps' grants.
+    //
+    // Both methods deliberately open a fresh `PermissionStore` for
+    // the *target* app id rather than reusing the host's own store,
+    // because the host's `PermissionStore` is keyed by the host's
+    // own id. Transient ("Allow Once") grants live in memory only
+    // and are not visible across `PermissionStore::for_app` calls —
+    // `listPermissions` reports the persisted decisions; the host's
+    // own transient grants are not exposed.
+    // ------------------------------------------------------------------
+
+    fn system_list_permissions(&self, params: &Value) -> ApiResult {
+        self.require_plugin()?;
+        self.require_permission(
+            |permission| matches!(permission, Permission::SystemManagePermissions),
+            "system.managePermissions",
+        )?;
+        let app_id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `id`".to_owned()))?;
+        if app_id.is_empty() {
+            return Err(("INVALID_PARAMS", "`id` must not be empty".into()));
+        }
+        let store = PermissionStore::for_app(app_id).map_err(|error| {
+            (
+                "OPERATION_FAILED",
+                format!("failed to open permission store: {error}"),
+            )
+        })?;
+        let decisions: Vec<_> = store
+            .list()
+            .into_iter()
+            .map(|(name, decision)| {
+                json!({
+                    "name": name,
+                    "decision": match decision {
+                        PermissionDecision::Granted => "granted",
+                        PermissionDecision::Denied => "denied",
+                        PermissionDecision::Prompt => "prompt",
+                    },
+                })
+            })
+            .collect();
+        Ok(json!({
+            "id": app_id,
+            "permissions": decisions,
+        }))
+    }
+
+    fn system_set_permission(&self, params: &Value) -> ApiResult {
+        self.require_plugin()?;
+        self.require_permission(
+            |permission| matches!(permission, Permission::SystemManagePermissions),
+            "system.managePermissions",
+        )?;
+        let app_id = params
+            .get("id")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `id`".to_owned()))?;
+        if app_id.is_empty() {
+            return Err(("INVALID_PARAMS", "`id` must not be empty".into()));
+        }
+        let name = params
+            .get("name")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `name`".to_owned()))?;
+        if name.is_empty() {
+            return Err(("INVALID_PARAMS", "`name` must not be empty".into()));
+        }
+        let decision_str = params
+            .get("decision")
+            .and_then(|v| v.as_str())
+            .ok_or_else(|| ("INVALID_PARAMS", "missing `decision`".to_owned()))?;
+        let decision = match decision_str {
+            "granted" => PermissionDecision::Granted,
+            "denied" => PermissionDecision::Denied,
+            "prompt" => PermissionDecision::Prompt,
+            other => {
+                return Err((
+                    "INVALID_PARAMS",
+                    format!("`decision` must be granted/denied/prompt, got {other}"),
+                ));
+            }
+        };
+        let store = PermissionStore::for_app(app_id).map_err(|error| {
+            (
+                "OPERATION_FAILED",
+                format!("failed to open permission store: {error}"),
+            )
+        })?;
+        store
+            .set(name, decision)
+            .map_err(|error| ("OPERATION_FAILED", error.to_string()))?;
+        Ok(json!({ "ok": true }))
     }
 
     // ------------------------------------------------------------------

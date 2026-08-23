@@ -157,7 +157,12 @@ function makeAppRow(app) {
   uninstallBtn.type = "button";
   uninstallBtn.textContent = "Uninstall";
   uninstallBtn.addEventListener("click", () => uninstallApp(app, uninstallBtn));
-  actions.appendChild(uninstallBtn);
+  const permBtn = document.createElement("button");
+  permBtn.type = "button";
+  permBtn.className = "perm-toggle-btn";
+  permBtn.textContent = "Permissions…";
+  permBtn.addEventListener("click", () => togglePermissions(li, app, permBtn));
+  actions.append(permBtn, uninstallBtn);
   li.append(name, id, version, sig, runtime, actions);
   return li;
 }
@@ -280,6 +285,130 @@ async function uninstallApp(app, button) {
       true,
     );
     button.disabled = false;
+  }
+}
+
+// ---- Permission management -------------------------------------------
+//
+// Each app row has a "Permissions…" button. Clicking it expands an
+// inline panel showing the persisted decisions for that app id, as
+// stored in the host's PermissionStore. Each row has three buttons
+// (Allow / Deny / Ask) that dispatch `system.setPermission` to flip
+// the decision; the new state is re-read on success.
+//
+// `system.managePermissions` is pre-granted to `com.alex.manager` at
+// plugin startup (see `src/webview/shell.rs` and `src/core/plugin.rs`),
+// so the dispatch path is allowed without a first-use prompt.
+//
+// Self-protection: do not let the manager edit its own permission
+// store. Editing `com.alex.manager`'s decisions is meaningless (the
+// plugin manifest itself declares the permissions it is allowed to
+// use) and a misclick could lock the manager out of its own
+// `system.*` access on the next launch.
+
+function togglePermissions(li, app, button) {
+  // Toggle: if a panel is already open, close it. Otherwise build one.
+  const existing = li.querySelector(".perm-panel");
+  if (existing) {
+    existing.remove();
+    button.textContent = "Permissions…";
+    return;
+  }
+  buildPermPanel(li, app);
+  button.textContent = "Hide permissions";
+}
+
+function buildPermPanel(li, app) {
+  const panel = document.createElement("div");
+  panel.className = "perm-panel";
+  const status = document.createElement("p");
+  status.className = "perm-status";
+  status.textContent = "Loading…";
+  panel.appendChild(status);
+  li.appendChild(panel);
+  refreshPermPanel(panel, app, status);
+}
+
+async function refreshPermPanel(panel, app, statusEl) {
+  statusEl.textContent = "Loading…";
+  statusEl.classList.remove("error");
+  try {
+    const result = await window.alex.invoke("system.listPermissions", {
+      id: app.id,
+    });
+    const perms = Array.isArray(result?.permissions) ? result.permissions : [];
+    // Clear everything except the status row so the list rebuilds cleanly.
+    while (panel.childElementCount > 1) panel.removeChild(panel.lastChild);
+    if (perms.length === 0) {
+      statusEl.textContent = `No permission decisions yet for ${app.id}. All calls would prompt.`;
+      return;
+    }
+    statusEl.textContent = `${perms.length} persisted decision(s) for ${app.id}.`;
+    for (const perm of perms) {
+      panel.appendChild(makePermRow(app, perm, panel, statusEl));
+    }
+  } catch (error) {
+    statusEl.textContent = `Failed to list permissions: ${error?.message ?? error}`;
+    statusEl.classList.add("error");
+  }
+}
+
+function makePermRow(app, perm, panel, statusEl) {
+  const row = document.createElement("div");
+  row.className = "perm-row";
+  const name = document.createElement("span");
+  name.className = "perm-name";
+  name.textContent = perm.name;
+  const current = document.createElement("span");
+  current.className = `perm-current perm-current-${perm.decision}`;
+  current.textContent = perm.decision;
+  const actions = document.createElement("span");
+  actions.className = "perm-actions";
+  for (const decision of ["granted", "denied", "prompt"]) {
+    const btn = document.createElement("button");
+    btn.type = "button";
+    btn.dataset.decision = decision;
+    btn.textContent = labelForDecision(decision);
+    if (perm.decision === decision) {
+      btn.classList.add("active");
+    }
+    btn.addEventListener("click", () =>
+      setPermDecision(app, perm.name, decision, panel, statusEl, row),
+    );
+    actions.appendChild(btn);
+  }
+  row.append(name, current, actions);
+  return row;
+}
+
+function labelForDecision(decision) {
+  return { granted: "Allow", denied: "Deny", prompt: "Ask" }[decision] ?? decision;
+}
+
+async function setPermDecision(app, name, decision, panel, statusEl, row) {
+  if (app.id === "com.alex.manager") {
+    statusEl.textContent = "Cannot edit the running App Manager's own permissions.";
+    statusEl.classList.add("error");
+    return;
+  }
+  // Disable all three buttons in the row while the IPC is in flight
+  // so a double-click cannot race the audit log.
+  for (const btn of row.querySelectorAll("button")) {
+    btn.disabled = true;
+  }
+  try {
+    await window.alex.invoke("system.setPermission", {
+      id: app.id,
+      name,
+      decision,
+    });
+    await refreshPermPanel(panel, app, statusEl);
+  } catch (error) {
+    statusEl.textContent = `Failed to set ${name}: ${error?.message ?? error}`;
+    statusEl.classList.add("error");
+    for (const btn of row.querySelectorAll("button")) {
+      btn.disabled = false;
+    }
   }
 }
 

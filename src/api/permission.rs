@@ -91,6 +91,8 @@ pub enum Permission {
     SystemManageApps,
     #[serde(rename = "system.manageExtensions")]
     SystemManageExtensions,
+    #[serde(rename = "system.managePermissions")]
+    SystemManagePermissions,
     /// Per-origin network access. The list is matched against the
     /// URL's origin (`scheme://host[:port]`) — *not* just the host
     /// — so an HTTPS origin and an HTTP origin are distinct
@@ -163,6 +165,7 @@ impl Permission {
             Permission::SystemUninstall => "system.uninstall",
             Permission::SystemManageApps => "system.manageApps",
             Permission::SystemManageExtensions => "system.manageExtensions",
+            Permission::SystemManagePermissions => "system.managePermissions",
             Permission::NetworkFetch { .. } => "network.fetch",
         }
     }

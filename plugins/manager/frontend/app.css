@@ -331,3 +331,86 @@ li .actions {
   border-radius: 999px;
   padding: 0.08rem 0.4rem;
 }
+
+.perm-toggle-btn {
+  font-size: 0.8rem;
+  padding: 0.25rem 0.65rem;
+}
+
+.perm-panel {
+  flex-basis: 100%;
+  margin-top: 0.6rem;
+  padding-top: 0.6rem;
+  border-top: 1px dashed #d0d0d4;
+  display: flex;
+  flex-direction: column;
+  gap: 0.35rem;
+}
+
+.perm-status {
+  margin: 0;
+  color: #5d5d63;
+  font-size: 0.8rem;
+}
+
+.perm-status.error {
+  color: #b1271b;
+}
+
+.perm-row {
+  display: flex;
+  align-items: center;
+  gap: 0.5rem;
+  font-size: 0.8rem;
+}
+
+.perm-name {
+  flex: 1 1 auto;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  color: #1d1d1f;
+  word-break: break-all;
+}
+
+.perm-current {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+}
+
+.perm-current-granted {
+  color: #11552c;
+  background: #d9f3df;
+  border-color: #8ccaa0;
+}
+
+.perm-current-denied {
+  color: #8b1a14;
+  background: #fde0dc;
+  border-color: #e0938c;
+}
+
+.perm-current-prompt {
+  color: #5a4e00;
+  background: #fff4c2;
+  border-color: #d6b656;
+}
+
+.perm-actions {
+  display: flex;
+  gap: 0.25rem;
+}
+
+.perm-actions button {
+  font-size: 0.7rem;
+  padding: 0.2rem 0.55rem;
+}
+
+.perm-actions button.active {
+  background: #1d1d1f;
+  color: #ffffff;
+  border-color: #1d1d1f;
+}
