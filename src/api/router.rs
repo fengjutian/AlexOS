@@ -1076,11 +1076,41 @@ impl ApiRouter {
     // ------------------------------------------------------------------
 
     fn system_info(&self) -> ApiResult {
+        // The `paths` block is the only host-side state we expose to
+        // every app. Other apps never see `system_install_root` etc.
+        // because those fields are gated by `system.manageApps`, but
+        // `system.info` is callable by any app, so we hand back the
+        // resolved host paths only if the caller is a plugin (the
+        // same gate as the rest of the `system.*` surface).
+        let paths = if self.require_plugin().is_ok() {
+            json!({
+                "installRoot": self.system_install_root
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(not configured)".to_owned()),
+                "trustRoot": self.system_trust_root
+                    .as_ref()
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(not configured)".to_owned()),
+                "permissionsDir": self.permission_store
+                    .as_ref()
+                    .map(|s| s.audit_dir().display().to_string())
+                    .unwrap_or_else(|| "(not configured)".to_owned()),
+                "dataDir": self.permission_store
+                    .as_ref()
+                    .and_then(|s| s.audit_dir().parent())
+                    .map(|p| p.display().to_string())
+                    .unwrap_or_else(|| "(not configured)".to_owned()),
+            })
+        } else {
+            json!(null)
+        };
         Ok(json!({
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "alexVersion": env!("CARGO_PKG_VERSION"),
             "protocol": PROTOCOL_VERSION,
+            "paths": paths,
         }))
     }
 

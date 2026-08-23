@@ -15,6 +15,7 @@ const trustStatusEl = document.querySelector("#trust-status");
 const trustListEl = document.querySelector("#trust");
 const auditStatusEl = document.querySelector("#audit-status");
 const auditListEl = document.querySelector("#audit");
+const hostInfoEl = document.querySelector("#host-info");
 const refreshBtn = document.querySelector("#refresh");
 const installBtn = document.querySelector("#install");
 const browseBtn = document.querySelector("#browse");
@@ -438,6 +439,53 @@ function formatTimestamp(ms) {
   return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
+// ---- Host info -------------------------------------------------------
+//
+// Read-only snapshot of the host process the manager is running in.
+// `system.info` is callable by any app (no permission gate), but
+// the new `paths` block in the response is only populated for
+// plugins — every other app gets `paths: null`. The Manager is a
+// plugin, so the four resolved directories light up here.
+
+async function loadHostInfo() {
+  hostInfoEl.replaceChildren();
+  let info;
+  try {
+    info = await window.alex.invoke("system.info", {});
+  } catch (error) {
+    hostInfoEl.appendChild(hostInfoRow("error", `${error?.message ?? error}`));
+    return;
+  }
+  hostInfoEl.appendChild(hostInfoRow("OS", `${info.os} (${info.arch})`));
+  hostInfoEl.appendChild(hostInfoRow("Alex version", info.alexVersion ?? "—"));
+  hostInfoEl.appendChild(hostInfoRow("IPC protocol", `v${info.protocol}`));
+  if (info.paths) {
+    hostInfoEl.appendChild(hostInfoRow("Install root", info.paths.installRoot));
+    hostInfoEl.appendChild(hostInfoRow("Trust root", info.paths.trustRoot));
+    hostInfoEl.appendChild(hostInfoRow("Permissions dir", info.paths.permissionsDir));
+    hostInfoEl.appendChild(hostInfoRow("Data root", info.paths.dataDir));
+  } else {
+    hostInfoEl.appendChild(
+      hostInfoRow("paths", "(not exposed to non-plugin callers)"),
+    );
+  }
+}
+
+function hostInfoRow(label, value) {
+  const dt = document.createElement("dt");
+  dt.className = "host-info-label";
+  dt.textContent = label;
+  const dd = document.createElement("dd");
+  dd.className = "host-info-value";
+  dd.textContent = value;
+  // Wrap each (label, value) pair so the dt/dd are kept together
+  // when CSS grid lays them out.
+  const wrap = document.createElement("div");
+  wrap.className = "host-info-row";
+  wrap.append(dt, dd);
+  return wrap;
+}
+
 async function uninstallApp(app, button) {
   // Self-protection: never let the manager tear itself down. The
   // plugin id is fixed by the host convention, so a string compare
@@ -608,6 +656,7 @@ refreshBtn.addEventListener("click", () => {
   loadExtensions();
   loadTrustStore();
   loadAuditLog();
+  loadHostInfo();
 });
 
 // Search box: case-insensitive substring match against name/id/version.
