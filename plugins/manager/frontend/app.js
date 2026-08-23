@@ -14,6 +14,17 @@ const installBtn = document.querySelector("#install");
 const browseBtn = document.querySelector("#browse");
 const packagePathInput = document.querySelector("#package-path");
 const installStatusEl = document.querySelector("#install-status");
+const searchInput = document.querySelector("#app-search");
+const chipButtons = Array.from(document.querySelectorAll(".filter-chips .chip"));
+
+// Client-side cache of the most recent `system.listApps` result.
+// The list is re-rendered (not re-fetched) whenever the search box
+// or the state filter chip changes.
+const state = {
+  allApps: [],
+  query: "",
+  filter: "all",
+};
 
 // Host-side `SignatureState` (kebab-case) → UI label. Anything
 // outside this set falls back to `unsigned` so a future host
@@ -163,20 +174,50 @@ function makeExtRow(ext) {
   return li;
 }
 
+function runtimeStateOf(app) {
+  // `runtime` is absent (skip_serializing_if) for offline apps.
+  return app?.runtime?.state ?? "stopped";
+}
+
+function appMatchesFilter(app) {
+  if (state.filter !== "all" && runtimeStateOf(app) !== state.filter) {
+    return false;
+  }
+  if (!state.query) return true;
+  const q = state.query;
+  const hay = `${app.name ?? ""} ${app.id ?? ""} ${app.version ?? ""}`.toLowerCase();
+  return hay.includes(q);
+}
+
+function renderApps() {
+  listEl.replaceChildren();
+  const matched = state.allApps.filter(appMatchesFilter);
+  if (state.allApps.length === 0) {
+    setStatus("No applications installed.");
+    return;
+  }
+  if (matched.length === 0) {
+    setStatus(
+      `0 of ${state.allApps.length} application(s) match the current filter.`,
+    );
+    return;
+  }
+  const filterLabel = state.filter === "all" ? "" : ` (${state.filter})`;
+  setStatus(
+    `${matched.length} of ${state.allApps.length} application(s) shown${filterLabel}.`,
+  );
+  for (const app of matched) {
+    listEl.appendChild(makeAppRow(app));
+  }
+}
+
 async function loadApps() {
   setStatus("Loading…");
   listEl.replaceChildren();
   try {
     const result = await window.alex.invoke("system.listApps", {});
-    const apps = Array.isArray(result?.apps) ? result.apps : [];
-    if (apps.length === 0) {
-      setStatus("No applications installed.");
-    } else {
-      setStatus(`${apps.length} application(s) installed.`);
-      for (const app of apps) {
-        listEl.appendChild(makeAppRow(app));
-      }
-    }
+    state.allApps = Array.isArray(result?.apps) ? result.apps : [];
+    renderApps();
   } catch (error) {
     setStatus(`Failed to list apps: ${error?.message ?? error}`, true);
   }
@@ -246,6 +287,29 @@ refreshBtn.addEventListener("click", () => {
   loadApps();
   loadExtensions();
 });
+
+// Search box: case-insensitive substring match against name/id/version.
+// Re-renders from the cached list — does not re-hit the host.
+searchInput.addEventListener("input", () => {
+  state.query = searchInput.value.trim().toLowerCase();
+  renderApps();
+});
+
+// Filter chips: tab-style toggle. Only one active at a time. The
+// "all" chip is the default; clicking a state chip filters by
+// `runtime.state`. Apps without a runtime (offline) only match
+// under "all" or "stopped".
+for (const chip of chipButtons) {
+  chip.addEventListener("click", () => {
+    state.filter = chip.dataset.filter;
+    for (const other of chipButtons) {
+      const active = other === chip;
+      other.classList.toggle("active", active);
+      other.setAttribute("aria-selected", String(active));
+    }
+    renderApps();
+  });
+}
 
 function setInstallStatus(text, isError) {
   installStatusEl.textContent = text;

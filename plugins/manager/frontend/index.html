@@ -32,7 +32,22 @@
       </section>
       <section>
         <h2>Installed applications</h2>
-        <button id="refresh" type="button">Refresh</button>
+        <div class="apps-toolbar">
+          <input
+            id="app-search"
+            type="text"
+            spellcheck="false"
+            placeholder="Search by name or id…"
+          />
+          <div class="filter-chips" role="tablist" aria-label="Filter by runtime state">
+            <button type="button" class="chip active" data-filter="all" role="tab" aria-selected="true">All</button>
+            <button type="button" class="chip" data-filter="running" role="tab" aria-selected="false">Running</button>
+            <button type="button" class="chip" data-filter="starting" role="tab" aria-selected="false">Starting</button>
+            <button type="button" class="chip" data-filter="crashed" role="tab" aria-selected="false">Crashed</button>
+            <button type="button" class="chip" data-filter="stopped" role="tab" aria-selected="false">Stopped</button>
+          </div>
+          <button id="refresh" type="button">Refresh</button>
+        </div>
         <p id="status">Loading…</p>
         <ul id="apps"></ul>
       </section>
