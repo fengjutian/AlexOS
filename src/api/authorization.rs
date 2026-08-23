@@ -263,6 +263,19 @@ impl PermissionStore {
     /// Returns an empty entries vec (and 0 skipped) when the
     /// audit file does not exist yet — the common case for
     /// freshly installed apps.
+    /// Directory holding this store's audit log file
+    /// (`<dir>/<app_id>.audit.jsonl`). Exposed so the host-side
+    /// `system.readAuditLog` handler can walk the same directory to
+    /// surface every other app's decisions without re-deriving the
+    /// path from `ALEX_DATA_DIR` (which can drift between CLI
+    /// invocations when the variable is unset and the fallback
+    /// resolution depends on platform environment).
+    pub fn audit_dir(&self) -> &Path {
+        self.audit_path
+            .parent()
+            .expect("audit path is always rooted")
+    }
+
     pub fn recent_audit(&self, limit: usize) -> Result<AuditReport, AuthorizationError> {
         if !self.audit_path.is_file() {
             return Ok(AuditReport::default());

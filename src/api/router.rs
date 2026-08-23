@@ -10,7 +10,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::{
-    authorization::{PermissionDecision, PermissionStore},
+    authorization::{AuditEntry as AuthorizationAuditEntry, PermissionDecision, PermissionStore},
     event_bus::{EventBus, SubscriptionFilter},
     file_token::{FileOp, FileTokenStore},
     ipc::{PROTOCOL_VERSION, Request, Response, SubscribeRequest, UnsubscribeRequest},
@@ -42,6 +42,7 @@ pub struct ApiRouter {
     permission_store: Option<PermissionStore>,
     native_host: Option<Arc<dyn NativeHost>>,
     system_install_root: Option<PathBuf>,
+    system_trust_root: Option<PathBuf>,
     event_bus: Arc<EventBus>,
     file_tokens: Arc<FileTokenStore>,
     storage: Option<AppStorage>,
@@ -108,6 +109,7 @@ impl ApiRouter {
             permission_store: None,
             native_host: None,
             system_install_root: None,
+            system_trust_root: None,
             event_bus: bus,
             file_tokens: tokens,
             storage,
@@ -150,6 +152,14 @@ impl ApiRouter {
     /// `system.*` never see this.
     pub fn with_system_install_root(mut self, root: PathBuf) -> Self {
         self.system_install_root = Some(root);
+        self
+    }
+
+    /// Trust store root. Same gating rules as the install root: only
+    /// consulted by `system.*` methods (which require `kind: "plugin"`).
+    /// Apps that don't call into `system.*` never see this.
+    pub fn with_system_trust_root(mut self, root: PathBuf) -> Self {
+        self.system_trust_root = Some(root);
         self
     }
 
@@ -280,6 +290,8 @@ impl ApiRouter {
             "system.listExtensions" => self.system_list_extensions(),
             "system.listPermissions" => self.system_list_permissions(&request.params),
             "system.setPermission" => self.system_set_permission(&request.params),
+            "system.listTrustedPublishers" => self.system_list_trusted_publishers(),
+            "system.readAuditLog" => self.system_read_audit_log(&request.params),
             // ---- window ----------------------------------------------------
             "window.setTitle" => self.window_set_title(&request.params),
             "window.minimize" => self.window_command(HostCommand::MinimizeWindow),
@@ -1436,6 +1448,176 @@ impl ApiRouter {
             .set(name, decision)
             .map_err(|error| ("OPERATION_FAILED", error.to_string()))?;
         Ok(json!({ "ok": true }))
+    }
+
+    // ------------------------------------------------------------------
+    // system.listTrustedPublishers
+    //
+    // Read-only view of every entry in the local Trust Store. The
+    // Trust Store lives at `<system_trust_root>/publishers.json`; if
+    // the host did not configure a trust root (older CLI invocations,
+    // plain `alex run` without `--root`), the method returns an empty
+    // list rather than failing — the absence of a trust store is a
+    // valid state ("no publishers trusted yet"), distinct from
+    // "trust store exists but is empty".
+    //
+    // Reuses `system.manageApps` rather than introducing a new
+    // permission: the trust store is part of the same app-management
+    // surface as install/list/uninstall, and `com.alex.manager` is
+    // already pre-granted that.
+    // ------------------------------------------------------------------
+
+    fn system_list_trusted_publishers(&self) -> ApiResult {
+        self.require_plugin()?;
+        self.require_permission(
+            |permission| matches!(permission, Permission::SystemManageApps),
+            "system.manageApps",
+        )?;
+        let trust_root = match self.system_trust_root.as_ref() {
+            Some(root) => root,
+            None => return Ok(json!({ "publishers": [] })),
+        };
+        let store = match crate::core::trust::TrustStore::open(trust_root) {
+            Ok(store) => store,
+            Err(crate::core::trust::TrustError::Io(error))
+                if error.kind() == std::io::ErrorKind::NotFound =>
+            {
+                return Ok(json!({ "publishers": [] }));
+            }
+            Err(error) => {
+                return Err((
+                    "OPERATION_FAILED",
+                    format!("failed to open trust store: {error}"),
+                ));
+            }
+        };
+        let entries: Vec<_> = store
+            .list()
+            .map(|(fingerprint, publisher)| {
+                json!({
+                    "fingerprint": fingerprint,
+                    "label": publisher.label,
+                    "publicKey": publisher.public_key,
+                })
+            })
+            .collect();
+        Ok(json!({ "publishers": entries }))
+    }
+
+    // ------------------------------------------------------------------
+    // system.readAuditLog
+    //
+    // Returns the most recent permission decisions across every
+    // installed app. Each app's PermissionStore writes to
+    // `<permissions_root>/<app_id>.audit.jsonl`; we walk that
+    // directory, parse each line, tag the entry with the owning
+    // `appId`, and return the most recent N entries (newest first).
+    //
+    // Reuses `system.managePermissions`: the same caller that can
+    // mutate decisions is the one that needs to *see* them.
+    //
+    // The result is intentionally capped (`limit`, default 200) so a
+    // long-running system with thousands of decisions does not freeze
+    // the UI on first paint. Older entries remain on disk and can be
+    // re-read by re-issuing the call with a higher limit.
+    // ------------------------------------------------------------------
+
+    fn system_read_audit_log(&self, params: &Value) -> ApiResult {
+        self.require_plugin()?;
+        self.require_permission(
+            |permission| matches!(permission, Permission::SystemManagePermissions),
+            "system.managePermissions",
+        )?;
+        let limit = params
+            .get("limit")
+            .and_then(|v| v.as_u64())
+            .unwrap_or(200)
+            .clamp(1, 5000) as usize;
+        // The directory holding the audit logs is the parent of the
+        // permission store's own audit file. We always have a
+        // permission store (shell::run wires one in for every app),
+        // so the directory is always derivable. As a defensive
+        // fallback, try the env-var path the store would have used.
+        let directory = match self.permission_store.as_ref() {
+            Some(store) => store.audit_dir().to_path_buf(),
+            None => match std::env::var_os("ALEX_DATA_DIR")
+                .map(PathBuf::from)
+                .or_else(|| {
+                    std::env::var_os("LOCALAPPDATA")
+                        .map(|path| PathBuf::from(path).join("AlexOS"))
+                }) {
+                Some(root) => root.join("permissions"),
+                None => {
+                    return Err((
+                        "OPERATION_FAILED",
+                        "no permission store or data dir is configured".into(),
+                    ));
+                }
+            },
+        };
+        let read_dir = match fs::read_dir(&directory) {
+            Ok(dir) => dir,
+            Err(error) if error.kind() == std::io::ErrorKind::NotFound => {
+                return Ok(json!({ "entries": [] }));
+            }
+            Err(error) => {
+                return Err((
+                    "OPERATION_FAILED",
+                    format!("failed to read audit directory: {error}"),
+                ));
+            }
+        };
+        let mut entries: Vec<AuthorizationAuditEntry> = Vec::new();
+        for entry in read_dir.flatten() {
+            let path = entry.path();
+            let Some(name) = path.file_name().and_then(|s| s.to_str()) else {
+                continue;
+            };
+            // PermissionsStore writes to `<app_id>.audit.jsonl`. Skip
+            // the non-audit sibling (`<app_id>.json`) and any `.tmp`
+            // lockfile left behind by an interrupted write.
+            if name.strip_suffix(".audit.jsonl").is_none() {
+                continue;
+            }
+            let Ok(contents) = fs::read_to_string(&path) else {
+                continue;
+            };
+            for line in contents.lines() {
+                let trimmed = line.trim();
+                if trimmed.is_empty() {
+                    continue;
+                }
+                if let Ok(record) =
+                    serde_json::from_str::<AuthorizationAuditEntry>(trimmed)
+                {
+                    entries.push(record);
+                }
+            }
+        }
+        // Newest first; ties broken by appId+permission for stable order.
+        entries.sort_by(|a, b| {
+            b.timestamp_ms
+                .cmp(&a.timestamp_ms)
+                .then_with(|| a.app_id.cmp(&b.app_id))
+                .then_with(|| a.permission.cmp(&b.permission))
+        });
+        entries.truncate(limit);
+        let values: Vec<Value> = entries
+            .into_iter()
+            .map(|e| {
+                json!({
+                    "appId": e.app_id,
+                    "permission": e.permission,
+                    "decision": match e.decision {
+                        PermissionDecision::Granted => "granted",
+                        PermissionDecision::Denied => "denied",
+                        PermissionDecision::Prompt => "prompt",
+                    },
+                    "timestampMs": e.timestamp_ms,
+                })
+            })
+            .collect();
+        Ok(json!({ "entries": values }))
     }
 
     // ------------------------------------------------------------------

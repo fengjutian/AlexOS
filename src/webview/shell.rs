@@ -7,9 +7,15 @@ pub fn run(
     package_root: &Path,
     manifest: AppManifest,
     system_install_root: Option<&Path>,
+    system_trust_root: Option<&Path>,
 ) -> Result<(), AlexError> {
-    windows::run(package_root, manifest, system_install_root)
-        .map_err(|error| AlexError::Validation(format!("shell failed: {error}")))
+    windows::run(
+        package_root,
+        manifest,
+        system_install_root,
+        system_trust_root,
+    )
+    .map_err(|error| AlexError::Validation(format!("shell failed: {error}")))
 }
 
 #[cfg(not(windows))]
@@ -17,6 +23,7 @@ pub fn run(
     _package_root: &Path,
     _manifest: AppManifest,
     _system_install_root: Option<&Path>,
+    _system_trust_root: Option<&Path>,
 ) -> Result<(), AlexError> {
     Err(AlexError::Validation(
         "the 0.1 shell currently supports Windows only".into(),
@@ -151,6 +158,7 @@ pub mod windows {
         package_root: &Path,
         manifest: AppManifest,
         system_install_root: Option<&Path>,
+        system_trust_root: Option<&Path>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
@@ -188,6 +196,9 @@ pub mod windows {
             }));
         if let Some(install_root) = system_install_root {
             router = router.with_system_install_root(install_root.to_path_buf());
+        }
+        if let Some(trust_root) = system_trust_root {
+            router = router.with_system_trust_root(trust_root.to_path_buf());
         }
         // Service-mode backends expose an `alex://app/api/*` reverse
         // proxy. We need the host-allocated endpoint in scope before

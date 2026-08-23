@@ -56,6 +56,36 @@
         <p id="extension-status">Loading…</p>
         <ul id="extensions"></ul>
       </section>
+      <section>
+        <h2>Services</h2>
+        <p class="hint">
+          Long-running backend runtimes (service mode). Derived from
+          the same <code>system.listApps</code> payload as the
+          Applications list, filtered to runtimes that are alive.
+        </p>
+        <p id="services-status">Loading…</p>
+        <ul id="services"></ul>
+      </section>
+      <section>
+        <h2>Trust store</h2>
+        <p class="hint">
+          Publishers whose signature is accepted at install time. A
+          package signed by one of these fingerprints is shown as
+          <code>signed-trusted</code> in the Applications list.
+        </p>
+        <p id="trust-status">Loading…</p>
+        <ul id="trust"></ul>
+      </section>
+      <section>
+        <h2>Audit log</h2>
+        <p class="hint">
+          Most recent permission decisions across every installed
+          app, newest first. Capped at 200 entries by default; pass a
+          higher <code>limit</code> to scroll further back.
+        </p>
+        <p id="audit-status">Loading…</p>
+        <ul id="audit" class="audit-list"></ul>
+      </section>
     </main>
     <script src="app.js"></script>
   </body>

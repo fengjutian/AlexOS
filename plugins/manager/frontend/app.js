@@ -9,6 +9,12 @@ const statusEl = document.querySelector("#status");
 const listEl = document.querySelector("#apps");
 const extStatusEl = document.querySelector("#extension-status");
 const extListEl = document.querySelector("#extensions");
+const servicesStatusEl = document.querySelector("#services-status");
+const servicesListEl = document.querySelector("#services");
+const trustStatusEl = document.querySelector("#trust-status");
+const trustListEl = document.querySelector("#trust");
+const auditStatusEl = document.querySelector("#audit-status");
+const auditListEl = document.querySelector("#audit");
 const refreshBtn = document.querySelector("#refresh");
 const installBtn = document.querySelector("#install");
 const browseBtn = document.querySelector("#browse");
@@ -223,6 +229,7 @@ async function loadApps() {
     const result = await window.alex.invoke("system.listApps", {});
     state.allApps = Array.isArray(result?.apps) ? result.apps : [];
     renderApps();
+    renderServices();
   } catch (error) {
     setStatus(`Failed to list apps: ${error?.message ?? error}`, true);
   }
@@ -245,6 +252,190 @@ async function loadExtensions() {
   } catch (error) {
     setExtStatus(`Failed to list extensions: ${error?.message ?? error}`, true);
   }
+}
+
+// Services section: derived from the same listApps payload, filtered
+// to apps with a live runtime (starting / ready / running). The
+// `AppSummary.runtime` snapshot already carries mode / port / pid /
+// ready / lastError / recentLogs (status.md §2.10), so this is a
+// pure view-side re-projection — no extra host call.
+const SERVICE_STATES = new Set(["starting", "ready", "running"]);
+
+function renderServices() {
+  servicesListEl.replaceChildren();
+  const live = state.allApps.filter(
+    (app) => app?.runtime && SERVICE_STATES.has(app.runtime.state),
+  );
+  if (live.length === 0) {
+    servicesStatusEl.textContent = "No service-mode runtimes are live.";
+    return;
+  }
+  servicesStatusEl.textContent =
+    `${live.length} service(s) running across ${new Set(live.map((a) => a.id)).size} app(s).`;
+  for (const app of live) {
+    servicesListEl.appendChild(makeServiceRow(app));
+  }
+}
+
+function makeServiceRow(app) {
+  const li = document.createElement("li");
+  li.className = "service-row";
+  const name = document.createElement("span");
+  name.className = "name";
+  name.textContent = app.name;
+  const id = document.createElement("span");
+  id.className = "id";
+  id.textContent = app.id;
+  const mode = document.createElement("span");
+  mode.className = "service-mode";
+  mode.textContent = app.runtime.mode ?? "rpc";
+  const endpoint = document.createElement("span");
+  endpoint.className = "service-endpoint";
+  endpoint.textContent =
+    app.runtime.mode === "service" && app.runtime.port
+      ? `127.0.0.1:${app.runtime.port}`
+      : "—";
+  const state = document.createElement("span");
+  state.className = `runtime-badge runtime-state-badge`;
+  state.dataset.state = app.runtime.state;
+  state.textContent = app.runtime.state;
+  const pid = document.createElement("span");
+  pid.className = "runtime-pid";
+  pid.textContent = app.runtime.pid ? `pid ${app.runtime.pid}` : "";
+  li.append(name, id, mode, endpoint, state, pid);
+  if (app.runtime.lastError) {
+    const err = document.createElement("span");
+    err.className = "runtime-error";
+    err.title = app.runtime.lastError;
+    err.textContent = "⚠";
+    li.appendChild(err);
+  }
+  if (Array.isArray(app.runtime.recentLogs) && app.runtime.recentLogs.length > 0) {
+    const details = document.createElement("details");
+    details.className = "runtime-logs";
+    const summary = document.createElement("summary");
+    summary.textContent = `${app.runtime.recentLogs.length} log line(s)`;
+    details.appendChild(summary);
+    const pre = document.createElement("pre");
+    pre.textContent = app.runtime.recentLogs.join("\n");
+    details.appendChild(pre);
+    li.appendChild(details);
+  }
+  return li;
+}
+
+// ---- Trust store ----------------------------------------------------
+//
+// Read-only view of the local Trust Store. The host is the only
+// authority on which publishers are trusted; the manager plugin
+// surfaces the list but cannot add or remove entries (that lives in
+// `alex trust …` on the CLI). A fingerprint with a long public-key
+// blob is rarely useful in a UI, so we collapse the key into a
+// `<details>` and only show the label + fingerprint by default.
+
+async function loadTrustStore() {
+  trustStatusEl.textContent = "Loading…";
+  trustStatusEl.classList.remove("error");
+  trustListEl.replaceChildren();
+  try {
+    const result = await window.alex.invoke("system.listTrustedPublishers", {});
+    const publishers = Array.isArray(result?.publishers)
+      ? result.publishers
+      : [];
+    if (publishers.length === 0) {
+      trustStatusEl.textContent = "No publishers trusted yet.";
+      return;
+    }
+    trustStatusEl.textContent = `${publishers.length} trusted publisher(s).`;
+    for (const pub of publishers) {
+      trustListEl.appendChild(makeTrustRow(pub));
+    }
+  } catch (error) {
+    trustStatusEl.textContent = `Failed to list trust store: ${error?.message ?? error}`;
+    trustStatusEl.classList.add("error");
+  }
+}
+
+function makeTrustRow(pub) {
+  const li = document.createElement("li");
+  li.className = "trust-row";
+  const label = document.createElement("span");
+  label.className = "name";
+  label.textContent = pub.label;
+  const fp = document.createElement("span");
+  fp.className = "trust-fingerprint";
+  fp.textContent = pub.fingerprint;
+  const details = document.createElement("details");
+  details.className = "trust-key";
+  const summary = document.createElement("summary");
+  summary.textContent = "Public key";
+  details.appendChild(summary);
+  const pre = document.createElement("pre");
+  pre.textContent = pub.publicKey;
+  details.appendChild(pre);
+  li.append(label, fp, details);
+  return li;
+}
+
+// ---- Audit log -------------------------------------------------------
+//
+// Read-only view over every app's `*.audit.jsonl` decision log. The
+// server returns the entries already sorted newest-first and capped
+// to the requested limit; the UI is a flat list because the row
+// shape is uniform and a table would just add grid noise for two
+// semantic columns. Timestamps are shown as local HH:MM:SS so the
+// scrollback stays readable; the raw ms is in the `<time>` title
+// attribute for forensic lookups.
+
+async function loadAuditLog() {
+  auditStatusEl.textContent = "Loading…";
+  auditStatusEl.classList.remove("error");
+  auditListEl.replaceChildren();
+  try {
+    const result = await window.alex.invoke("system.readAuditLog", {
+      limit: 200,
+    });
+    const entries = Array.isArray(result?.entries) ? result.entries : [];
+    if (entries.length === 0) {
+      auditStatusEl.textContent = "No audit entries yet.";
+      return;
+    }
+    auditStatusEl.textContent = `${entries.length} most recent decision(s) across all apps.`;
+    for (const entry of entries) {
+      auditListEl.appendChild(makeAuditRow(entry));
+    }
+  } catch (error) {
+    auditStatusEl.textContent = `Failed to read audit log: ${error?.message ?? error}`;
+    auditStatusEl.classList.add("error");
+  }
+}
+
+function makeAuditRow(entry) {
+  const li = document.createElement("li");
+  li.className = "audit-row";
+  const when = document.createElement("time");
+  when.className = "audit-when";
+  when.textContent = formatTimestamp(entry.timestampMs);
+  when.title = new Date(Number(entry.timestampMs) || 0).toISOString();
+  const app = document.createElement("span");
+  app.className = "audit-app";
+  app.textContent = entry.appId;
+  const perm = document.createElement("span");
+  perm.className = "audit-permission";
+  perm.textContent = entry.permission;
+  const decision = document.createElement("span");
+  decision.className = `audit-decision perm-current perm-current-${entry.decision}`;
+  decision.textContent = entry.decision;
+  li.append(when, app, perm, decision);
+  return li;
+}
+
+function formatTimestamp(ms) {
+  if (!ms) return "—";
+  const d = new Date(Number(ms));
+  if (Number.isNaN(d.getTime())) return "—";
+  const pad = (n) => String(n).padStart(2, "0");
+  return `${pad(d.getHours())}:${pad(d.getMinutes())}:${pad(d.getSeconds())}`;
 }
 
 async function uninstallApp(app, button) {
@@ -415,6 +606,8 @@ async function setPermDecision(app, name, decision, panel, statusEl, row) {
 refreshBtn.addEventListener("click", () => {
   loadApps();
   loadExtensions();
+  loadTrustStore();
+  loadAuditLog();
 });
 
 // Search box: case-insensitive substring match against name/id/version.

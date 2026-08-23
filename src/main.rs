@@ -413,7 +413,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Shell { path } => {
             require_webview2()?;
             let app = load_app(&path)?;
-            shell::run(&path, app, None)?;
+            shell::run(&path, app, None, None)?;
         }
         Commands::Dev { path } => {
             require_webview2()?;
@@ -446,7 +446,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                     "alex manager: launching self-hosted plugin {} {}",
                     manifest.id, manifest.version
                 );
-                shell::run(&plugin_path, manifest, Some(&install_root))?;
+                shell::run(&plugin_path, manifest, Some(&install_root), trust_root.as_deref())?;
             } else {
                 // Built-in manager fallback: pass the trust root
                 // through so the UI's signature badges can show
@@ -483,7 +483,15 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                     "alex plugin: launching webview for {} {}",
                     manifest.id, manifest.version
                 );
-                shell::run(&install_path, manifest, Some(&install_root))?;
+                // `alex plugin` has no `--trust-root` flag; the trust
+                // store is conventionally co-located with the install
+                // root (`<install_root>/publishers.json`).
+                shell::run(
+                    &install_path,
+                    manifest,
+                    Some(&install_root),
+                    Some(&install_root),
+                )?;
             }
         }
         Commands::Invoke {

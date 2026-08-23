@@ -3,7 +3,7 @@
   "kind": "plugin",
   "id": "com.alex.manager",
   "name": "Alex OS Manager (plugin form)",
-  "version": "0.1.0",
+  "version": "0.1.1",
   "description": "Self-hosted version of the App Manager. Demonstrates that Alex OS can manage itself via plugins.",
   "author": {
     "name": "Alex OS Project"
@@ -20,6 +20,7 @@
     { "name": "system.install" },
     { "name": "system.uninstall" },
     { "name": "system.manageExtensions" },
+    { "name": "system.managePermissions" },
     { "name": "dialog.open" }
   ],
   "extensionPoints": [

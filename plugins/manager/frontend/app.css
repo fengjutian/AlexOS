@@ -414,3 +414,117 @@ li .actions {
   color: #ffffff;
   border-color: #1d1d1f;
 }
+
+.service-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.service-mode {
+  font-size: 0.7rem;
+  font-weight: 600;
+  text-transform: uppercase;
+  letter-spacing: 0.04em;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  background: #ececef;
+  border: 1px solid #d0d0d4;
+  color: #5d5d63;
+}
+
+.service-endpoint {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.8rem;
+  color: #11552c;
+}
+
+.runtime-state-badge {
+  font-size: 0.7rem;
+  font-weight: 600;
+  padding: 0.08rem 0.45rem;
+  border-radius: 999px;
+  border: 1px solid transparent;
+  text-transform: lowercase;
+}
+
+.trust-row {
+  display: flex;
+  align-items: baseline;
+  gap: 0.75rem;
+  flex-wrap: wrap;
+}
+
+.trust-fingerprint {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.75rem;
+  color: #5d5d63;
+}
+
+.trust-key {
+  flex-basis: 100%;
+  margin-top: 0.4rem;
+  font-size: 0.7rem;
+  color: #5d5d63;
+}
+
+.trust-key summary {
+  cursor: pointer;
+  color: #5a4e00;
+}
+
+.trust-key pre {
+  margin: 0.25rem 0 0;
+  padding: 0.4rem 0.5rem;
+  background: #1d1d1f;
+  color: #d6d6da;
+  border-radius: 4px;
+  max-width: 100%;
+  max-height: 120px;
+  overflow: auto;
+  font-family: "Cascadia Code", "Consolas", monospace;
+  font-size: 0.7rem;
+  white-space: pre-wrap;
+  word-break: break-all;
+}
+
+.audit-list {
+  display: flex;
+  flex-direction: column;
+  gap: 0.25rem;
+}
+
+.audit-row {
+  display: grid;
+  grid-template-columns: 80px 1fr 1.5fr auto;
+  align-items: baseline;
+  gap: 0.5rem;
+  padding: 0.35rem 0.6rem;
+  font-size: 0.78rem;
+  background: #ffffff;
+  border: 1px solid #e2e2e6;
+  border-radius: 4px;
+}
+
+.audit-when {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  color: #5d5d63;
+  font-size: 0.72rem;
+}
+
+.audit-app {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  color: #1d1d1f;
+  word-break: break-all;
+}
+
+.audit-permission {
+  font-family: "Cascadia Code", "Consolas", monospace;
+  color: #1d1d1f;
+  word-break: break-all;
+}
+
+.audit-decision {
+  font-size: 0.65rem;
+}
