@@ -1,7 +1,7 @@
 ---
 layout: default
 title: Desktop API 状态
-nav_order: 5
+nav_order: 6
 ---
 
 # Desktop API status (2026-08-21)

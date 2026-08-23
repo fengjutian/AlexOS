@@ -1,7 +1,7 @@
 ---
 layout: default
 title: 实现状态
-nav_order: 2
+nav_order: 3
 ---
 
 # Alex OS 实现状态
@@ -236,8 +236,8 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 
 已实现（stage 3 切片 1）：
 
-- WebView 通过 `fetch('alex://app/api/...')` 调到 service backend，**不暴露端口**；
-- CSP `connect-src 'self'`，同源放行 `alex://app/api/...`；
+- WebView 通过 `fetch('http://alex.app/api/...')` 调到 service backend，**不暴露端口**。注意页面端必须用 `http://alex.app/...`（wry 改写后的形式），不能用 `alex://app/...`：WebView2 拒绝 custom scheme 在 `fetch` 调用内出现，但 wry 改写只作用于导航，**不**改写 fetch URL。host 端协议处理器收到的 `request.uri().path()` 是 `/api/...`，source URL 是 `http://alex.app/...`；
+- CSP `connect-src 'self'`，同源放行 `http://alex.app/api/...`；
 - Host 同步 HTTP/1.0 forwarder（`src/proxy.rs::proxy_to_service`）：
   - 3s connect timeout + 5s read/write timeout；
   - Body cap 1 MiB（与 WebView → host IPC 限制对齐）；

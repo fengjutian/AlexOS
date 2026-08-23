@@ -1,7 +1,7 @@
 ---
 layout: default
 title: App Manager UI 设计
-nav_order: 6
+nav_order: 7
 ---
 
 # Alex OS 应用管理 UI 设计
