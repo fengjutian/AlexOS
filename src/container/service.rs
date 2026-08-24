@@ -369,7 +369,11 @@ impl ContainerService for DefaultContainerService {
         entry.state.desired = DesiredState::Stopped;
         entry.state.observed = ObservedState::Stopping;
         entry.state.updated_at = iso8601_now();
-        terminate_pid(live.pid, timeout);
+        let _ = timeout;
+        let _ = crate::platform::PlatformServices::terminate_process_tree(
+            &crate::platform::native(),
+            live.pid,
+        );
         drop(live.isolation);
         let store = ContainerStore::new(entry.instance_dir.clone());
         store.save(entry.state.clone())?;
@@ -469,21 +473,6 @@ impl ContainerService for DefaultContainerService {
 
     fn isolation_available(&self, level: IsolationLevel) -> bool {
         super::isolation::provider_for(level).is_ok()
-    }
-}
-
-fn terminate_pid(pid: u32, _timeout: Duration) {
-    #[cfg(windows)]
-    {
-        let _ = std::process::Command::new("taskkill.exe")
-            .args(["/PID", &pid.to_string(), "/T", "/F"])
-            .output();
-    }
-    #[cfg(not(windows))]
-    {
-        let _ = std::process::Command::new("kill")
-            .args(["-TERM", &pid.to_string()])
-            .output();
     }
 }
 

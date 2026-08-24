@@ -38,13 +38,12 @@ pub struct Launched {
 
 pub fn launch_backend(request: LaunchRequest<'_>) -> Result<Launched, ContainerLauncherError> {
     enforce_policy(request.container, request.package_root)?;
-    #[cfg(windows)]
     if request.container.isolation == crate::container::model::IsolationLevel::AppContainer {
         if let Some(path) = request.data_dir {
-            apply_acl(path, "(OI)(CI)M")?;
+            grant_restricted_path(path, crate::platform::RestrictedPathAccess::Modify)?;
         }
         if let Some(path) = request.cache_dir {
-            apply_acl(path, "(OI)(CI)M")?;
+            grant_restricted_path(path, crate::platform::RestrictedPathAccess::Modify)?;
         }
     }
     let executable = crate::runtime::discover_node()
@@ -131,28 +130,25 @@ fn enforce_policy(spec: &ContainerSpec, package_root: &Path) -> Result<(), Conta
                 .into(),
         ));
     }
-    #[cfg(windows)]
     if spec.isolation == crate::container::model::IsolationLevel::AppContainer {
-        apply_acl(package_root, "(OI)(CI)RX")?;
+        grant_restricted_path(
+            package_root,
+            crate::platform::RestrictedPathAccess::ReadExecute,
+        )?;
     }
     Ok(())
 }
 
-#[cfg(windows)]
-fn apply_acl(path: &Path, rights: &str) -> Result<(), ContainerLauncherError> {
-    let grant = format!("*S-1-5-12:{rights}");
-    let output = std::process::Command::new("icacls.exe")
-        .arg(path)
-        .args(["/grant", &grant, "/T", "/C", "/Q"])
-        .output()
-        .map_err(|e| ContainerLauncherError::Policy(format!("apply restricted-code ACL: {e}")))?;
-    if !output.status.success() {
-        return Err(ContainerLauncherError::Policy(format!(
-            "icacls failed: {}",
-            String::from_utf8_lossy(&output.stderr)
-        )));
-    }
-    Ok(())
+fn grant_restricted_path(
+    path: &Path,
+    access: crate::platform::RestrictedPathAccess,
+) -> Result<(), ContainerLauncherError> {
+    crate::platform::PlatformServices::grant_restricted_path(
+        &crate::platform::native(),
+        path,
+        access,
+    )
+    .map_err(|error| ContainerLauncherError::Policy(error.to_string()))
 }
 fn wait_for_loopback(port: u16, timeout: Duration) -> bool {
     let deadline = Instant::now() + timeout;

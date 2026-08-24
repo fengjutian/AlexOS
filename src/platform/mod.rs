@@ -6,6 +6,12 @@
 use std::path::Path;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum RestrictedPathAccess {
+    ReadExecute,
+    Modify,
+}
+
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum OperatingSystem {
     Windows,
     MacOs,
@@ -26,6 +32,12 @@ pub trait PlatformServices: Send + Sync {
     fn operating_system(&self) -> OperatingSystem;
     fn capabilities(&self) -> PlatformCapabilities;
     fn atomic_replace(&self, source: &Path, destination: &Path) -> std::io::Result<()>;
+    fn grant_restricted_path(
+        &self,
+        path: &Path,
+        access: RestrictedPathAccess,
+    ) -> std::io::Result<()>;
+    fn terminate_process_tree(&self, pid: u32) -> std::io::Result<()>;
 }
 
 #[cfg(target_os = "windows")]
@@ -40,4 +52,32 @@ pub use portable::NativePlatform;
 
 pub fn native() -> NativePlatform {
     NativePlatform
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn native_platform_reports_a_consistent_capability_set() {
+        let platform = native();
+        let capabilities = platform.capabilities();
+        assert!(capabilities.atomic_replace);
+        if cfg!(target_os = "windows") {
+            assert_eq!(platform.operating_system(), OperatingSystem::Windows);
+            assert!(capabilities.process_tree_limits);
+        }
+    }
+
+    #[test]
+    fn atomic_replace_replaces_existing_content() {
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("source");
+        let destination = temp.path().join("destination");
+        std::fs::write(&source, b"new").unwrap();
+        std::fs::write(&destination, b"old").unwrap();
+        native().atomic_replace(&source, &destination).unwrap();
+        assert_eq!(std::fs::read(destination).unwrap(), b"new");
+        assert!(!source.exists());
+    }
 }

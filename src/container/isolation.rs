@@ -109,6 +109,11 @@ fn configure_command(command: &mut std::process::Command, request: &SpawnRequest
         .stdin(Stdio::null())
         .stdout(Stdio::null())
         .stderr(Stdio::null());
+    #[cfg(unix)]
+    {
+        use std::os::unix::process::CommandExt;
+        command.process_group(0);
+    }
 }
 
 impl IsolationProvider for ProcessIsolationProvider {

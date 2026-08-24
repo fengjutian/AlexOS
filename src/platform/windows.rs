@@ -5,7 +5,7 @@ use windows::{
     core::PCWSTR,
 };
 
-use super::{OperatingSystem, PlatformCapabilities, PlatformServices};
+use super::{OperatingSystem, PlatformCapabilities, PlatformServices, RestrictedPathAccess};
 
 #[derive(Debug, Clone, Copy)]
 pub struct NativePlatform;
@@ -40,5 +40,43 @@ impl PlatformServices for NativePlatform {
             )
         }
         .map_err(std::io::Error::other)
+    }
+
+    fn grant_restricted_path(
+        &self,
+        path: &Path,
+        access: RestrictedPathAccess,
+    ) -> std::io::Result<()> {
+        let rights = match access {
+            RestrictedPathAccess::ReadExecute => "(OI)(CI)RX",
+            RestrictedPathAccess::Modify => "(OI)(CI)M",
+        };
+        let grant = format!("*S-1-5-12:{rights}");
+        let output = std::process::Command::new("icacls.exe")
+            .arg(path)
+            .args(["/grant", &grant, "/T", "/C", "/Q"])
+            .output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!(
+                "icacls failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )))
+        }
+    }
+
+    fn terminate_process_tree(&self, pid: u32) -> std::io::Result<()> {
+        let output = std::process::Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output()?;
+        if output.status.success() {
+            Ok(())
+        } else {
+            Err(std::io::Error::other(format!(
+                "taskkill failed: {}",
+                String::from_utf8_lossy(&output.stderr)
+            )))
+        }
     }
 }
