@@ -1076,6 +1076,7 @@ impl ApiRouter {
     // ------------------------------------------------------------------
 
     fn system_info(&self) -> ApiResult {
+        eprintln!("[alex] system_info: enter");
         // The `paths` block is the only host-side state we expose to
         // every app. Other apps never see `system_install_root` etc.
         // because those fields are gated by `system.manageApps`, but
@@ -1105,13 +1106,15 @@ impl ApiRouter {
         } else {
             json!(null)
         };
-        Ok(json!({
+        let result = json!({
             "os": std::env::consts::OS,
             "arch": std::env::consts::ARCH,
             "alexVersion": env!("CARGO_PKG_VERSION"),
             "protocol": PROTOCOL_VERSION,
             "paths": paths,
-        }))
+        });
+        eprintln!("[alex] system_info: returning");
+        Ok(result)
     }
 
     fn system_capabilities(&self) -> ApiResult {
@@ -1498,6 +1501,7 @@ impl ApiRouter {
     // ------------------------------------------------------------------
 
     fn system_list_trusted_publishers(&self) -> ApiResult {
+        eprintln!("[alex] system_list_trusted_publishers: enter");
         self.require_plugin()?;
         self.require_permission(
             |permission| matches!(permission, Permission::SystemManageApps),
@@ -1531,6 +1535,7 @@ impl ApiRouter {
                 })
             })
             .collect();
+        eprintln!("[alex] system_list_trusted_publishers: returning {} entries", entries.len());
         Ok(json!({ "publishers": entries }))
     }
 
@@ -1553,6 +1558,7 @@ impl ApiRouter {
     // ------------------------------------------------------------------
 
     fn system_read_audit_log(&self, params: &Value) -> ApiResult {
+        eprintln!("[alex] system_read_audit_log: enter");
         self.require_plugin()?;
         self.require_permission(
             |permission| matches!(permission, Permission::SystemManagePermissions),
@@ -1647,6 +1653,7 @@ impl ApiRouter {
                 })
             })
             .collect();
+        eprintln!("[alex] system_read_audit_log: returning {} entries", values.len());
         Ok(json!({ "entries": values }))
     }
 
