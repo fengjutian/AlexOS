@@ -7,13 +7,11 @@
 #[ignore = "requires an interactive Windows desktop; run with --ignored"]
 fn production_shell_creates_a_real_top_level_window() {
     use std::{
-        os::windows::ffi::OsStrExt,
         process::Command,
         time::{Duration, Instant},
     };
     use windows::{
-        Win32::UI::WindowsAndMessaging::{FindWindowW, PostMessageW, WM_CLOSE},
-        core::PCWSTR,
+        Win32::{Foundation::{BOOL, HWND, LPARAM}, UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE}},
     };
 
     let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/desktop-api");
@@ -22,13 +20,22 @@ fn production_shell_creates_a_real_top_level_window() {
         .arg(package)
         .spawn()
         .expect("launch production shell");
-    let title: Vec<u16> = std::ffi::OsStr::new("Desktop API Demo")
-        .encode_wide()
-        .chain(Some(0))
-        .collect();
+    struct Search { pid: u32, hwnd: Option<HWND> }
+    unsafe extern "system" fn find_owned_window(hwnd: HWND, data: LPARAM) -> BOOL {
+        let search = unsafe { &mut *(data.0 as *mut Search) };
+        let mut pid = 0;
+        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)); }
+        if pid == search.pid && unsafe { IsWindowVisible(hwnd) }.as_bool() {
+            search.hwnd = Some(hwnd);
+            return BOOL(0);
+        }
+        BOOL(1)
+    }
     let deadline = Instant::now() + Duration::from_secs(15);
     let hwnd = loop {
-        if let Ok(hwnd) = unsafe { FindWindowW(PCWSTR::null(), PCWSTR(title.as_ptr())) } {
+        let mut search = Search { pid: child.id(), hwnd: None };
+        let _ = unsafe { EnumWindows(Some(find_owned_window), LPARAM((&mut search as *mut Search) as isize)) };
+        if let Some(hwnd) = search.hwnd {
             break hwnd;
         }
         assert!(
