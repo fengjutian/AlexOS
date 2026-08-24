@@ -1,6 +1,7 @@
 use std::{
+    fs::OpenOptions,
     io::{Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     time::Duration,
 };
 
@@ -215,13 +216,27 @@ pub fn update_from_url_with_progress(
         return Err(UpdateError::Transport("update cancelled".into()));
     }
     package::update_verified(
-        package_file.path(),
+        &package_file,
         install_root,
         true,
         Some(&envelope.public_key),
         false,
     )
+    .map(|result| {
+        let _ = std::fs::remove_file(&package_file);
+        let _ = std::fs::remove_file(resume_meta_path(&package_file));
+        result
+    })
     .map_err(Into::into)
+}
+
+#[derive(Debug, Default, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase")]
+struct ResumeMetadata {
+    url: String,
+    etag: Option<String>,
+    expected_size: u64,
+    sha256: String,
 }
 
 fn download_package(
@@ -229,22 +244,88 @@ fn download_package(
     manifest: &UpdateManifest,
     install_root: &Path,
     progress: &mut impl FnMut(&str, u8) -> bool,
-) -> Result<tempfile::NamedTempFile, UpdateError> {
+) -> Result<PathBuf, UpdateError> {
     require_https(&manifest.url)?;
-    let mut response = agent
-        .get(&manifest.url)
+    let download_dir = install_root.join(".alex").join("downloads");
+    std::fs::create_dir_all(&download_dir)?;
+    let partial = download_dir.join(format!("{}-{}.alex.part", manifest.app_id, manifest.version));
+    let metadata_path = resume_meta_path(&partial);
+    let metadata = std::fs::read(&metadata_path)
+        .ok()
+        .and_then(|bytes| serde_json::from_slice::<ResumeMetadata>(&bytes).ok());
+    let mut offset = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
+    if offset > manifest.size
+        || metadata.as_ref().is_some_and(|m| {
+            m.url != manifest.url || m.expected_size != manifest.size || m.sha256 != manifest.sha256
+        })
+    {
+        let _ = std::fs::remove_file(&partial);
+        let _ = std::fs::remove_file(&metadata_path);
+        offset = 0;
+    }
+    let mut request = agent.get(&manifest.url);
+    if offset > 0 {
+        request = request.header("Range", format!("bytes={offset}-"));
+        if let Some(etag) = metadata.as_ref().and_then(|m| m.etag.as_deref()) {
+            request = request.header("If-Range", etag);
+        }
+    }
+    let mut response = request
         .call()
         .map_err(|error| UpdateError::Transport(error.to_string()))?;
+    let partial_response = response.status().as_u16() == 206;
+    if offset > 0 && !partial_response {
+        offset = 0;
+    }
+    if partial_response {
+        let expected_prefix = format!("bytes {offset}-");
+        let valid_range = response
+            .headers()
+            .get("content-range")
+            .and_then(|v| v.to_str().ok())
+            .is_some_and(|v| v.starts_with(&expected_prefix));
+        if !valid_range {
+            return Err(UpdateError::Transport("server returned an invalid Content-Range".into()));
+        }
+    }
+    let etag = response
+        .headers()
+        .get("etag")
+        .and_then(|v| v.to_str().ok())
+        .map(str::to_owned)
+        .or_else(|| metadata.as_ref().and_then(|m| m.etag.clone()));
+    std::fs::write(
+        &metadata_path,
+        serde_json::to_vec_pretty(&ResumeMetadata {
+            url: manifest.url.clone(),
+            etag,
+            expected_size: manifest.size,
+            sha256: manifest.sha256.clone(),
+        })
+        .map_err(|error| UpdateError::Manifest(error.to_string()))?,
+    )?;
     let mut reader = response
         .body_mut()
         .with_config()
         .limit(MAX_DOWNLOAD_BYTES + 1)
         .reader();
-    let mut output = tempfile::Builder::new()
-        .suffix(".alex")
-        .tempfile_in(install_root)?;
+    let mut output = OpenOptions::new()
+        .create(true)
+        .write(true)
+        .append(offset > 0)
+        .truncate(offset == 0)
+        .open(&partial)?;
     let mut hasher = Sha256::new();
-    let mut size = 0_u64;
+    if offset > 0 {
+        let mut existing = std::fs::File::open(&partial)?;
+        let mut buffer = [0_u8; 64 * 1024];
+        loop {
+            let count = existing.read(&mut buffer)?;
+            if count == 0 { break; }
+            hasher.update(&buffer[..count]);
+        }
+    }
+    let mut size = offset;
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let count = reader
@@ -269,7 +350,12 @@ fn download_package(
             "download size or SHA-256 mismatch".into(),
         ));
     }
-    Ok(output)
+    output.flush()?;
+    Ok(partial)
+}
+
+fn resume_meta_path(partial: &Path) -> PathBuf {
+    partial.with_extension("part.json")
 }
 
 fn validate_manifest(manifest: &UpdateManifest) -> Result<(), UpdateError> {
