@@ -252,8 +252,14 @@ mod windows {
                     HostCommand::CreateWindow(_)
                     | HostCommand::SetWindowBounds(_, _)
                     | HostCommand::SetWindowFullscreen(_, _)
-                    | HostCommand::DestroyWindow(_) => {
-                        eprintln!("alex dev: secondary-window command is only available in the production shell");
+                    | HostCommand::DestroyWindow(_)
+                    | HostCommand::SetApplicationMenu(_)
+                    | HostCommand::SetContextMenu(_)
+                    | HostCommand::CreateTray(_, _, _)
+                    | HostCommand::DestroyTray(_)
+                    | HostCommand::RegisterShortcut(_)
+                    | HostCommand::UnregisterShortcut(_) => {
+                        eprintln!("alex dev: native shell command is unavailable in the development host");
                     }
                 },
                 Event::WindowEvent { event, .. } => match event {

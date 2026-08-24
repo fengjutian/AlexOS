@@ -148,6 +148,23 @@ pub mod windows {
 
     impl NativeHost for WindowHost {
         fn execute(&self, command: HostCommand) -> Result<(), NativeError> {
+            if !self.secondary_windows
+                && matches!(
+                    &command,
+                    HostCommand::CreateWindow(_)
+                        | HostCommand::SetWindowBounds(_, _)
+                        | HostCommand::SetWindowFullscreen(_, _)
+                        | HostCommand::DestroyWindow(_)
+                        | HostCommand::SetApplicationMenu(_)
+                        | HostCommand::SetContextMenu(_)
+                        | HostCommand::CreateTray(_, _, _)
+                        | HostCommand::DestroyTray(_)
+                        | HostCommand::RegisterShortcut(_)
+                        | HostCommand::UnregisterShortcut(_)
+                )
+            {
+                return Err(NativeError::Unsupported);
+            }
             self.proxy
                 .send_event(UserEvent::Host(command))
                 .map_err(|_| NativeError::Failed("window event loop is closed".into()))
@@ -533,16 +550,20 @@ pub mod windows {
                             serde_json::json!({ "x": position.x, "y": position.y }),
                         )
                     }
+                    WindowEvent::MouseInput {
+                        state: tao::event::ElementState::Pressed,
+                        button: tao::event::MouseButton::Right,
+                        ..
+                    } if window_id == window.id() => {
+                        if let Some(menu) = &context_menu {
+                            unsafe {
+                                menu.show_context_menu_for_hwnd(window.hwnd() as isize, None);
+                            }
+                        }
+                    }
                     _ => {}
                 },
                 _ => {}
-            }
-            if let Some(menu) = &context_menu {
-                if let Event::WindowEvent { window_id, event: WindowEvent::MouseInput { state: tao::event::ElementState::Pressed, button: tao::event::MouseButton::Right, .. }, .. } = &event {
-                    if *window_id == window.id() {
-                        unsafe { menu.show_context_menu_for_hwnd(window.hwnd() as isize, None); }
-                    }
-                }
             }
             while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
                 router.event_bus().deliver("menu.clicked", &serde_json::json!({ "id": event.id().0 }));
