@@ -2297,6 +2297,12 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
     let payload = result.result.unwrap();
     let available = payload["capabilities"].as_array().unwrap().clone();
     let experimental = payload["experimental"].as_array().unwrap().clone();
+    assert_eq!(payload["platform"]["os"], "windows");
+    assert_eq!(payload["platform"]["atomicReplace"], true);
+    assert!(payload["platform"]["processTreeLimits"].is_boolean());
+    assert!(payload["platform"]["filesystemSandbox"].is_boolean());
+    assert!(payload["platform"]["networkSandbox"].is_boolean());
+    assert!(payload["platform"]["oci"].is_boolean());
     let available_names: Vec<&str> = available.iter().map(|v| v.as_str().unwrap()).collect();
     let experimental_names: Vec<&str> = experimental.iter().map(|v| v.as_str().unwrap()).collect();
     for required in [

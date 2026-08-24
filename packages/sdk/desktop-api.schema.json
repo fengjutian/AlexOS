@@ -1471,11 +1471,25 @@
             "items": {
               "type": "string"
             }
+          },
+          "platform": {
+            "type": "object",
+            "properties": {
+              "os": { "enum": ["windows", "macos", "linux", "other"] },
+              "atomicReplace": { "type": "boolean" },
+              "processTreeLimits": { "type": "boolean" },
+              "filesystemSandbox": { "type": "boolean" },
+              "networkSandbox": { "type": "boolean" },
+              "oci": { "type": "boolean" }
+            },
+            "required": ["os", "atomicReplace", "processTreeLimits", "filesystemSandbox", "networkSandbox", "oci"],
+            "additionalProperties": false
           }
         },
         "required": [
           "capabilities",
-          "experimental"
+          "experimental",
+          "platform"
         ],
         "additionalProperties": false
       }

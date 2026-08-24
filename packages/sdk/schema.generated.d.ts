@@ -128,7 +128,7 @@ export interface AlexMethodMap {
   "clipboard.readText": { params: Empty; result: { "text": string } };
   "clipboard.writeText": { params: { "text": string }; result: { "written": boolean } };
   "system.info": { params: Empty; result: { [key: string]: unknown } };
-  "system.capabilities": { params: Empty; result: { "capabilities": Array<string>; "experimental": Array<string> } };
+  "system.capabilities": { params: Empty; result: { "capabilities": Array<string>; "experimental": Array<string>; "platform": { "os": "windows" | "macos" | "linux" | "other"; "atomicReplace": boolean; "processTreeLimits": boolean; "filesystemSandbox": boolean; "networkSandbox": boolean; "oci": boolean } } };
   "system.requestPermission": { params: { "permission": string }; result: { "permission": string; "granted": boolean } };
   "system.openExternal": { params: { "url": string }; result: { "opened": boolean } };
   "system.listApps": { params: Empty; result: { "apps": Array<{ [key: string]: unknown }> } };
