@@ -560,3 +560,7 @@ li .actions {
   font-family: "Cascadia Code", "Consolas", monospace;
   word-break: break-all;
 }
+
+.storage-size { color: #5d5d63; font-size: .75rem; }
+.update-task { display: grid; grid-template-columns: 1fr 180px auto; gap: .75rem; align-items: center; }
+.update-task small { grid-column: 1 / -1; }

@@ -23,6 +23,8 @@ const packagePathInput = document.querySelector("#package-path");
 const installStatusEl = document.querySelector("#install-status");
 const searchInput = document.querySelector("#app-search");
 const chipButtons = Array.from(document.querySelectorAll(".filter-chips .chip"));
+const updateStatusEl = document.querySelector("#update-status");
+const updateTasksEl = document.querySelector("#update-tasks");
 
 // Client-side cache of the most recent `system.listApps` result.
 // The list is re-rendered (not re-fetched) whenever the search box
@@ -158,6 +160,11 @@ function makeAppRow(app) {
     sig.title = "No signature metadata in the package.";
   }
   const runtime = makeRuntimeBadge(app.runtime);
+  const storage = document.createElement("span");
+  storage.className = "storage-size";
+  const bytes = (app.storage?.installBytes ?? 0) + (app.storage?.dataBytes ?? 0) + (app.storage?.cacheBytes ?? 0);
+  storage.textContent = formatBytes(bytes);
+  storage.title = `Install ${formatBytes(app.storage?.installBytes ?? 0)}, data ${formatBytes(app.storage?.dataBytes ?? 0)}, cache ${formatBytes(app.storage?.cacheBytes ?? 0)}`;
   const actions = document.createElement("span");
   actions.className = "actions";
   const uninstallBtn = document.createElement("button");
@@ -170,8 +177,48 @@ function makeAppRow(app) {
   permBtn.textContent = "Permissions…";
   permBtn.addEventListener("click", () => togglePermissions(li, app, permBtn));
   actions.append(permBtn, uninstallBtn);
-  li.append(name, id, version, sig, runtime, actions);
+  li.append(name, id, version, sig, runtime, storage, actions);
   return li;
+}
+
+function formatBytes(value) {
+  if (value < 1024) return `${value} B`;
+  if (value < 1024 ** 2) return `${(value / 1024).toFixed(1)} KiB`;
+  if (value < 1024 ** 3) return `${(value / 1024 ** 2).toFixed(1)} MiB`;
+  return `${(value / 1024 ** 3).toFixed(1)} GiB`;
+}
+
+async function loadUpdateTasks() {
+  try {
+    const result = await window.alex.invoke("system.updateTasks", {});
+    const tasks = result?.tasks ?? [];
+    updateStatusEl.textContent = tasks.length ? `${tasks.length} update task(s).` : "No update tasks.";
+    updateTasksEl.replaceChildren(...tasks.map(makeUpdateTaskRow));
+  } catch (error) {
+    updateStatusEl.textContent = `Failed to load update tasks: ${error?.message ?? error}`;
+    updateStatusEl.classList.add("error");
+  }
+}
+
+function makeUpdateTaskRow(task) {
+  const row = document.createElement("li");
+  row.className = "update-task";
+  const label = document.createElement("span");
+  label.textContent = `${task.appId} · ${task.stage} · ${task.progress}%`;
+  const progress = document.createElement("progress");
+  progress.max = 100; progress.value = task.progress;
+  const action = document.createElement("button");
+  if (["failed", "cancelled"].includes(task.state)) {
+    action.textContent = "Retry";
+    action.onclick = async () => { await window.alex.invoke("system.updateRetry", { taskId: task.id }); await loadUpdateTasks(); };
+  } else {
+    action.textContent = "Cancel";
+    action.disabled = task.state === "completed";
+    action.onclick = async () => { await window.alex.invoke("system.updateCancel", { taskId: task.id }); await loadUpdateTasks(); };
+  }
+  row.append(label, progress, action);
+  if (task.error) { const error = document.createElement("small"); error.className = "error"; error.textContent = task.error; row.append(error); }
+  return row;
 }
 
 function makeExtRow(ext) {
@@ -657,6 +704,7 @@ refreshBtn.addEventListener("click", () => {
   loadTrustStore();
   loadAuditLog();
   loadHostInfo();
+  loadUpdateTasks();
 });
 
 // Search box: case-insensitive substring match against name/id/version.
@@ -803,5 +851,6 @@ async function waitForBridge() {
     loadTrustStore(),
     loadAuditLog(),
     loadHostInfo(),
+    loadUpdateTasks(),
   ]);
 })();
