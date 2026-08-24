@@ -94,6 +94,7 @@ impl CancellationToken {
 }
 
 use std::sync::Mutex;
+mod dispatch;
 
 impl ApiRouter {
     pub fn new(package_root: PathBuf, manifest: AppManifest) -> Self {
@@ -330,7 +331,8 @@ impl ApiRouter {
     }
 
     fn dispatch_inner(&self, request: &Request, window_id: Option<u64>) -> ApiResult {
-        match request.method.as_str() {
+        dispatch::route(self, request, window_id)
+        /* Legacy inline route table moved to router/dispatch.rs.
             // ---- filesystem ------------------------------------------------
             "filesystem.readText" => self.read_text(&request.params),
             "filesystem.writeText" => self.write_text(&request.params),
@@ -426,7 +428,7 @@ impl ApiRouter {
             "net.fetch" => self.net_fetch(&request.params),
             // ---- fallback -------------------------------------------------
             _ => Err(("METHOD_NOT_FOUND", "unknown Alex API method".to_owned())),
-        }
+        */
     }
 
     // ------------------------------------------------------------------
