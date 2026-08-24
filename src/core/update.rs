@@ -248,7 +248,10 @@ fn download_package(
     require_https(&manifest.url)?;
     let download_dir = install_root.join(".alex").join("downloads");
     std::fs::create_dir_all(&download_dir)?;
-    let partial = download_dir.join(format!("{}-{}.alex.part", manifest.app_id, manifest.version));
+    let partial = download_dir.join(format!(
+        "{}-{}.alex.part",
+        manifest.app_id, manifest.version
+    ));
     let metadata_path = resume_meta_path(&partial);
     let metadata = std::fs::read(&metadata_path)
         .ok()
@@ -289,7 +292,9 @@ fn download_package(
             .and_then(|v| v.to_str().ok())
             .is_some_and(|v| v.starts_with(&expected_prefix));
         if !valid_range {
-            return Err(UpdateError::Transport("server returned an invalid Content-Range".into()));
+            return Err(UpdateError::Transport(
+                "server returned an invalid Content-Range".into(),
+            ));
         }
     }
     let etag = response
@@ -325,7 +330,9 @@ fn download_package(
         let mut buffer = [0_u8; 64 * 1024];
         loop {
             let count = existing.read(&mut buffer)?;
-            if count == 0 { break; }
+            if count == 0 {
+                break;
+            }
             hasher.update(&buffer[..count]);
         }
     }
@@ -368,7 +375,9 @@ fn file_sha256(path: &Path) -> Result<String, UpdateError> {
     let mut buffer = [0_u8; 64 * 1024];
     loop {
         let count = file.read(&mut buffer)?;
-        if count == 0 { break; }
+        if count == 0 {
+            break;
+        }
         hasher.update(&buffer[..count]);
     }
     Ok(format!("{:x}", hasher.finalize()))
