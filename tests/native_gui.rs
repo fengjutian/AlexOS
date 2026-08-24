@@ -11,20 +11,31 @@ fn production_shell_creates_a_real_top_level_window() {
         time::{Duration, Instant},
     };
     use windows::{
-        Win32::{Foundation::{BOOL, HWND, LPARAM}, UI::WindowsAndMessaging::{EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE}},
+        Win32::{
+            Foundation::{HWND, LPARAM},
+            UI::WindowsAndMessaging::{
+                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
+            },
+        },
+        core::BOOL,
     };
 
     let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/desktop-api");
     let mut child = Command::new(env!("CARGO_BIN_EXE_alex"))
-        .arg("run")
+        .arg("shell")
         .arg(package)
         .spawn()
         .expect("launch production shell");
-    struct Search { pid: u32, hwnd: Option<HWND> }
+    struct Search {
+        pid: u32,
+        hwnd: Option<HWND>,
+    }
     unsafe extern "system" fn find_owned_window(hwnd: HWND, data: LPARAM) -> BOOL {
         let search = unsafe { &mut *(data.0 as *mut Search) };
         let mut pid = 0;
-        unsafe { GetWindowThreadProcessId(hwnd, Some(&mut pid)); }
+        unsafe {
+            GetWindowThreadProcessId(hwnd, Some(&mut pid));
+        }
         if pid == search.pid && unsafe { IsWindowVisible(hwnd) }.as_bool() {
             search.hwnd = Some(hwnd);
             return BOOL(0);
@@ -33,8 +44,19 @@ fn production_shell_creates_a_real_top_level_window() {
     }
     let deadline = Instant::now() + Duration::from_secs(15);
     let hwnd = loop {
-        let mut search = Search { pid: child.id(), hwnd: None };
-        let _ = unsafe { EnumWindows(Some(find_owned_window), LPARAM((&mut search as *mut Search) as isize)) };
+        if let Some(status) = child.try_wait().expect("poll shell process") {
+            panic!("Alex shell exited before creating a window: {status}");
+        }
+        let mut search = Search {
+            pid: child.id(),
+            hwnd: None,
+        };
+        let _ = unsafe {
+            EnumWindows(
+                Some(find_owned_window),
+                LPARAM((&mut search as *mut Search) as isize),
+            )
+        };
         if let Some(hwnd) = search.hwnd {
             break hwnd;
         }
