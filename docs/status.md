@@ -32,9 +32,12 @@ Daemon 现在持有一个共享的 `LocalAppManager/RuntimeSupervisor`。`start/
 实时 runtime snapshot，`logs` 返回 backend 日志尾部（最多 10,000 行）。没有 backend、应用未安装
 或启动失败时会明确报错，不会虚假成功。
 
-Daemon 启动时尚未根据已保存的 desired state 自动恢复进程，CLI 也尚未提供这些命令的 Named Pipe
-客户端。Named Pipe 当前按连接顺序处理，当前用户 ACL 加固、客户端身份校验、并发连接管理和可控
-shutdown 仍待开发。
+CLI 已提供 `alex start/stop/restart/status/logs <app-id>` Named Pipe 客户端，包含 3 秒有界连接
+重试、1 MiB 响应限制、请求 ID 校验和 Daemon 错误退出码传播。现有 `alex run <path>` 继续作为
+直接运行开发目录的兼容命令。
+
+Daemon 启动时尚未根据已保存的 desired state 自动恢复进程。Named Pipe 当前按连接顺序处理，
+当前用户 ACL 加固、客户端身份校验、并发连接管理和可控 shutdown 仍待开发。
 
 当前运行链路为：
 

@@ -20,7 +20,7 @@ nav_order: 4
 - 当前用户 ACL、客户端身份校验和并发连接管理；
 - [已接线] Daemon 持有共享 `LocalAppManager/RuntimeSupervisor`，生命周期命令驱动真实进程；
 - Daemon 启动时按 desired state 恢复应用；
-- CLI Named Pipe 客户端与 `alex start/stop/restart/status/logs`；
+- [已完成] CLI Named Pipe 客户端与 `alex start/stop/restart/status/logs`；
 - 服务 observed state 和恢复信息持久化；
 - `alex start/stop/restart/status/logs`；
 - CLI、Shell 和 Manager 共享同一个 Runtime 状态；

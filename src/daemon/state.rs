@@ -19,12 +19,27 @@ pub enum DesiredState {
     Stopped,
 }
 
+#[derive(Debug, Clone, Copy, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "lowercase")]
+pub enum ObservedState {
+    Starting,
+    Running,
+    Ready,
+    Crashed,
+    #[default]
+    Stopped,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct AppControlState {
     pub app_id: String,
     pub desired: DesiredState,
     pub updated_at_ms: u64,
+    #[serde(default)]
+    pub observed: ObservedState,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -129,8 +144,28 @@ impl DaemonStateStore {
                 app_id: app_id.into(),
                 desired,
                 updated_at_ms,
+                observed: ObservedState::Stopped,
+                last_error: None,
             },
         );
+        self.save(&state)?;
+        Ok(state)
+    }
+
+    pub fn set_observed(
+        &self,
+        app_id: &str,
+        observed: ObservedState,
+        last_error: Option<String>,
+        updated_at_ms: u64,
+    ) -> Result<DaemonState, DaemonStateError> {
+        let mut state = self.load()?;
+        let app = state.applications.get_mut(app_id).ok_or_else(|| {
+            DaemonStateError::Invalid(format!("application {app_id} has no desired state"))
+        })?;
+        app.observed = observed;
+        app.last_error = last_error;
+        app.updated_at_ms = updated_at_ms;
         self.save(&state)?;
         Ok(state)
     }
@@ -163,6 +198,10 @@ mod tests {
             DesiredState::Running
         );
         assert_eq!(reopened.applications["com.example.agent"].updated_at_ms, 42);
+        assert_eq!(
+            reopened.applications["com.example.agent"].observed,
+            ObservedState::Stopped
+        );
     }
 
     #[test]
@@ -174,5 +213,20 @@ mod tests {
             DaemonStateStore::new(path).load(),
             Err(DaemonStateError::Invalid(_))
         ));
+    }
+
+    #[test]
+    fn legacy_v1_state_defaults_observed_to_stopped() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("daemon-state.json");
+        fs::write(
+            &path,
+            br#"{"schemaVersion":1,"applications":{"com.example.agent":{"appId":"com.example.agent","desired":"running","updatedAtMs":7}}}"#,
+        )
+        .unwrap();
+        let state = DaemonStateStore::new(path).load().unwrap();
+        let app = &state.applications["com.example.agent"];
+        assert_eq!(app.observed, ObservedState::Stopped);
+        assert_eq!(app.last_error, None);
     }
 }

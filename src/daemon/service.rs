@@ -6,9 +6,23 @@ use std::{
 use serde_json::json;
 
 use super::{
-    ControlCommand, ControlRequest, ControlResponse, DaemonStateStore, DesiredState,
+    ControlCommand, ControlRequest, ControlResponse, DaemonStateStore, DesiredState, ObservedState,
     PROTOCOL_VERSION,
 };
+
+#[derive(Debug, Clone, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryFailure {
+    pub app_id: String,
+    pub error: String,
+}
+
+#[derive(Debug, Clone, Default, serde::Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct RecoveryReport {
+    pub recovered: Vec<String>,
+    pub failed: Vec<RecoveryFailure>,
+}
 
 #[derive(Clone)]
 pub struct DaemonService {
@@ -62,6 +76,70 @@ impl DaemonService {
         }
     }
 
+    /// Converge persisted desired state after a daemon restart. A failed app
+    /// remains desired=running so a future explicit start or daemon restart can
+    /// retry it, while observed=crashed and lastError make the failure visible.
+    pub fn recover_startup(&self) -> RecoveryReport {
+        let mut report = RecoveryReport::default();
+        let Some(manager) = &self.manager else {
+            return report;
+        };
+        let state = match self.state.load() {
+            Ok(state) => state,
+            Err(error) => {
+                report.failed.push(RecoveryFailure {
+                    app_id: "*".into(),
+                    error: error.to_string(),
+                });
+                return report;
+            }
+        };
+        for app in state
+            .applications
+            .values()
+            .filter(|app| app.desired == DesiredState::Running)
+        {
+            let result = manager
+                .get_app(&app.app_id)
+                .map_err(|error| error.to_string())
+                .and_then(|_| {
+                    manager
+                        .launch(&app.app_id)
+                        .map_err(|error| error.to_string())
+                });
+            match result {
+                Ok(status) => {
+                    if let Err(error) = self.record_status(&app.app_id, &status) {
+                        report.failed.push(RecoveryFailure {
+                            app_id: app.app_id.clone(),
+                            error,
+                        });
+                    } else {
+                        report.recovered.push(app.app_id.clone());
+                    }
+                }
+                Err(error) => {
+                    let persistence_error = self
+                        .state
+                        .set_observed(
+                            &app.app_id,
+                            ObservedState::Crashed,
+                            Some(error.clone()),
+                            now_ms().unwrap_or_default(),
+                        )
+                        .err()
+                        .map(|state_error| format!("; state update failed: {state_error}"))
+                        .unwrap_or_default();
+                    report.failed.push(RecoveryFailure {
+                        app_id: app.app_id.clone(),
+                        error: format!("{error}{persistence_error}"),
+                    });
+                }
+            }
+        }
+        report
+    }
+
     fn list(&self) -> Result<serde_json::Value, String> {
         if let Some(manager) = &self.manager {
             return manager
@@ -84,6 +162,7 @@ impl DaemonService {
             manager.get_app(app_id).map_err(|error| error.to_string())?;
             let status = manager.launch(app_id).map_err(|error| error.to_string())?;
             self.set_desired(app_id, DesiredState::Running)?;
+            self.record_status(app_id, &status)?;
             return Ok(json!(status));
         }
         self.set_desired(app_id, DesiredState::Running)
@@ -94,6 +173,7 @@ impl DaemonService {
             manager.get_app(app_id).map_err(|error| error.to_string())?;
             let status = manager.stop(app_id).map_err(|error| error.to_string())?;
             self.set_desired(app_id, DesiredState::Stopped)?;
+            self.record_status(app_id, &status)?;
             return Ok(json!(status));
         }
         self.set_desired(app_id, DesiredState::Stopped)
@@ -105,6 +185,7 @@ impl DaemonService {
             manager.stop(app_id).map_err(|error| error.to_string())?;
             let status = manager.launch(app_id).map_err(|error| error.to_string())?;
             self.set_desired(app_id, DesiredState::Running)?;
+            self.record_status(app_id, &status)?;
             return Ok(json!(status));
         }
         self.set_desired(app_id, DesiredState::Running)
@@ -164,6 +245,29 @@ impl DaemonService {
             .map_err(|error| error.to_string())?;
         Ok(json!(state.applications.get(app_id)))
     }
+
+    fn record_status(
+        &self,
+        app_id: &str,
+        status: &crate::runtime::RuntimeStatus,
+    ) -> Result<(), String> {
+        let observed = match status.state {
+            crate::runtime::RuntimeState::Starting => ObservedState::Starting,
+            crate::runtime::RuntimeState::Running => ObservedState::Running,
+            crate::runtime::RuntimeState::Ready => ObservedState::Ready,
+            crate::runtime::RuntimeState::Crashed => ObservedState::Crashed,
+            crate::runtime::RuntimeState::Stopped => ObservedState::Stopped,
+        };
+        self.state
+            .set_observed(
+                app_id,
+                observed,
+                status.last_error.clone(),
+                now_ms().unwrap_or_default(),
+            )
+            .map(|_| ())
+            .map_err(|error| error.to_string())
+    }
 }
 
 fn now_ms() -> Option<u64> {
@@ -213,5 +317,33 @@ mod tests {
         });
         assert!(!response.ok);
         assert!(store.load().unwrap().applications.is_empty());
+    }
+
+    #[test]
+    fn recovery_records_an_uninstalled_desired_app_as_crashed() {
+        let temp = tempfile::tempdir().unwrap();
+        let install_root = temp.path().join("apps");
+        std::fs::create_dir_all(&install_root).unwrap();
+        let store = DaemonStateStore::new(temp.path().join("state.json"));
+        store
+            .set_desired("com.example.missing", DesiredState::Running, 1)
+            .unwrap();
+        let manager = Arc::new(
+            crate::manager::LocalAppManager::open_with(
+                &install_root,
+                temp.path().join("permissions"),
+            )
+            .unwrap(),
+        );
+        let report = DaemonService::new(store.clone())
+            .with_manager(manager)
+            .recover_startup();
+        assert!(report.recovered.is_empty());
+        assert_eq!(report.failed.len(), 1);
+        assert_eq!(report.failed[0].app_id, "com.example.missing");
+        let app = &store.load().unwrap().applications["com.example.missing"];
+        assert_eq!(app.desired, DesiredState::Running);
+        assert_eq!(app.observed, ObservedState::Crashed);
+        assert!(app.last_error.as_deref().unwrap().contains("not found"));
     }
 }

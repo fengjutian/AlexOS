@@ -51,6 +51,40 @@ enum Commands {
     Inspect { path: PathBuf },
     /// Start the application's managed backend runtime.
     Run { path: PathBuf },
+    /// Start an installed application through the Alex Runtime daemon.
+    Start {
+        id: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
+    /// Stop an installed application through the Alex Runtime daemon.
+    Stop {
+        id: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
+    /// Restart an installed application through the Alex Runtime daemon.
+    Restart {
+        id: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
+    /// Query an installed application's live daemon status.
+    Status {
+        id: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
+    /// Read the tail of an installed application's service logs.
+    Logs {
+        id: String,
+        #[arg(long)]
+        service: Option<String>,
+        #[arg(long, default_value_t = 200)]
+        limit: u32,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
     /// Open the application frontend in the native WebView shell.
     Shell { path: PathBuf },
     /// Run the application in development mode with file watching and hot reload.
@@ -435,6 +469,31 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 thread::sleep(Duration::from_millis(100));
             }
         }
+        Commands::Start { id, pipe } => {
+            daemon_command(&pipe, alex::daemon::ControlCommand::Start { app_id: id })?
+        }
+        Commands::Stop { id, pipe } => {
+            daemon_command(&pipe, alex::daemon::ControlCommand::Stop { app_id: id })?
+        }
+        Commands::Restart { id, pipe } => {
+            daemon_command(&pipe, alex::daemon::ControlCommand::Restart { app_id: id })?
+        }
+        Commands::Status { id, pipe } => {
+            daemon_command(&pipe, alex::daemon::ControlCommand::Status { app_id: id })?
+        }
+        Commands::Logs {
+            id,
+            service,
+            limit,
+            pipe,
+        } => daemon_command(
+            &pipe,
+            alex::daemon::ControlCommand::Logs {
+                app_id: id,
+                service,
+                limit,
+            },
+        )?,
         Commands::Shell { path } => {
             require_webview2()?;
             let app = load_app(&path)?;
@@ -814,6 +873,38 @@ fn run_doctor() -> Result<(), Box<dyn std::error::Error>> {
         }
     }
 
+    Ok(())
+}
+
+fn daemon_command(
+    pipe: &str,
+    command: alex::daemon::ControlCommand,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let sequence = std::time::SystemTime::now()
+        .duration_since(std::time::UNIX_EPOCH)?
+        .as_nanos();
+    let request = alex::daemon::ControlRequest {
+        protocol: alex::daemon::PROTOCOL_VERSION,
+        id: format!("cli-{}-{sequence}", std::process::id()),
+        command,
+    };
+    let response = alex::daemon::send_request(pipe, &request)?;
+    if response.id != request.id {
+        return Err(format!(
+            "alexd response id mismatch: expected {}, got {}",
+            request.id, response.id
+        )
+        .into());
+    }
+    if !response.ok {
+        return Err(response
+            .error
+            .unwrap_or_else(|| "alexd request failed without an error".into())
+            .into());
+    }
+    if let Some(result) = response.result {
+        println!("{}", serde_json::to_string_pretty(&result)?);
+    }
     Ok(())
 }
 
