@@ -6,6 +6,10 @@ nav_order: 3
 
 # Alex OS 实现状态
 
+> 产品已经重新定位为 **Alex Runtime / AI Application Runtime Infrastructure**。正式产品范围见
+> [`product-requirements.md`](./product-requirements.md)。当前代码仍是旧架构原型：没有常驻
+> `alexd`、多服务编排、受管 Runtime 和 backend 级权限强制，因此不能宣称已经完成 Runtime MVP。
+
 > 本文档是 Alex OS 当前代码能够支持的行为的**事实性描述**。任何"已实现"都对应 `src/` 下的
 > 具体路径。未实现 / 计划中的内容在 [`roadmap.md`](./roadmap.md) 中。
 >

@@ -4,14 +4,39 @@ title: 技术架构
 nav_order: 2
 ---
 
-# Alex OS 技术架构
+# Alex Runtime 技术架构
 
 > 本文档是 Alex OS 的**顶层架构总览**，目标是让读者在 15 分钟内建立"组件如何拼接、数据如何流动"的心智模型。
 > 实现细节、当前状态、路线图分别见 [`status.md`](./status.md)、[`roadmap.md`](./roadmap.md) 及各专题文档。
 >
-> 更新基线：Alex OS `0.1.0`，Windows + WebView2 + Node.js。
+> 产品目标架构以 [`product-requirements.md`](./product-requirements.md) 为准。下文主要记录当前
+> `0.1.0` Windows + WebView2 + 单 Node Backend 原型，不能视为最终产品架构。
 
-## 1. 设计目标
+## 0. 目标架构与迁移方向
+
+最终控制面由常驻 `alexd` 拥有。CLI、Shell 和 App Manager 都是客户端：
+
+```text
+CLI / Shell / App Manager
+          │ local RPC
+          ▼
+         alexd
+  ┌────────────────────┐
+  │ ApplicationManager │
+  │ ServiceOrchestrator│
+  │ RuntimeManager     │
+  │ ProcessManager     │
+  │ PermissionManager  │
+  └────────────────────┘
+       │    │     │
+     Node Python Native
+```
+
+当前 `RuntimeSupervisor` 仍由调用进程持有，Manifest 仍只有单 backend。近期迁移顺序是：先建立
+Daemon 控制面和持久状态，再引入多服务 Manifest，随后接入受管 Node/Python。Shell 不再直接
+拥有应用进程生命周期。
+
+## 1. 当前原型的设计目标
 
 1. **应用之间完全隔离**：每个 App 跑在独立进程、独立数据目录、独立端口上。
 2. **统一的安全决策点**：所有 Native 能力（文件系统、剪贴板、网络、外链、进程）必经 Rust host 的 `ApiRouter::dispatch`，权限和审计集中在这一个函数。

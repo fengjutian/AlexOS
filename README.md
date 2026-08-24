@@ -1,14 +1,17 @@
-# Alex OS
+# Alex Runtime
 
-Alex OS 是一个实验性的 Windows 桌面应用运行平台。当前版本使用 Rust 管理原生窗口、
-WebView2、安全边界和应用生命周期，使用受管理的 Node.js 子进程运行应用后端。
+Alex Runtime 是一个实验性的 AI Application Runtime。目标是让开发者构建一次应用，由统一
+Runtime 在不同平台负责安装、服务编排、进程、运行时、权限、日志、更新和恢复。
 
 项目仍处于 `0.1.0` 原型阶段，不是操作系统内核，也尚未达到生产发布标准。当前准确定位是：
 
-> 面向 Windows 桌面应用的 WebView + Node Runtime 平台原型。
+> 当前代码仍是 Windows WebView + 单 Node Backend 原型，尚未达到正式 Runtime MVP。
+
+正式产品范围和阶段目标见
+[docs/product-requirements.md](docs/product-requirements.md)。该文档是产品边界的统一来源。
 
 详细的实现状态、限制和未开发功能见
-[docs/status-and-roadmap.md](docs/status-and-roadmap.md)。
+[docs/status.md](docs/status.md) 和 [docs/roadmap.md](docs/roadmap.md)。
 应用管理 UI 的产品范围、页面结构和技术方案见
 [docs/app-manager-ui-design.md](docs/app-manager-ui-design.md)。
 Plugin → Host 的反向 IPC 协议见

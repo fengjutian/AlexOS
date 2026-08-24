@@ -6,6 +6,44 @@ nav_order: 4
 
 # Alex OS 路线图
 
+> 本路线图已按 [`product-requirements.md`](./product-requirements.md) 重新排序。近期唯一主线是
+> `Application Package + Process Manager + Runtime Manager + Permission Manager`；Native Shell、
+> macOS GUI、完整 OCI、Model、MCP 和 Registry 延后。
+
+## P0：Alex Runtime MVP
+
+### 0.1 Runtime Daemon 与控制面
+
+- 常驻 `alexd`；
+- Windows Named Pipe 本地认证协议；
+- 应用 desired state、服务状态和恢复信息持久化；
+- `alex start/stop/restart/status/logs`；
+- CLI、Shell 和 Manager 共享同一个 Runtime 状态；
+- Daemon 重启恢复与孤儿进程处理。
+
+### 0.2 Manifest v2 与服务编排
+
+- `app.yaml` 与现有 Manifest v1 兼容迁移；
+- 多服务、依赖 DAG、拓扑启动和反向停止；
+- 每服务 health、restart、logs、env、port 和 resources；
+- 无 frontend 的后台/Agent 应用。
+
+### 0.3 受管 Runtime
+
+- Node/Python Runtime Provider；
+- 版本解析、下载、签名/哈希校验、缓存和回收；
+- 应用默认不依赖用户 PATH；
+- 离线 Runtime 包和架构匹配。
+
+### 0.4 Backend 安全边界
+
+- Restricted Token、Job Object、ACL 和可执行文件白名单组合；
+- backend 文件、进程和网络策略强制执行；
+- capabilities 诚实报告不可用边界；
+- 权限撤销与审计覆盖实际服务进程。
+
+以下旧 P0/P1/P2 内容保留为历史细分任务；若与上述顺序冲突，以上述 Runtime MVP 为准。
+
 > 本文档只描述**未开发**的功能和未来方向。当前代码已实现的能力在 [`status.md`](./status.md) 中。
 > "已实现"和"待开发"混在一起会让文档快速漂移到不可信——读者无法分辨哪句话是事实、哪句是意图。
 >
