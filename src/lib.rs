@@ -13,6 +13,7 @@ pub mod runtime;
 pub mod webview;
 
 pub use api::{authorization, ipc, permission, permission_shim};
+pub use core::manifest_v2;
 pub use core::{manager, manifest, package, plugin, trust, update};
 pub use data::{file_token, storage};
 pub use runtime::{event_bus, menu_tray, net, process, proxy, watcher, window_manager, windows};

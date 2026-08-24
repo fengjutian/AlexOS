@@ -2,6 +2,7 @@
 
 pub mod manager;
 pub mod manifest;
+pub mod manifest_v2;
 pub mod package;
 pub mod plugin;
 pub mod trust;

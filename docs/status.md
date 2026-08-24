@@ -87,11 +87,18 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - 权限声明；
 - 未知 Manifest 字段拒绝；
 - 入口路径逃逸保护。
+- 独立的 Manifest v2 `app.yaml` 加载器和严格校验模型；
+- v2 可声明可选 frontend、Node/Python Runtime 要求、多个 Node/Python/Native service、
+  `command/args/dependsOn/env/port/health/restart`、storage 和 permissions；
+- v2 会拒绝无效 schema 版本、App ID、语义版本、服务名、包外路径、缺失 Runtime 要求、
+  不存在的依赖和依赖环；
+- v2 可生成稳定的拓扑启动顺序和反向停止顺序。
 
 限制：
 
-- 只有 `app` 隐式类型，没有 `plugin`、`service` 类型；
-- 只有 Node Runtime；
+- 当前打包、安装、Daemon 和 `RuntimeSupervisor` 仍消费 Manifest v1；v2 尚未进入真实运行链路；
+- v2 的 Python/Native 仅完成声明和校验，尚无对应 Runtime Provider；
+- 多服务尚未实际启动、健康检查、回滚或聚合状态；
 - 没有图标、作者、许可证、最小 Alex 版本和平台条件；
 - 没有 Manifest Schema 文件或自动代码生成。
 
