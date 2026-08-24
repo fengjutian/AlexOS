@@ -30,8 +30,8 @@ use std::{collections::HashSet, io::Read, time::Duration};
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
-use url::Url;
 use ureq::ResponseExt;
+use url::Url;
 
 use crate::api::permission::Permission;
 
@@ -137,7 +137,9 @@ fn run_fetch(
         .into();
     let method = ureq::http::Method::from_bytes(method.as_bytes())
         .map_err(|error| NetError::InvalidUrl(error.to_string()))?;
-    let mut request = ureq::http::Request::builder().method(method).uri(url.as_str());
+    let mut request = ureq::http::Request::builder()
+        .method(method)
+        .uri(url.as_str());
     if let Some(headers_value) = &spec.headers {
         if let Some(map) = headers_value.as_object() {
             for (key, value) in map {
@@ -158,10 +160,12 @@ fn run_fetch(
     let headers = response
         .headers()
         .iter()
-        .filter_map(|(name, value)| value.to_str().ok().map(|value| FetchHeader {
-            name: name.as_str().to_ascii_lowercase(),
-            value: value.to_owned(),
-        }))
+        .filter_map(|(name, value)| {
+            value.to_str().ok().map(|value| FetchHeader {
+                name: name.as_str().to_ascii_lowercase(),
+                value: value.to_owned(),
+            })
+        })
         .collect();
     let mut body = Vec::new();
     response
@@ -170,7 +174,9 @@ fn run_fetch(
         .take(max_bytes.saturating_add(1) as u64)
         .read_to_end(&mut body)
         .map_err(|error| NetError::Io(error.to_string()))?;
-    if body.len() > max_bytes { return Err(NetError::BodyTooLarge); }
+    if body.len() > max_bytes {
+        return Err(NetError::BodyTooLarge);
+    }
     Ok(FetchResult {
         status,
         final_url,

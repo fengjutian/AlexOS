@@ -310,7 +310,9 @@ pub mod windows {
               }})();
             "#));
             Some(tunnel)
-        } else { None };
+        } else {
+            None
+        };
         let endpoint_for_handler = service_endpoint.clone();
         let app_id_for_handler = manifest.id.clone();
         let drop_router = Arc::clone(&router);
@@ -763,7 +765,9 @@ pub mod windows {
                         ShellDevCommand::RestartRuntime => {
                             match router.restart_runtime(Duration::from_secs(2)) {
                                 Some(Ok(())) => eprintln!("alex dev: restarted backend runtime"),
-                                Some(Err(error)) => eprintln!("alex dev: backend restart failed: {error}"),
+                                Some(Err(error)) => {
+                                    eprintln!("alex dev: backend restart failed: {error}")
+                                }
                                 None => {}
                             }
                         }

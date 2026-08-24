@@ -1310,7 +1310,10 @@ impl ApiRouter {
             ]);
         }
         available.push("net.fetch"); */
-        let native_desktop = self.native_host.as_ref().is_some_and(|host| host.supports_secondary_windows());
+        let native_desktop = self
+            .native_host
+            .as_ref()
+            .is_some_and(|host| host.supports_secondary_windows());
         let available = super::capabilities::available(native_desktop);
         let experimental = super::capabilities::experimental();
         Ok(json!({
@@ -1467,11 +1470,17 @@ impl ApiRouter {
         let summary: Vec<_> = apps
             .into_iter()
             .map(|a| {
+                let dirs = crate::runtime::compute_app_dirs(&a.id).ok();
                 json!({
                     "id": a.id,
                     "name": a.name,
                     "version": a.version,
                     "path": a.path.display().to_string(),
+                    "storage": {
+                        "installBytes": directory_size(&a.path),
+                        "dataBytes": dirs.as_ref().map(|d| directory_size(&d.data)).unwrap_or(0),
+                        "cacheBytes": dirs.as_ref().map(|d| directory_size(&d.cache)).unwrap_or(0),
+                    },
                 })
             })
             .collect();
@@ -1480,24 +1489,57 @@ impl ApiRouter {
 
     fn require_update_roots(&self) -> Result<(PathBuf, PathBuf), (&'static str, String)> {
         self.require_plugin()?;
-        self.require_permission(|permission| matches!(permission, Permission::SystemManageApps), "system.manageApps")?;
+        self.require_permission(
+            |permission| matches!(permission, Permission::SystemManageApps),
+            "system.manageApps",
+        )?;
         Ok((
-            self.system_install_root.clone().ok_or(("OPERATION_FAILED", "system install root is not configured".into()))?,
-            self.system_trust_root.clone().ok_or(("OPERATION_FAILED", "system trust root is not configured".into()))?,
+            self.system_install_root.clone().ok_or((
+                "OPERATION_FAILED",
+                "system install root is not configured".into(),
+            ))?,
+            self.system_trust_root.clone().ok_or((
+                "OPERATION_FAILED",
+                "system trust root is not configured".into(),
+            ))?,
         ))
     }
 
     fn system_update_start(&self, params: &Value) -> ApiResult {
         let (install, trust) = self.require_update_roots()?;
-        let id = params.get("id").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or(("INVALID_PARAMS", "missing `id`".into()))?;
-        let url = params.get("manifestUrl").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or(("INVALID_PARAMS", "missing `manifestUrl`".into()))?;
-        let channel = match params.get("channel").and_then(Value::as_str).unwrap_or("stable") {
+        let id = params
+            .get("id")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .ok_or(("INVALID_PARAMS", "missing `id`".into()))?;
+        let url = params
+            .get("manifestUrl")
+            .and_then(Value::as_str)
+            .filter(|v| !v.is_empty())
+            .ok_or(("INVALID_PARAMS", "missing `manifestUrl`".into()))?;
+        let channel = match params
+            .get("channel")
+            .and_then(Value::as_str)
+            .unwrap_or("stable")
+        {
             "stable" => crate::update::UpdateChannel::Stable,
             "beta" => crate::update::UpdateChannel::Beta,
             "dev" => crate::update::UpdateChannel::Dev,
-            _ => return Err(("INVALID_PARAMS", "channel must be stable, beta, or dev".into())),
+            _ => {
+                return Err((
+                    "INVALID_PARAMS",
+                    "channel must be stable, beta, or dev".into(),
+                ));
+            }
         };
-        serde_json::to_value(crate::core::update_tasks::start(id.into(), url.into(), channel, install, trust)).map_err(|e| ("OPERATION_FAILED", e.to_string()))
+        serde_json::to_value(crate::core::update_tasks::start(
+            id.into(),
+            url.into(),
+            channel,
+            install,
+            trust,
+        ))
+        .map_err(|e| ("OPERATION_FAILED", e.to_string()))
     }
 
     fn system_update_tasks(&self) -> ApiResult {
@@ -1507,14 +1549,21 @@ impl ApiRouter {
 
     fn system_update_cancel(&self, params: &Value) -> ApiResult {
         let _ = self.require_update_roots()?;
-        let task_id = params.get("taskId").and_then(Value::as_str).ok_or(("INVALID_PARAMS", "missing `taskId`".into()))?;
+        let task_id = params
+            .get("taskId")
+            .and_then(Value::as_str)
+            .ok_or(("INVALID_PARAMS", "missing `taskId`".into()))?;
         Ok(json!({ "cancelled": crate::core::update_tasks::cancel(task_id) }))
     }
 
     fn system_update_retry(&self, params: &Value) -> ApiResult {
         let _ = self.require_update_roots()?;
-        let task_id = params.get("taskId").and_then(Value::as_str).ok_or(("INVALID_PARAMS", "missing `taskId`".into()))?;
-        let task = crate::core::update_tasks::retry(task_id).ok_or(("INVALID_STATE", "task is not failed or cancelled".into()))?;
+        let task_id = params
+            .get("taskId")
+            .and_then(Value::as_str)
+            .ok_or(("INVALID_PARAMS", "missing `taskId`".into()))?;
+        let task = crate::core::update_tasks::retry(task_id)
+            .ok_or(("INVALID_STATE", "task is not failed or cancelled".into()))?;
         serde_json::to_value(task).map_err(|e| ("OPERATION_FAILED", e.to_string()))
     }
 
@@ -2529,6 +2578,25 @@ impl ApiRouter {
             }
         }
     }
+}
+
+fn directory_size(root: &Path) -> u64 {
+    let Ok(metadata) = fs::symlink_metadata(root) else {
+        return 0;
+    };
+    if metadata.file_type().is_symlink() {
+        return 0;
+    }
+    if metadata.is_file() {
+        return metadata.len();
+    }
+    let Ok(entries) = fs::read_dir(root) else {
+        return 0;
+    };
+    entries
+        .flatten()
+        .map(|entry| directory_size(&entry.path()))
+        .sum()
 }
 
 /// One line of the dev-mode permission call panel. Kept as a

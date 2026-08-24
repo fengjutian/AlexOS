@@ -30,9 +30,12 @@ fn schema() -> &'static Schema {
 pub fn available(native_desktop: bool) -> Vec<String> {
     let schema = schema();
     let mut result = schema.capabilities.always.clone();
-    if native_desktop { result.extend(schema.capabilities.native_desktop.clone()); }
+    if native_desktop {
+        result.extend(schema.capabilities.native_desktop.clone());
+    }
     result
 }
 
-pub fn experimental() -> Vec<String> { schema().capabilities.experimental.clone() }
-
+pub fn experimental() -> Vec<String> {
+    schema().capabilities.experimental.clone()
+}
