@@ -137,7 +137,7 @@ pub fn find_in_install(
 /// `headless=true` 表示从 `alex plugin --headless` 这条命令进来
 /// (没有 WebView),需要预先给 manifest 里声明的 `system.*` 权限
 /// 写一个 `Granted` 决策到 PermissionStore。否则第一次 `system.*`
-/// 调用会因为 `PermissionStore::Prompt` 状态触发 `native::confirm_permission`
+/// 调用会因为 `PermissionStore::Prompt` 状态触发平台权限确认
 /// 弹 rfd 模态框,headless 模式没有 UI 接收点击 → 进程永久阻塞。
 /// WebView 模式 (`headless=false`) 走的是用户主动的 UI 流程,保留
 /// 弹框行为不变。

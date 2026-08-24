@@ -17,7 +17,7 @@ impl ApiRouter {
                 "notification title or body exceeds its limit".into(),
             ));
         }
-        crate::platform::desktop::native()
+        self.desktop_services
             .show_notification(&params.title, &params.body)
             .map(|_| json!({ "shown": true }))
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))

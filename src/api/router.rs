@@ -43,6 +43,7 @@ pub struct ApiRouter {
     runtime: Option<RuntimeHandle>,
     permission_store: Option<PermissionStore>,
     native_host: Option<Arc<dyn NativeHost>>,
+    desktop_services: Arc<dyn DesktopServices>,
     system_install_root: Option<PathBuf>,
     system_trust_root: Option<PathBuf>,
     container_service: Option<Arc<DefaultContainerService>>,
@@ -114,6 +115,7 @@ impl ApiRouter {
             runtime: None,
             permission_store: None,
             native_host: None,
+            desktop_services: Arc::new(crate::platform::desktop::native()),
             system_install_root: None,
             system_trust_root: None,
             container_service: None,
@@ -152,6 +154,11 @@ impl ApiRouter {
 
     pub fn with_native_host(mut self, host: Arc<dyn NativeHost>) -> Self {
         self.native_host = Some(host);
+        self
+    }
+
+    pub fn with_desktop_services(mut self, services: Arc<dyn DesktopServices>) -> Self {
+        self.desktop_services = services;
         self
     }
 
@@ -460,7 +467,8 @@ impl ApiRouter {
                         format_permission_decision("prompt", name, &self.manifest.name)
                     );
                 }
-                let granted = crate::platform::desktop::native()
+                let granted = self
+                    .desktop_services
                     .confirm_permission(&self.manifest.name, name)
                     .unwrap_or(false);
                 let decision = if granted {

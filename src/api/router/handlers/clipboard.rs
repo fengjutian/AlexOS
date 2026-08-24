@@ -10,7 +10,7 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::ClipboardRead),
             "clipboard.read",
         )?;
-        crate::platform::desktop::native()
+        self.desktop_services
             .clipboard_read_text()
             .map(|text| json!({ "text": text }))
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
@@ -25,7 +25,7 @@ impl ApiRouter {
         if params.text.len() > MAX_IPC_MESSAGE_BYTES {
             return Err(("INVALID_PARAMS", "clipboard text exceeds 1 MiB".into()));
         }
-        crate::platform::desktop::native()
+        self.desktop_services
             .clipboard_write_text(params.text)
             .map(|_| json!({ "written": true }))
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))

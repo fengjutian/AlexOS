@@ -85,7 +85,8 @@ impl ApiRouter {
 
     pub(crate) fn paths_data_dir(&self) -> ApiResult {
         self.require_paths()?;
-        let dirs = crate::platform::desktop::native()
+        let dirs = self
+            .desktop_services
             .app_paths(&self.manifest.id)
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         std::fs::create_dir_all(&dirs.data_dir).ok();
@@ -94,7 +95,8 @@ impl ApiRouter {
 
     pub(crate) fn paths_cache_dir(&self) -> ApiResult {
         self.require_paths()?;
-        let dirs = crate::platform::desktop::native()
+        let dirs = self
+            .desktop_services
             .app_paths(&self.manifest.id)
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         std::fs::create_dir_all(&dirs.cache_dir).ok();
@@ -103,7 +105,8 @@ impl ApiRouter {
 
     pub(crate) fn paths_temp_dir(&self) -> ApiResult {
         self.require_paths()?;
-        let dirs = crate::platform::desktop::native()
+        let dirs = self
+            .desktop_services
             .app_paths(&self.manifest.id)
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         std::fs::create_dir_all(&dirs.temp_dir).ok();

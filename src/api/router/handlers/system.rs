@@ -190,7 +190,7 @@ impl ApiRouter {
                 "system.openExternal was revoked".into(),
             ));
         }
-        crate::platform::desktop::native()
+        self.desktop_services
             .open_external(parsed.as_str())
             .map(|_| json!({ "opened": true }))
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
@@ -232,7 +232,7 @@ impl ApiRouter {
         }
         // `permission_granted` already handles the persisted
         // store, the first-use dialog, and the audit log entry
-        // — calling `native::confirm_permission` again would
+        // — prompting the platform service again would
         // show a second dialog and double-write the decision.
         let granted = self.permission_granted(method_name);
         Ok(json!({ "granted": granted }))

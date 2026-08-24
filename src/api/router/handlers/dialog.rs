@@ -36,7 +36,8 @@ impl ApiRouter {
             multiple,
             directory,
         };
-        let paths = crate::platform::desktop::native()
+        let paths = self
+            .desktop_services
             .pick_paths(spec)
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         if directory {
@@ -103,7 +104,8 @@ impl ApiRouter {
             filters,
             suggested_name: params.suggested_name.clone(),
         };
-        let chosen = crate::platform::desktop::native()
+        let chosen = self
+            .desktop_services
             .pick_save_path(spec)
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         let Some(path) = chosen else {
