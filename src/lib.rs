@@ -2,18 +2,20 @@
 // concrete file layout; we re-export the moved modules at the crate
 // root so `use crate::shell`, `use crate::api::ApiRouter`, etc. keep
 // working unchanged after the reorganization.
-pub mod api;
-pub mod container;
 pub mod core;
-pub mod data;
-pub mod runtime;
 pub mod webview;
+pub mod api;
+pub mod runtime;
+pub mod data;
+pub mod container;
 
-pub use api::{authorization, ipc, permission, permission_shim};
 pub use core::{manager, manifest, package, plugin, trust, update};
-pub use data::{file_token, storage};
-pub use runtime::{event_bus, menu_tray, net, process, proxy, watcher, window_manager, windows};
 pub use webview::{dev, manager_webview, native, shell, webview2};
+pub use api::{authorization, ipc, permission, permission_shim};
+pub use runtime::{
+    event_bus, menu_tray, net, process, proxy, watcher, window_manager, windows,
+};
+pub use data::{file_token, storage};
 
 use std::path::{Path, PathBuf};
 

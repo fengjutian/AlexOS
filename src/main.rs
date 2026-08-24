@@ -446,12 +446,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                     "alex manager: launching self-hosted plugin {} {}",
                     manifest.id, manifest.version
                 );
-                shell::run(
-                    &plugin_path,
-                    manifest,
-                    Some(&install_root),
-                    trust_root.as_deref(),
-                )?;
+                shell::run(&plugin_path, manifest, Some(&install_root), trust_root.as_deref())?;
             } else {
                 // Built-in manager fallback: pass the trust root
                 // through so the UI's signature badges can show

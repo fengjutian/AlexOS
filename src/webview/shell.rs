@@ -476,7 +476,11 @@ pub mod windows {
                         Err(error) => eprintln!("alex menu: invalid context menu: {error}"),
                     },
                     HostCommand::CreateTray(id, spec, root) => {
-                        let icon_path = root.join(&spec.icon);
+                        let icon_path = url::Url::parse(&spec.icon)
+                            .ok()
+                            .filter(|url| url.scheme() == "file")
+                            .and_then(|url| url.to_file_path().ok())
+                            .unwrap_or_else(|| root.join(&spec.icon));
                         match tray_icon::Icon::from_path(&icon_path, None) {
                             Ok(icon) => {
                                 let mut builder =
