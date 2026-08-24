@@ -126,10 +126,11 @@ fn enforce_policy(spec: &ContainerSpec, package_root: &Path) -> Result<(), Conta
             "application root is missing".into(),
         ));
     }
-    if spec.isolation == crate::container::model::IsolationLevel::AppContainer
-        && (!spec.network.outbound_allow.is_empty() || !spec.network.outbound_deny.is_empty())
-    {
-        return Err(ContainerLauncherError::Policy("per-app outbound ACL enforcement requires the WSL provider; refusing an audit-only downgrade".into()));
+    if !spec.network.outbound_allow.is_empty() || !spec.network.outbound_deny.is_empty() {
+        return Err(ContainerLauncherError::Policy(
+            "this host has no per-app outbound network enforcer; refusing an audit-only downgrade"
+                .into(),
+        ));
     }
     #[cfg(windows)]
     if spec.isolation == crate::container::model::IsolationLevel::AppContainer {
