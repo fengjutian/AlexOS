@@ -90,7 +90,9 @@ pub const NATIVE_DESKTOP: &[&str] = &[
     "shortcuts.unregister",
     "shortcuts.list",
 ];
-pub const EXPERIMENTAL: &[&str] = &[];
+pub const EXPERIMENTAL: &[&str] = &[
+
+];
 pub const METHODS: &[MethodDescriptor] = &[
     MethodDescriptor {
         name: "filesystem.readText",

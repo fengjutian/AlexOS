@@ -37,6 +37,15 @@ pub struct Launched {
 
 pub fn launch_backend(request: LaunchRequest<'_>) -> Result<Launched, ContainerLauncherError> {
     enforce_policy(request.container, request.package_root)?;
+    #[cfg(windows)]
+    if request.container.isolation == crate::container::model::IsolationLevel::AppContainer {
+        if let Some(path) = request.data_dir {
+            apply_acl(path, "(OI)(CI)M")?;
+        }
+        if let Some(path) = request.cache_dir {
+            apply_acl(path, "(OI)(CI)M")?;
+        }
+    }
     let executable = crate::runtime::discover_node()
         .ok_or_else(|| ContainerLauncherError::Spawn("node runtime not found".into()))?;
     let mut env = vec![
@@ -121,6 +130,27 @@ fn enforce_policy(spec: &ContainerSpec, package_root: &Path) -> Result<(), Conta
         && (!spec.network.outbound_allow.is_empty() || !spec.network.outbound_deny.is_empty())
     {
         return Err(ContainerLauncherError::Policy("per-app outbound ACL enforcement requires the WSL provider; refusing an audit-only downgrade".into()));
+    }
+    #[cfg(windows)]
+    if spec.isolation == crate::container::model::IsolationLevel::AppContainer {
+        apply_acl(package_root, "(OI)(CI)RX")?;
+    }
+    Ok(())
+}
+
+#[cfg(windows)]
+fn apply_acl(path: &Path, rights: &str) -> Result<(), ContainerLauncherError> {
+    let grant = format!("*S-1-5-12:{rights}");
+    let output = std::process::Command::new("icacls.exe")
+        .arg(path)
+        .args(["/grant", &grant, "/T", "/C", "/Q"])
+        .output()
+        .map_err(|e| ContainerLauncherError::Policy(format!("apply restricted-code ACL: {e}")))?;
+    if !output.status.success() {
+        return Err(ContainerLauncherError::Policy(format!(
+            "icacls failed: {}",
+            String::from_utf8_lossy(&output.stderr)
+        )));
     }
     Ok(())
 }

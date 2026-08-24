@@ -463,8 +463,9 @@ impl IsolationProvider for RestrictedTokenProvider {
         use windows::Win32::{
             Foundation::{CloseHandle, HANDLE},
             Security::{
-                CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, TOKEN_ASSIGN_PRIMARY,
-                TOKEN_DUPLICATE, TOKEN_QUERY,
+                CreateRestrictedToken, CreateWellKnownSid, DISABLE_MAX_PRIVILEGE, PSID,
+                SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
+                TOKEN_QUERY, WinRestrictedCodeSid,
             },
             System::Threading::{
                 CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
@@ -482,11 +483,26 @@ impl IsolationProvider for RestrictedTokenProvider {
         }
         .map_err(|e| IsolationError::Bind(format!("OpenProcessToken: {e}")))?;
         let mut restricted = HANDLE::default();
+        let mut restricted_sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+        let mut restricted_sid_size = restricted_sid.len() as u32;
+        unsafe {
+            CreateWellKnownSid(
+                WinRestrictedCodeSid,
+                None,
+                Some(PSID(restricted_sid.as_mut_ptr().cast())),
+                &mut restricted_sid_size,
+            )
+        }
+        .map_err(|e| IsolationError::Bind(format!("CreateWellKnownSid: {e}")))?;
+        let restricting = [SID_AND_ATTRIBUTES {
+            Sid: PSID(restricted_sid.as_mut_ptr().cast()),
+            Attributes: 0,
+        }];
         let restricted_result = unsafe {
             CreateRestrictedToken(
                 current,
                 DISABLE_MAX_PRIVILEGE,
-                None,
+                Some(&restricting),
                 None,
                 None,
                 &mut restricted,
