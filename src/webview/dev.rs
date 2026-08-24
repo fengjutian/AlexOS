@@ -259,7 +259,9 @@ mod windows {
                     | HostCommand::DestroyTray(_)
                     | HostCommand::RegisterShortcut(_)
                     | HostCommand::UnregisterShortcut(_) => {
-                        eprintln!("alex dev: native shell command is unavailable in the development host");
+                        eprintln!(
+                            "alex dev: native shell command is unavailable in the development host"
+                        );
                     }
                 },
                 Event::WindowEvent { event, .. } => match event {

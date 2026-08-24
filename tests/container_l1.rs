@@ -23,18 +23,14 @@
 use std::path::PathBuf;
 use std::time::Duration;
 
-use alex::container::isolation::{
-    IsolationProvider, SpawnRequest, WindowsJobProvider,
-};
+use alex::container::isolation::{IsolationProvider, SpawnRequest, WindowsJobProvider};
 use alex::container::model::{IsolationLevel, ResourceLimits};
 
 const KILL_WAIT: Duration = Duration::from_secs(2);
 const SPIN_POLL_MS: u64 = 50;
 
 fn is_pid_alive(pid: u32) -> bool {
-    use windows::Win32::System::Threading::{
-        OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
-    };
+    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
     // SAFETY: `OpenProcess` is safe to call with any pid; a
     // non-existent pid returns a null handle, not a crash.
     let result = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) };
@@ -76,7 +72,10 @@ fn ping_executable() -> Option<PathBuf> {
 fn dropping_isolation_handle_terminates_assigned_process() {
     let provider = WindowsJobProvider;
     assert_eq!(provider.level(), IsolationLevel::Job);
-    assert!(provider.is_available(), "Job Objects must be available on Windows");
+    assert!(
+        provider.is_available(),
+        "Job Objects must be available on Windows"
+    );
 
     let ping = ping_executable().expect("PING.EXE must exist on Windows");
     let limits = ResourceLimits::default();
@@ -121,12 +120,18 @@ fn dropping_isolation_handle_terminates_assigned_process() {
     let deadline = std::time::Instant::now() + KILL_WAIT;
     while std::time::Instant::now() < deadline {
         if !is_pid_alive(pid) {
-            eprintln!("pid {pid} terminated after {:?}", deadline - std::time::Instant::now());
+            eprintln!(
+                "pid {pid} terminated after {:?}",
+                deadline - std::time::Instant::now()
+            );
             return;
         }
         std::thread::sleep(Duration::from_millis(SPIN_POLL_MS));
     }
-    eprintln!("pid {pid} still alive after {:?} — KILL_ON_JOB_CLOSE did NOT fire", KILL_WAIT);
+    eprintln!(
+        "pid {pid} still alive after {:?} — KILL_ON_JOB_CLOSE did NOT fire",
+        KILL_WAIT
+    );
     panic!(
         "process {pid} should be terminated within {:?} after IsolationHandle drop",
         KILL_WAIT

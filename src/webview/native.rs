@@ -1,7 +1,7 @@
 use std::path::PathBuf;
 
-use crate::windows::{WindowBounds, WindowInfo};
 use crate::menu_tray::{MenuTemplate, TraySpec};
+use crate::windows::{WindowBounds, WindowInfo};
 
 use thiserror::Error;
 

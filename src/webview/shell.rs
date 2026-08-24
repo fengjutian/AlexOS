@@ -39,15 +39,17 @@ pub mod windows {
         time::Duration,
     };
 
+    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
+    use muda::{
+        CheckMenuItem, ContextMenu, Menu, MenuItem as NativeMenuItem, PredefinedMenuItem, Submenu,
+    };
+    use tao::platform::windows::WindowExtWindows;
     use tao::{
         dpi::{PhysicalPosition, PhysicalSize},
         event::{Event, WindowEvent},
         event_loop::{ControlFlow, EventLoopBuilder},
         window::WindowBuilder,
     };
-    use tao::platform::windows::WindowExtWindows;
-    use muda::{ContextMenu, Menu, MenuItem as NativeMenuItem, CheckMenuItem, PredefinedMenuItem, Submenu};
-    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
     use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
     use wry::{
         NewWindowResponse, WebViewBuilder,
@@ -381,13 +383,8 @@ pub mod windows {
                                     .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
                                     .with_download_started_handler(|_, _| false)
                                     .with_drag_drop_handler(move |event| match event {
-                                        wry::DragDropEvent::Drop { paths, position } => {
-                                            drop_router.deliver_file_drop(
-                                                paths,
-                                                position.0,
-                                                position.1,
-                                            )
-                                        }
+                                        wry::DragDropEvent::Drop { paths, position } => drop_router
+                                            .deliver_file_drop(paths, position.0, position.1),
                                         _ => false,
                                     })
                                     .with_ipc_handler(move |request| {
@@ -461,13 +458,15 @@ pub mod windows {
                         }
                     }
                     HostCommand::SetApplicationMenu(template) => match build_menu(&template) {
-                        Ok(mut menu) => {
-                            if let Some(mut previous) = application_menu.take() {
-                                unsafe { previous.remove_for_hwnd(window.hwnd() as isize) };
+                        Ok(menu) => {
+                            if let Some(previous) = application_menu.take() {
+                                let _ = unsafe { previous.remove_for_hwnd(window.hwnd() as isize) };
                             }
                             match unsafe { menu.init_for_hwnd(window.hwnd() as isize) } {
                                 Ok(()) => application_menu = Some(menu),
-                                Err(error) => eprintln!("alex menu: failed to attach menu: {error}"),
+                                Err(error) => {
+                                    eprintln!("alex menu: failed to attach menu: {error}")
+                                }
                             }
                         }
                         Err(error) => eprintln!("alex menu: invalid native menu: {error}"),
@@ -480,29 +479,51 @@ pub mod windows {
                         let icon_path = root.join(&spec.icon);
                         match tray_icon::Icon::from_path(&icon_path, None) {
                             Ok(icon) => {
-                                let mut builder = TrayIconBuilder::new().with_id(id.clone()).with_icon(icon);
-                                if let Some(tooltip) = spec.tooltip { builder = builder.with_tooltip(tooltip); }
+                                let mut builder =
+                                    TrayIconBuilder::new().with_id(id.clone()).with_icon(icon);
+                                if let Some(tooltip) = spec.tooltip {
+                                    builder = builder.with_tooltip(tooltip);
+                                }
                                 if let Some(template) = spec.menu {
-                                    if let Ok(menu) = build_menu(&template) { builder = builder.with_menu(Box::new(menu)); }
+                                    if let Ok(menu) = build_menu(&template) {
+                                        builder = builder.with_menu(Box::new(menu));
+                                    }
                                 }
                                 match builder.build() {
-                                    Ok(tray) => { tray_icons.insert(id, tray); }
-                                    Err(error) => eprintln!("alex tray: failed to create icon: {error}"),
+                                    Ok(tray) => {
+                                        tray_icons.insert(id, tray);
+                                    }
+                                    Err(error) => {
+                                        eprintln!("alex tray: failed to create icon: {error}")
+                                    }
                                 }
                             }
-                            Err(error) => eprintln!("alex tray: failed to load {}: {error}", icon_path.display()),
+                            Err(error) => eprintln!(
+                                "alex tray: failed to load {}: {error}",
+                                icon_path.display()
+                            ),
                         }
                     }
-                    HostCommand::DestroyTray(id) => { tray_icons.remove(&id); }
-                    HostCommand::RegisterShortcut(accelerator) => match accelerator.parse::<HotKey>() {
+                    HostCommand::DestroyTray(id) => {
+                        tray_icons.remove(&id);
+                    }
+                    HostCommand::RegisterShortcut(accelerator) => match accelerator
+                        .parse::<HotKey>()
+                    {
                         Ok(hotkey) => match hotkey_manager.register(hotkey) {
-                            Ok(()) => { hotkeys.insert(hotkey.id(), (hotkey, accelerator)); }
+                            Ok(()) => {
+                                hotkeys.insert(hotkey.id(), (hotkey, accelerator));
+                            }
                             Err(error) => eprintln!("alex shortcut: registration failed: {error}"),
                         },
                         Err(error) => eprintln!("alex shortcut: invalid accelerator: {error}"),
                     },
                     HostCommand::UnregisterShortcut(accelerator) => {
-                        if let Some((id, (hotkey, _))) = hotkeys.iter().find(|(_, (_, value))| value == &&accelerator).map(|(id, value)| (*id, value.clone())) {
+                        if let Some((id, (hotkey, _))) = hotkeys
+                            .iter()
+                            .find(|(_, (_, value))| value == &accelerator)
+                            .map(|(id, value)| (*id, value.clone()))
+                        {
                             let _ = hotkey_manager.unregister(hotkey);
                             hotkeys.remove(&id);
                         }
@@ -566,15 +587,22 @@ pub mod windows {
                 _ => {}
             }
             while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
-                router.event_bus().deliver("menu.clicked", &serde_json::json!({ "id": event.id().0 }));
+                router
+                    .event_bus()
+                    .deliver("menu.clicked", &serde_json::json!({ "id": event.id().0 }));
             }
             while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-                router.event_bus().deliver("tray.clicked", &serde_json::json!({ "id": event.id().0 }));
+                router
+                    .event_bus()
+                    .deliver("tray.clicked", &serde_json::json!({ "id": event.id().0 }));
             }
             while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
                 if event.state == HotKeyState::Pressed {
                     if let Some((_, accelerator)) = hotkeys.get(&event.id) {
-                        router.event_bus().deliver("shortcut.triggered", &serde_json::json!({ "accelerator": accelerator }));
+                        router.event_bus().deliver(
+                            "shortcut.triggered",
+                            &serde_json::json!({ "accelerator": accelerator }),
+                        );
                     }
                 }
             }
@@ -605,16 +633,40 @@ pub mod windows {
         Ok(menu)
     }
 
-    fn append_menu_items(parent: &dyn MenuAppender, items: &[MenuItem]) -> Result<(), Box<dyn std::error::Error>> {
+    fn append_menu_items(
+        parent: &dyn MenuAppender,
+        items: &[MenuItem],
+    ) -> Result<(), Box<dyn std::error::Error>> {
         for item in items {
             match item {
-                MenuItem::Normal { id, label, accelerator, enabled } => {
+                MenuItem::Normal {
+                    id,
+                    label,
+                    accelerator,
+                    enabled,
+                } => {
                     let accelerator = accelerator.as_deref().map(str::parse).transpose()?;
-                    parent.append_item(&NativeMenuItem::with_id(id, label, enabled.unwrap_or(true), accelerator))?;
+                    parent.append_item(&NativeMenuItem::with_id(
+                        id,
+                        label,
+                        enabled.unwrap_or(true),
+                        accelerator,
+                    ))?;
                 }
-                MenuItem::Checkbox { id, label, checked, accelerator } => {
+                MenuItem::Checkbox {
+                    id,
+                    label,
+                    checked,
+                    accelerator,
+                } => {
                     let accelerator = accelerator.as_deref().map(str::parse).transpose()?;
-                    parent.append_item(&CheckMenuItem::with_id(id, label, true, checked.unwrap_or(false), accelerator))?;
+                    parent.append_item(&CheckMenuItem::with_id(
+                        id,
+                        label,
+                        true,
+                        checked.unwrap_or(false),
+                        accelerator,
+                    ))?;
                 }
                 MenuItem::Separator => parent.append_item(&PredefinedMenuItem::separator())?,
                 MenuItem::Submenu { id, label, items } => {
@@ -630,8 +682,16 @@ pub mod windows {
     trait MenuAppender {
         fn append_item(&self, item: &dyn muda::IsMenuItem) -> muda::Result<()>;
     }
-    impl MenuAppender for Menu { fn append_item(&self, item: &dyn muda::IsMenuItem) -> muda::Result<()> { self.append(item) } }
-    impl MenuAppender for Submenu { fn append_item(&self, item: &dyn muda::IsMenuItem) -> muda::Result<()> { self.append(item) } }
+    impl MenuAppender for Menu {
+        fn append_item(&self, item: &dyn muda::IsMenuItem) -> muda::Result<()> {
+            self.append(item)
+        }
+    }
+    impl MenuAppender for Submenu {
+        fn append_item(&self, item: &dyn muda::IsMenuItem) -> muda::Result<()> {
+            self.append(item)
+        }
+    }
 
     pub fn asset_response(
         root: &Path,

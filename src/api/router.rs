@@ -223,9 +223,7 @@ impl ApiRouter {
     /// Reconcile the logical registry when the user closes a native child
     /// window instead of calling `window.destroy` through IPC.
     pub fn native_window_closed(&self, window_id: u64) {
-        let _ = self
-            .windows
-            .destroy(&self.manifest.id, WindowId(window_id));
+        let _ = self.windows.destroy(&self.manifest.id, WindowId(window_id));
     }
 
     fn require_secondary_window_host(&self) -> Result<(), (&'static str, String)> {
@@ -1214,13 +1212,10 @@ impl ApiRouter {
         // should branch on `available` for production paths and
         // treat `experimental` as a "the method will accept
         // your call but no side effect happens yet" signal.
-        let available: &[&str] = &[
-            // Filesystem: every method dispatches to a
-            // real fs call (read, write, stat, readDir,
-            // createDir, remove, rename, copy, exists).
-            "filesystem.read",
+        let mut available = vec![
+            "filesystem.readText",
             "filesystem.readBinary",
-            "filesystem.write",
+            "filesystem.writeText",
             "filesystem.writeBinary",
             "filesystem.exists",
             "filesystem.stat",
@@ -1229,45 +1224,76 @@ impl ApiRouter {
             "filesystem.remove",
             "filesystem.rename",
             "filesystem.copy",
-            "filesystem.delete",
             "filesystem.watch",
             "filesystem.unwatch",
-            "filesystem.drop",
-            "dialog.open",
-            "clipboard.read",
-            "clipboard.write",
+            "storage.get",
+            "storage.set",
+            "storage.delete",
+            "storage.clear",
+            "storage.keys",
+            "paths.dataDir",
+            "paths.cacheDir",
+            "paths.tempDir",
+            "dialog.openFile",
+            "dialog.openFiles",
+            "dialog.openDirectory",
+            "dialog.saveFile",
+            "clipboard.readText",
+            "clipboard.writeText",
+            "system.info",
+            "system.capabilities",
+            "system.requestPermission",
             "system.openExternal",
-            "window.manage",
-            "window.open",
-            "notification.show",
-            "media.camera",
-            "media.microphone",
-            "geolocation",
-            "runtime.invoke",
-            "runtime.manage",
-            "runtime.cancel",
-            "events.subscribe",
-            "events.unsubscribe",
-            "system.container",
-            // Process spawn is real: Command::spawn on
-            // Unix, taskkill /T /F on Windows. The
-            // registry tracks pids and reaps on exit.
-            "process.spawn",
-            "process.kill",
-        ];
-        let experimental: &[&str] = &[
-            "storage",
-            "paths",
-            "dialog.save",
             "system.listApps",
             "system.listExtensions",
             "system.install",
             "system.uninstall",
-            "menu.manage",
-            "tray.manage",
-            "shortcut.register",
-            "network.fetch",
+            "system.listPermissions",
+            "system.setPermission",
+            "system.listTrustedPublishers",
+            "system.readAuditLog",
+            "window.setTitle", "window.minimize", "window.maximize", "window.close",
+            "notification.show",
+            "runtime.invoke",
+            "runtime.status",
+            "runtime.restart",
+            "runtime.cancel",
+            "events.subscribe",
+            "events.unsubscribe",
+            "system.container.create",
+            "system.container.start",
+            "system.container.stop",
+            "system.container.restart",
+            "system.container.remove",
+            "system.container.inspect",
+            "system.container.list",
+            "system.container.logs",
+            "process.spawn",
+            "process.kill",
         ];
+        if self
+            .native_host
+            .as_ref()
+            .is_some_and(|host| host.supports_secondary_windows())
+        {
+            available.extend([
+                "window.create",
+                "window.list",
+                "window.getBounds",
+                "window.setBounds",
+                "window.setFullscreen",
+                "window.isFullscreen",
+                "window.destroy",
+                "menu.setApplicationMenu",
+                "menu.setContextMenu",
+                "tray.create",
+                "tray.destroy",
+                "shortcuts.register",
+                "shortcuts.unregister",
+                "shortcuts.list",
+            ]);
+        }
+        let experimental = ["net.fetch"];
         Ok(json!({
             "capabilities": available,
             "experimental": experimental,
@@ -2042,7 +2068,8 @@ impl ApiRouter {
             "tray.manage",
         )?;
         let spec: TraySpec = parse_params(params)?;
-        let info = self.menu_store
+        let info = self
+            .menu_store
             .create_tray(&self.manifest.id, spec.clone(), &self.package_root)
             .map_err(|error| ("TRAY_ERROR", error.to_string()))?;
         self.execute_host(HostCommand::CreateTray(

@@ -25,11 +25,7 @@
 //! non-Windows CI. A future slice can swap `curl` for
 //! `ureq` once we have a more stable HTTP client.
 
-use std::{
-    collections::HashSet,
-    path::Path,
-    process::{Command, Stdio},
-};
+use std::{collections::HashSet, process::Command};
 
 use serde::Deserialize;
 use serde_json::{Value, json};
@@ -106,14 +102,22 @@ pub fn fetch(spec: &FetchSpec, permissions: &[Permission]) -> Result<FetchResult
     if !origin_allowed(permissions, &origin) {
         return Err(NetError::OriginNotAllowed(origin));
     }
-    let method = spec.method.clone().unwrap_or_else(|| "GET".into()).to_uppercase();
+    let method = spec
+        .method
+        .clone()
+        .unwrap_or_else(|| "GET".into())
+        .to_uppercase();
     let max_bytes = spec.max_bytes.unwrap_or(MAX_BODY_BYTES);
     run_curl(&url, &method, spec, max_bytes)
 }
 
 #[cfg(windows)]
-fn run_curl(url: &Url, method: &str, spec: &FetchSpec, max_bytes: usize) -> Result<FetchResult, NetError> {
-    use std::io::Write;
+fn run_curl(
+    url: &Url,
+    method: &str,
+    spec: &FetchSpec,
+    max_bytes: usize,
+) -> Result<FetchResult, NetError> {
     use std::process::Stdio;
 
     let curl_path = locate_curl().ok_or(NetError::CurlMissing)?;
@@ -204,12 +208,20 @@ fn locate_curl() -> Option<std::path::PathBuf> {
 }
 
 #[cfg(not(windows))]
-fn run_curl(_url: &Url, _method: &str, _spec: &FetchSpec, _max_bytes: usize) -> Result<FetchResult, NetError> {
+fn run_curl(
+    _url: &Url,
+    _method: &str,
+    _spec: &FetchSpec,
+    _max_bytes: usize,
+) -> Result<FetchResult, NetError> {
     Err(NetError::Unsupported)
 }
 
 fn split_body_and_trailer(stdout: &[u8]) -> (&[u8], &[u8]) {
-    if let Some(idx) = stdout.windows(2).rposition(|w| w == b"\r\n" || w == b"\n\n") {
+    if let Some(idx) = stdout
+        .windows(2)
+        .rposition(|w| w == b"\r\n" || w == b"\n\n")
+    {
         // Find the boundary between body and write-out.
         // The trailer always starts on a new line; we
         // look for the last `^<digits>|<url>$` line

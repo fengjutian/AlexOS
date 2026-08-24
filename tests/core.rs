@@ -34,6 +34,18 @@ impl alex::native::NativeHost for TestNativeHost {
     }
 }
 
+#[derive(Debug)]
+struct PrimaryOnlyNativeHost;
+
+impl alex::native::NativeHost for PrimaryOnlyNativeHost {
+    fn execute(
+        &self,
+        _command: alex::native::HostCommand,
+    ) -> Result<(), alex::native::NativeError> {
+        Ok(())
+    }
+}
+
 // Tests below manage the global ALEX_DATA_DIR. Hold this lock to keep
 // `PermissionStore` writes from racing between parallel tests.
 static ALEX_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -2287,8 +2299,6 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
     let experimental = payload["experimental"].as_array().unwrap().clone();
     let available_names: Vec<&str> = available.iter().map(|v| v.as_str().unwrap()).collect();
     let experimental_names: Vec<&str> = experimental.iter().map(|v| v.as_str().unwrap()).collect();
-    // Wired end-to-end: filesystem, dialog, clipboard, system.openExternal,
-    // window.manage, notification.show, runtime.
     for required in [
         "filesystem.readBinary",
         "filesystem.writeBinary",
@@ -2297,15 +2307,25 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
         "filesystem.remove",
         "filesystem.rename",
         "filesystem.copy",
-        "dialog.open",
-        "clipboard.read",
-        "clipboard.write",
-        "window.manage",
+        "dialog.openFile",
+        "dialog.openDirectory",
+        "dialog.saveFile",
+        "clipboard.readText",
+        "clipboard.writeText",
+        "window.setTitle",
+        "window.create",
+        "menu.setApplicationMenu",
+        "tray.create",
+        "shortcuts.register",
         "notification.show",
         "runtime.invoke",
         "runtime.cancel",
         "process.spawn",
         "process.kill",
+        "storage.get",
+        "paths.dataDir",
+        "filesystem.watch",
+        "events.subscribe",
     ] {
         assert!(
             available_names.contains(&required),
@@ -2321,17 +2341,7 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
     // subscription never delivers. `process.spawn` is now
     // real (Command::spawn + taskkill /T /F), so it is in
     // `available`.
-    for required in [
-        "network.fetch",
-        "window.open",
-        "menu.manage",
-        "tray.manage",
-        "shortcut.register",
-        "events.subscribe",
-        "storage",
-        "paths",
-        "filesystem.watch",
-    ] {
+    for required in ["net.fetch"] {
         assert!(
             experimental_names.contains(&required),
             "missing experimental capability {required}"
@@ -2415,6 +2425,19 @@ fn api_window_create_rejects_zero_dimensions() {
     );
     assert!(result.error.is_some());
     assert_eq!(result.error.unwrap().code, "WINDOW_ERROR");
+}
+
+#[test]
+fn api_window_create_does_not_report_success_for_primary_only_hosts() {
+    let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/full");
+    let app = load_app(&root).unwrap();
+    let router = ApiRouter::new(root, app).with_native_host(Arc::new(PrimaryOnlyNativeHost));
+    let result = call(
+        &router,
+        "window.create",
+        json!({ "url": "index.html", "width": 640, "height": 480 }),
+    );
+    assert_eq!(result.error.unwrap().code, "NATIVE_UNAVAILABLE");
 }
 
 #[test]

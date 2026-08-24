@@ -4,79 +4,47 @@ title: Desktop API 状态
 nav_order: 6
 ---
 
-# Desktop API status (2026-08-21)
+# Desktop API status (2026-08-24)
 
-The previous turn shipped a large batch of P0+P1 desktop API
-surfaces. This document records the **honest** state of each
-surface — the host is wired in some cases, in-memory only in
-others. `system.capabilities` mirrors this document and is the
-authoritative source for "can the page call this for real".
+`system.capabilities` 是运行时能力的唯一权威来源。`capabilities` 使用与 IPC/SDK
+完全相同的方法名；`experimental` 表示请求可以被解析，但不应作为生产能力依赖。
 
-## Fully wired (callable end-to-end)
+## 已完整接线
 
-| API | Where the work lives |
-| --- | --- |
-| `filesystem.readText` / `readBinary` / `writeText` / `writeBinary` | `api.rs` → `permission::resolve_scoped_path` → `std::fs` |
-| `filesystem.exists` / `stat` / `readDir` | `api.rs` → `std::fs` (scope-checked) |
-| `filesystem.createDir` / `remove` / `rename` / `copy` | `api.rs` (symlink-aware recursive delete) |
-| `filesystem.watch` / `unwatch` | notify watcher → event bus → WebView `__alexDeliver` |
-| `filesystem.drop` | Wry drag/drop → short-lived read grants → `fileDrop` event |
-| `dialog.openFile` / `openFiles` / `openDirectory` / `saveFile` | `native.rs::pick_paths` / `pick_save_path` via `rfd`, with file-token grants |
-| `clipboard.readText` / `writeText` | `native.rs` via `arboard` |
-| `system.openExternal` | `native.rs::open_external` |
-| `system.info` / `system.capabilities` | `api.rs` |
-| `system.listApps` / `listExtensions` / `install` / `uninstall` | plugin-only, routed through `package::*` |
-| `window.setTitle` / `minimize` / `maximize` / `close` | `shell.rs::HostCommand` |
-| `window.create` / `list` / `getBounds` / `setBounds` / `setFullscreen` / `isFullscreen` / `destroy` | Tao child windows with independent WebViews and correctly routed IPC responses |
-| `notification.show` | `native.rs::show_notification` via WinRT toast |
-| `runtime.invoke` / `status` / `restart` / `cancel` | `runtime.rs` `RuntimeHandle` + per-request cancellation |
-| `events.subscribe` / `unsubscribe` | app-scoped event bus delivered through the WebView bridge |
-| `system.container.create/start/stop/restart/remove/inspect/list/logs` | plugin-only facade over `DefaultContainerService` |
-| `media.camera` / `microphone` / `geolocation` | prompt only; `getUserMedia` / geolocation are browser APIs gated by `system.requestPermission` |
+- 文件系统、文件监听、文件拖放和短期文件令牌。
+- `storage.*` 原子持久化存储，以及 `paths.*` 应用目录。
+- 打开/多选/目录/保存对话框、剪贴板、通知和外部链接。
+- RPC/service 运行时、取消、状态、重启和订阅事件。
+- 进程启动/终止，以及插件安装、权限、信任库、审计和容器 API。
+- 生产 shell 的多窗口：独立 IPC、窗口事件、拖放、service proxy 和关闭同步。
+- 生产 shell 的应用菜单、右键菜单、托盘和全局快捷键；点击通过
+  `menu.clicked`、`tray.clicked`、`shortcut.triggered` 返回页面。
 
-## In registry / dispatcher but **not wired to a real native side**
+`alex dev` 不模拟第二个原生窗口以及菜单/托盘/全局快捷键。调用这些 API 会返回
+`NATIVE_UNAVAILABLE`，并且它们不会出现在该宿主的 `capabilities` 中；不会再出现
+“IPC 返回 ok、宿主随后忽略命令”的虚假成功。
 
-These methods pass permission and parameter validation and
-return a stable shape, but the host does not yet perform the
-side effect. Pages should branch on `system.capabilities` and
-avoid relying on them until each is wired.
+## 实验能力
 
-| API | Status | Required native work |
+| API | 当前状态 | 剩余工作 |
 | --- | --- | --- |
-| `storage.*` | atomic on-disk store at `%LOCALAPPDATA%\AlexOS\apps\<id>\storage\store.json` works; lives in `storage.rs` | — (actually fully working; review moved to wired in a follow-up) |
-| `paths.dataDir` / `cacheDir` / `tempDir` | host-computed paths returned | — (actually fully working) |
-| `menu.setApplicationMenu` / `setContextMenu` | `MenuStore` holds the template | host needs to render the template via `tao::menu` or Win32 `HMENU` |
-| `tray.create` / `destroy` | `MenuStore` holds `TrayInfo`; tray icon is symlink/canonical-path checked | host needs to register a `Shell_NotifyIcon` icon and click handler that emits `tray.clicked` events |
-| `shortcuts.register` / `unregister` / `list` | `MenuStore` holds normalized accelerator → app mapping | host needs `RegisterHotKey` and a thread that pumps WM_HOTKEY → `shortcut.triggered` events |
-| `process.spawn` / `kill` | permission + allow-list checked; `spawn` returns a fake `pid`; `kill` is a no-op | host needs a Windows Job Object + `Command::spawn` that records the child PID and tears the job down on `kill` |
-| `net.fetch` | origin allow-list checked; no real HTTP | host needs an `ureq`/`reqwest` client with HTTPS-only, DNS-rebinding guard, redirect origin re-check, and a streaming body |
+| `net.fetch` | 已完成权限、来源白名单和参数校验，只返回 queued | 接入已有的受限 HTTP 客户端并返回真实响应 |
 
-## Tests
+摄像头、麦克风和定位不是 Alex IPC 方法。应用先通过
+`system.requestPermission` 请求权限，再调用 WebView 的浏览器 API，因此不列入
+`system.capabilities`。
 
-- `cargo test --lib` — 70 tests
-- `cargo test --test core` — 84 tests
-- `cargo clippy --all-targets` — clean
+## 返回结构与事件
 
-The new tests cover the dispatcher and the registry. They
-do **not** prove that a window actually appears, a tray icon
-is registered, a process actually starts, or a real HTTP
-request is sent. Adding those will need native-side integration
-tests that drive a real `tao::Window` / a real `Command` / a
-real `ureq` client, and a way to verify them on a CI box.
+- `dialog.openDirectory` 的宿主返回 `{ paths: FileTokenGrant[] }`；SDK 对调用方返回
+  第一项 `FileTokenGrant | null`，与 `openFile` 保持一致。
+- `SystemCapabilities` 同时包含 `capabilities: string[]` 和
+  `experimental: string[]`。
+- 菜单、托盘和快捷键事件的 SDK 类型分别为 `{ id }`、`{ id }` 和
+  `{ accelerator }`。
 
-## How to be honest
+## 验证
 
-When this code claims an API is "implemented", it means the
-API shape, the dispatcher, the permission gate, and the
-parameter validation are in. It does **not** mean the OS
-side effect has been verified. The next milestone for each
-stub above is a one-line bullet; the second milestone is a
-test that proves the side effect.
-
-## Related docs
-
-- [`status.md`](./status.md) — Chinese overview of the same facts at a coarser grain (Manifest, Shell, IPC, Runtime lifecycle, Package, Update, Reverse proxy, Manager state). When you change a row in the tables above, the matching `§2.5 Native API 与 SDK` line in `status.md` should be updated in the same commit.
-- [`app-manager-ui-design.md`](./app-manager-ui-design.md) — tells you which of the `system.*` / `dialog.*` / `window.*` / `storage.*` rows the App Manager UI actually needs to call. Use it to prioritise the "wired but not driven by any UI yet" rows in the registry table.
-- [`reverse-ipc.md`](./reverse-ipc.md) — every `system.*` row here is also reachable from a Node plugin backend via reverse IPC, not just from a WebView page. The dispatcher and permission gate are the same code path in both directions.
-- [`roadmap.md`](./roadmap.md) — most of the "In registry but not wired" rows above are tracked as P0 §3.2 权限和 WebView 安全闭环 or P1 §3.5 插件系统 work items. Use it to see which stubs are actively scheduled.
-- [`index.md`](./index.md) — entry point and reading order.
+常规回归使用 `cargo test --all --offline`。原生窗口、系统托盘和全局快捷键还应在
+Windows 交互会话中运行 `alex run <package>` 做冒烟测试；无桌面的 CI 只能覆盖路由、
+状态同步和命令接线。

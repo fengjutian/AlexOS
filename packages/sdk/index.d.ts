@@ -149,6 +149,7 @@ export interface NetFetchInput {
 
 export interface SystemCapabilities {
   capabilities: string[];
+  experimental: string[];
 }
 
 export interface SystemInfo {
@@ -156,6 +157,12 @@ export interface SystemInfo {
   arch: string;
   alexVersion: string;
   protocol: number;
+  paths: {
+    installRoot: string;
+    trustRoot: string;
+    permissionsDir: string;
+    dataDir: string;
+  } | null;
 }
 
 export interface UnsubscribeOptions {
@@ -201,6 +208,9 @@ export interface AlexEventMap {
     files: FileTokenGrant[];
     position: { x: number; y: number };
   };
+  "menu.clicked": { id: string };
+  "tray.clicked": { id: string };
+  "shortcut.triggered": { accelerator: string };
 }
 
 export interface ContainerCreateInput {
