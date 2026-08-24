@@ -5,6 +5,7 @@
 pub mod api;
 pub mod container;
 pub mod core;
+pub mod daemon;
 pub mod data;
 pub mod instance;
 pub mod platform;
