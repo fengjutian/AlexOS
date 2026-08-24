@@ -254,7 +254,8 @@ fn download_package(
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ResumeMetadata>(&bytes).ok());
     let mut offset = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
-    if offset > manifest.size
+    if (offset > 0 && metadata.is_none())
+        || offset > manifest.size
         || metadata.as_ref().is_some_and(|m| {
             m.url != manifest.url || m.expected_size != manifest.size || m.sha256 != manifest.sha256
         })
@@ -262,6 +263,9 @@ fn download_package(
         let _ = std::fs::remove_file(&partial);
         let _ = std::fs::remove_file(&metadata_path);
         offset = 0;
+    }
+    if offset == manifest.size && file_sha256(&partial)? == manifest.sha256 {
+        return Ok(partial);
     }
     let mut request = agent.get(&manifest.url);
     if offset > 0 {
@@ -356,6 +360,18 @@ fn download_package(
 
 fn resume_meta_path(partial: &Path) -> PathBuf {
     partial.with_extension("part.json")
+}
+
+fn file_sha256(path: &Path) -> Result<String, UpdateError> {
+    let mut file = std::fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0_u8; 64 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 { break; }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(format!("{:x}", hasher.finalize()))
 }
 
 fn validate_manifest(manifest: &UpdateManifest) -> Result<(), UpdateError> {
