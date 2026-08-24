@@ -26,6 +26,23 @@ test("typed namespaces map to Alex API methods", async () => {
   ]);
 });
 
+test("app instance namespace uses the product-facing API", async () => {
+  const calls = [];
+  const client = createAlexClient({
+    async invoke(method, params) {
+      calls.push({ method, params });
+      if (method === "system.instances.list") return { containers: [] };
+      return { instanceId: params.instanceId ?? "demo" };
+    },
+  });
+  await client.system.instances.start("demo");
+  assert.deepEqual(await client.system.instances.list(), []);
+  assert.deepEqual(calls.map(({ method }) => method), [
+    "system.instances.start",
+    "system.instances.list",
+  ]);
+});
+
 test("transport errors become AlexError instances", async () => {
   const client = createAlexClient({
     async invoke() {

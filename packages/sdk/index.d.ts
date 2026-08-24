@@ -469,6 +469,16 @@ export interface AlexClient {
       list(filter?: Record<string, unknown>, options?: InvokeOptions): Promise<ContainerView[]>;
       logs(instanceId: string, tail?: number, options?: InvokeOptions): Promise<unknown[]>;
     };
+    readonly instances: {
+      create(spec: ContainerCreateInput, options?: InvokeOptions): Promise<ContainerView>;
+      start(instanceId: string, options?: InvokeOptions): Promise<ContainerView>;
+      stop(instanceId: string, stopOptions?: { timeoutMs?: number }, options?: InvokeOptions): Promise<ContainerView>;
+      restart(instanceId: string, options?: InvokeOptions): Promise<ContainerView>;
+      remove(instanceId: string, removeOptions?: { deleteData?: boolean }, options?: InvokeOptions): Promise<{ removed: boolean }>;
+      inspect(instanceId: string, options?: InvokeOptions): Promise<ContainerView>;
+      list(filter?: Record<string, unknown>, options?: InvokeOptions): Promise<ContainerView[]>;
+      logs(instanceId: string, tail?: number, options?: InvokeOptions): Promise<unknown[]>;
+    };
   };
 }
 

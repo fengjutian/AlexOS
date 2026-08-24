@@ -2326,6 +2326,8 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
         "paths.dataDir",
         "filesystem.watch",
         "events.subscribe",
+        "system.instances.create",
+        "system.instances.start",
     ] {
         assert!(
             available_names.contains(&required),

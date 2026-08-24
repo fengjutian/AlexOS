@@ -58,14 +58,14 @@ export type AlexCapability =
   | "runtime.cancel"
   | "events.subscribe"
   | "events.unsubscribe"
-  | "system.container.create"
-  | "system.container.start"
-  | "system.container.stop"
-  | "system.container.restart"
-  | "system.container.remove"
-  | "system.container.inspect"
-  | "system.container.list"
-  | "system.container.logs"
+  | "system.instances.create"
+  | "system.instances.start"
+  | "system.instances.stop"
+  | "system.instances.restart"
+  | "system.instances.remove"
+  | "system.instances.inspect"
+  | "system.instances.list"
+  | "system.instances.logs"
   | "process.spawn"
   | "process.kill"
   | "net.fetch"
@@ -145,14 +145,14 @@ export interface AlexMethodMap {
   "runtime.cancel": { params: Record<string, unknown>; result: unknown };
   "events.subscribe": { params: Record<string, unknown>; result: unknown };
   "events.unsubscribe": { params: Record<string, unknown>; result: unknown };
-  "system.container.create": { params: Record<string, unknown>; result: unknown };
-  "system.container.start": { params: InstanceId; result: {  } };
-  "system.container.stop": { params: { "instanceId": string; "timeoutMs"?: number }; result: {  } };
-  "system.container.restart": { params: InstanceId; result: {  } };
-  "system.container.remove": { params: { "instanceId": string; "deleteData"?: boolean }; result: { "removed": true } };
-  "system.container.inspect": { params: InstanceId; result: {  } };
-  "system.container.list": { params: Record<string, unknown>; result: unknown };
-  "system.container.logs": { params: { "instanceId": string; "tail"?: number }; result: { "entries": Array<{  }> } };
+  "system.instances.create": { params: Record<string, unknown>; result: unknown };
+  "system.instances.start": { params: InstanceId; result: {  } };
+  "system.instances.stop": { params: { "instanceId": string; "timeoutMs"?: number }; result: {  } };
+  "system.instances.restart": { params: InstanceId; result: {  } };
+  "system.instances.remove": { params: { "instanceId": string; "deleteData"?: boolean }; result: { "removed": true } };
+  "system.instances.inspect": { params: InstanceId; result: {  } };
+  "system.instances.list": { params: Record<string, unknown>; result: unknown };
+  "system.instances.logs": { params: { "instanceId": string; "tail"?: number }; result: { "entries": Array<{  }> } };
   "process.spawn": { params: Record<string, unknown>; result: unknown };
   "process.kill": { params: Record<string, unknown>; result: unknown };
   "net.fetch": { params: Record<string, unknown>; result: unknown };

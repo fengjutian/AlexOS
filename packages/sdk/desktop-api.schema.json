@@ -32,9 +32,9 @@
       "system.listTrustedPublishers", "system.readAuditLog", "window.setTitle", "window.minimize",
       "window.maximize", "window.close", "notification.show", "runtime.invoke", "runtime.status",
       "runtime.restart", "runtime.cancel", "events.subscribe", "events.unsubscribe",
-      "system.container.create", "system.container.start", "system.container.stop",
-      "system.container.restart", "system.container.remove", "system.container.inspect",
-      "system.container.list", "system.container.logs", "process.spawn", "process.kill", "net.fetch"
+      "system.instances.create", "system.instances.start", "system.instances.stop",
+      "system.instances.restart", "system.instances.remove", "system.instances.inspect",
+      "system.instances.list", "system.instances.logs", "process.spawn", "process.kill", "net.fetch"
     ],
     "nativeDesktop": [
       "window.create", "window.list", "window.getBounds", "window.setBounds", "window.setFullscreen",
@@ -53,12 +53,12 @@
     "system.updateTasks": { "params": { "$ref": "#/$defs/Empty" }, "result": { "type": "object", "properties": { "tasks": { "type": "array", "items": { "$ref": "#/$defs/UpdateTask" } } }, "required": ["tasks"], "additionalProperties": false } },
     "system.updateCancel": { "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "cancelled": { "type": "boolean" } }, "required": ["cancelled"], "additionalProperties": false } },
     "system.updateRetry": { "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false }, "result": { "$ref": "#/$defs/UpdateTask" } },
-    "system.container.start": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
-    "system.container.stop": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object" } },
-    "system.container.restart": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
-    "system.container.remove": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "deleteData": { "type": "boolean" } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "removed": { "const": true } }, "required": ["removed"], "additionalProperties": false } },
-    "system.container.inspect": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
-    "system.container.logs": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "tail": { "type": "integer", "minimum": 1, "maximum": 5000 } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "entries": { "type": "array", "items": { "type": "object" } } }, "required": ["entries"], "additionalProperties": false } }
+    "system.instances.start": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
+    "system.instances.stop": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object" } },
+    "system.instances.restart": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
+    "system.instances.remove": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "deleteData": { "type": "boolean" } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "removed": { "const": true } }, "required": ["removed"], "additionalProperties": false } },
+    "system.instances.inspect": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
+    "system.instances.logs": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "tail": { "type": "integer", "minimum": 1, "maximum": 5000 } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "entries": { "type": "array", "items": { "type": "object" } } }, "required": ["entries"], "additionalProperties": false } }
   },
   "events": {
     "menu.clicked": "{ id: string }",

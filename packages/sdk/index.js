@@ -345,6 +345,22 @@ export function createAlexClient(transport = browserTransport()) {
           return result.entries ?? [];
         },
       }),
+      instances: Object.freeze({
+        create(spec, options) { return invoke("system.instances.create", spec, options); },
+        start(instanceId, options) { return invoke("system.instances.start", { instanceId }, options); },
+        stop(instanceId, stopOptions = {}, options) { return invoke("system.instances.stop", { instanceId, ...stopOptions }, options); },
+        restart(instanceId, options) { return invoke("system.instances.restart", { instanceId }, options); },
+        remove(instanceId, removeOptions = {}, options) { return invoke("system.instances.remove", { instanceId, ...removeOptions }, options); },
+        inspect(instanceId, options) { return invoke("system.instances.inspect", { instanceId }, options); },
+        async list(filter = {}, options) {
+          const result = await invoke("system.instances.list", filter, options);
+          return result.containers ?? [];
+        },
+        async logs(instanceId, tail = 200, options) {
+          const result = await invoke("system.instances.logs", { instanceId, tail }, options);
+          return result.entries ?? [];
+        },
+      }),
     }),
   });
 }
