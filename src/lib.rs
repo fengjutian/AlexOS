@@ -6,6 +6,7 @@ pub mod api;
 pub mod container;
 pub mod core;
 pub mod data;
+pub mod platform;
 pub mod runtime;
 pub mod webview;
 

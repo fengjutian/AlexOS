@@ -1,8 +1,9 @@
 //! Container backend launcher routed through the selected isolation provider.
 
+use crate::runtime::backend::{BackendRuntime, HostProcessRuntime};
 use crate::{
     container::{
-        isolation::{self, IsolationHandle, SpawnRequest},
+        isolation::{IsolationHandle, SpawnRequest},
         model::{ContainerSpec, ListenAddress},
     },
     core::manifest::{Backend, BackendMode},
@@ -90,10 +91,8 @@ pub fn launch_backend(request: LaunchRequest<'_>) -> Result<Launched, ContainerL
     } else {
         None
     };
-    let provider = isolation::provider_for(request.container.isolation)
-        .map_err(|e| ContainerLauncherError::Spawn(e.to_string()))?;
-    let spawned = provider
-        .spawn(&SpawnRequest {
+    let spawned = HostProcessRuntime
+        .start(&SpawnRequest {
             executable,
             args: vec![request.backend.entry.clone()],
             env,
