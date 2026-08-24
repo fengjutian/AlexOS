@@ -56,3 +56,7 @@ nav_order: 6
 body；SDK 另提供 `bytes`、`text()` 和 `json()` 解码助手。Service HTTP proxy 支持
 Content-Length、chunked response、keep-alive backend，并在增量读取过程中执行 32 MiB
 上限。WebSocket tunnel 由 Shell 持有并在窗口生命周期结束时主动关闭。
+
+WebSocket tunnel 每个应用最多接受 32 个并发连接，跟踪 relay worker，并在关闭时等待连接回收。后台更新使用 2-worker 有界队列，状态原子持久化到 `<install-root>/.alex/update-tasks.json`；重启时未完成任务转为 `interrupted`，可由 Manager 重试。
+
+Container Service 的启动路径必须经过 IsolationProvider。Windows L2 将 Restricted Code SID token、Job Object 和文件 ACL 组合；安装层授予 RX，实例 data/cache 授予 Modify。无法强制执行的逐应用出站规则会 fail closed，不再以 audit-only 状态启动。

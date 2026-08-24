@@ -733,4 +733,36 @@ mod tests {
             .expect("remove without --delete-data");
         assert!(view.instance_dir.join("data").join("note.txt").is_file());
     }
+
+    #[test]
+    fn container_start_routes_through_isolation_provider_and_stops() {
+        if crate::runtime::discover_node().is_none() {
+            return;
+        }
+        let tmp = tempfile::tempdir().unwrap();
+        write_manifest(tmp.path().join("apps").as_path(), "com.example.runtime");
+        std::fs::write(
+            tmp.path().join("apps/com.example.runtime/backend/index.js"),
+            "setInterval(() => {}, 1000);",
+        )
+        .unwrap();
+        let service = service_for(&tmp);
+        service
+            .create(ContainerSpec {
+                instance_id: "runtime".into(),
+                app_id: "com.example.runtime".into(),
+                app_version: Version::new(1, 0, 0),
+                isolation: IsolationLevel::Process,
+                resources: ResourceLimits::default(),
+                filesystem: FilesystemPolicy::default(),
+                network: NetworkPolicy::default(),
+                restart: RestartPolicy::default(),
+            })
+            .unwrap();
+        let running = service.start("runtime").unwrap();
+        assert!(running.pid.is_some_and(|pid| pid > 0));
+        let stopped = service.stop("runtime", Duration::from_secs(2)).unwrap();
+        assert_eq!(stopped.observed, ObservedState::Stopped);
+        assert!(stopped.pid.is_none());
+    }
 }

@@ -116,6 +116,8 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
 权限边界：
 
 - **Alex IPC 与 Reverse IPC 走同一个 `ApiRouter::dispatch`**：权限检查用同一份 `PermissionStore`，审计写同一份 JSONL；区别仅在 `Request.source` 是 WebView 的 app id 还是 plugin manifest.id。Plugin manifest 声明的 `system.*` 权限在 shell 启动时被 pre-grant（详见 [`reverse-ipc.md` §5](./reverse-ipc.md)），所以 plugin 调 `system.*` 不会弹模态框；普通 app 第一次调会弹 rfd。
+- WebView IPC 进入固定 4-worker、64-slot 的有界执行器；饱和时返回 `HOST_BUSY`，不会为每条消息创建无上限线程。方法注册表位于 `src/api/router/dispatch.rs`，Router 本体负责协议、身份、deadline 与每应用 in-flight 校验。
+- `packages/sdk/desktop-api.schema.json` 是 Desktop API IDL，生成 Rust method registry、TypeScript method/event map 和 [`DESKTOP_API_REFERENCE.md`](./DESKTOP_API_REFERENCE.md)；CI 检查生成物漂移。
 - **Service HTTP 代理是网络层转发**，不做 `system.*` 权限检查（后端是被假定可信的同一作者代码）；隔离靠 token 注入 + 端口独占 + 127.0.0.1。
 - **包/更新下载独立于 App 权限**，权限来源是发布者公钥（Trust Store），不是用户 runtime 决定。
 
