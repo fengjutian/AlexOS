@@ -43,6 +43,23 @@
     ],
     "experimental": []
   },
+  "$defs": {
+    "Empty": { "type": "object", "additionalProperties": false },
+    "InstanceId": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 } }, "required": ["instanceId"], "additionalProperties": false },
+    "UpdateTask": { "type": "object", "properties": { "id": { "type": "string" }, "appId": { "type": "string" }, "manifestUrl": { "type": "string", "format": "uri" }, "channel": { "enum": ["stable", "beta", "dev"] }, "state": { "type": "string" }, "stage": { "type": "string" }, "progress": { "type": "integer", "minimum": 0, "maximum": 100 }, "error": { "type": ["string", "null"] } }, "required": ["id", "appId", "manifestUrl", "channel", "state", "stage", "progress", "error"], "additionalProperties": false }
+  },
+  "methods": {
+    "system.updateStart": { "params": { "type": "object", "properties": { "id": { "type": "string", "minLength": 1 }, "manifestUrl": { "type": "string", "format": "uri" }, "channel": { "enum": ["stable", "beta", "dev"] } }, "required": ["id", "manifestUrl"], "additionalProperties": false }, "result": { "$ref": "#/$defs/UpdateTask" } },
+    "system.updateTasks": { "params": { "$ref": "#/$defs/Empty" }, "result": { "type": "object", "properties": { "tasks": { "type": "array", "items": { "$ref": "#/$defs/UpdateTask" } } }, "required": ["tasks"], "additionalProperties": false } },
+    "system.updateCancel": { "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "cancelled": { "type": "boolean" } }, "required": ["cancelled"], "additionalProperties": false } },
+    "system.updateRetry": { "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false }, "result": { "$ref": "#/$defs/UpdateTask" } },
+    "system.container.start": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
+    "system.container.stop": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object" } },
+    "system.container.restart": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
+    "system.container.remove": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "deleteData": { "type": "boolean" } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "removed": { "const": true } }, "required": ["removed"], "additionalProperties": false } },
+    "system.container.inspect": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
+    "system.container.logs": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "tail": { "type": "integer", "minimum": 1, "maximum": 5000 } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "entries": { "type": "array", "items": { "type": "object" } } }, "required": ["entries"], "additionalProperties": false } }
+  },
   "events": {
     "menu.clicked": "{ id: string }",
     "tray.clicked": "{ id: string }",
