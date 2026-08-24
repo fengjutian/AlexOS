@@ -157,6 +157,7 @@ mod windows {
             .with_permission_logging(true) // dev mode = permission call panel on
             .with_native_host(Arc::new(WindowHost {
                 proxy: proxy.clone(),
+                secondary_windows: false,
             }));
         if let Some(backend) = &manifest.backend {
             router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);

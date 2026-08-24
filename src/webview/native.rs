@@ -1,6 +1,7 @@
 use std::path::PathBuf;
 
 use crate::windows::{WindowBounds, WindowInfo};
+use crate::menu_tray::{MenuTemplate, TraySpec};
 
 use thiserror::Error;
 
@@ -14,10 +15,20 @@ pub enum HostCommand {
     SetWindowBounds(u64, WindowBounds),
     SetWindowFullscreen(u64, bool),
     DestroyWindow(u64),
+    SetApplicationMenu(MenuTemplate),
+    SetContextMenu(MenuTemplate),
+    CreateTray(String, TraySpec, PathBuf),
+    DestroyTray(String),
+    RegisterShortcut(String),
+    UnregisterShortcut(String),
 }
 
 pub trait NativeHost: Send + Sync {
     fn execute(&self, command: HostCommand) -> Result<(), NativeError>;
+
+    fn supports_secondary_windows(&self) -> bool {
+        false
+    }
 }
 
 #[derive(Debug, Error)]

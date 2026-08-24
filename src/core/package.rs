@@ -223,6 +223,12 @@ fn create_react_ts(destination: &Path, name: &str, package_id: &str) -> Result<(
         REACT_TS_ALEXIGNORE,
     )?;
     write_file(destination.join("frontend/README.md"), REACT_TS_README)?;
+    // Keep a freshly scaffolded project structurally valid before the first
+    // frontend build. Vite replaces this placeholder on `alex build`.
+    write_file(
+        destination.join("frontend/dist/index.html"),
+        "<!doctype html><meta charset=\"utf-8\"><title>Build required</title><p>Run alex build to compile this React application.</p>\n",
+    )?;
     // Backend is the same JSON-RPC echo stub as the vanilla
     // template so the dev host can spawn it without Node-tooling
     // config on top of the Vite tooling.

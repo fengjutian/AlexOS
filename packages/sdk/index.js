@@ -163,7 +163,7 @@ export function createAlexClient(transport = browserTransport()) {
           { defaultPath, title },
           { timeoutMs, signal },
         );
-        return result.path ? result : null;
+        return result.paths?.[0] ?? null;
       },
       async saveFile(options = {}) {
         const { filters, defaultPath, title, suggestedName, timeoutMs, signal } = options;

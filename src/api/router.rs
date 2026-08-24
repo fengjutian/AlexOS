@@ -154,6 +154,13 @@ impl ApiRouter {
         self
     }
 
+    /// Override the persistent data directory. Primarily useful for isolated
+    /// hosts and tests that must not touch the current user's profile.
+    pub fn with_storage_root(mut self, data_dir: PathBuf) -> Self {
+        self.storage = AppStorage::open(&data_dir).ok();
+        self
+    }
+
     /// System-wide install root. Only consulted by `system.*` methods
     /// (which require `kind: "plugin"`). Apps that don't call into
     /// `system.*` never see this.
@@ -211,6 +218,30 @@ impl ApiRouter {
             &json!({ "files": files, "position": { "x": x, "y": y } }),
         );
         true
+    }
+
+    /// Reconcile the logical registry when the user closes a native child
+    /// window instead of calling `window.destroy` through IPC.
+    pub fn native_window_closed(&self, window_id: u64) {
+        let _ = self
+            .windows
+            .destroy(&self.manifest.id, WindowId(window_id));
+    }
+
+    fn require_secondary_window_host(&self) -> Result<(), (&'static str, String)> {
+        if self
+            .native_host
+            .as_ref()
+            .is_some_and(|host| host.supports_secondary_windows())
+        {
+            Ok(())
+        } else {
+            Err((
+                "NATIVE_UNAVAILABLE",
+                "secondary windows are unavailable in this host (alex dev does not emulate them)"
+                    .into(),
+            ))
+        }
     }
 
     /// Drop every resource this router owns. The shell calls
@@ -1854,6 +1885,7 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::WindowOpen),
             "window.open",
         )?;
+        self.require_secondary_window_host()?;
         let spec: CreateWindowSpec = parse_params(params)?;
         let info = self
             .windows
@@ -1908,6 +1940,7 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::WindowManage),
             "window.manage",
         )?;
+        self.require_secondary_window_host()?;
         let id = self.parse_window_id(params)?;
         // WindowBounds is `deny_unknown_fields`; strip the
         // `windowId` key before deserializing.
@@ -1937,6 +1970,7 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::WindowManage),
             "window.manage",
         )?;
+        self.require_secondary_window_host()?;
         let id = self.parse_window_id(params)?;
         let value = params
             .get("fullscreen")
@@ -1967,6 +2001,7 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::WindowOpen),
             "window.open",
         )?;
+        self.require_secondary_window_host()?;
         let id = self.parse_window_id(params)?;
         self.windows
             .destroy(&self.manifest.id, id)
@@ -1982,9 +2017,10 @@ impl ApiRouter {
         )?;
         let template: MenuTemplate = parse_params(params)?;
         self.menu_store
-            .set_application_menu(&self.manifest.id, template)
-            .map(|_| json!({ "applied": true }))
-            .map_err(|error| ("MENU_ERROR", error.to_string()))
+            .set_application_menu(&self.manifest.id, template.clone())
+            .map_err(|error| ("MENU_ERROR", error.to_string()))?;
+        self.execute_host(HostCommand::SetApplicationMenu(template))?;
+        Ok(json!({ "applied": true }))
     }
 
     fn menu_set_context_menu(&self, params: &Value) -> ApiResult {
@@ -1994,9 +2030,10 @@ impl ApiRouter {
         )?;
         let template: MenuTemplate = parse_params(params)?;
         self.menu_store
-            .set_context_menu(&self.manifest.id, template)
-            .map(|_| json!({ "applied": true }))
-            .map_err(|error| ("MENU_ERROR", error.to_string()))
+            .set_context_menu(&self.manifest.id, template.clone())
+            .map_err(|error| ("MENU_ERROR", error.to_string()))?;
+        self.execute_host(HostCommand::SetContextMenu(template))?;
+        Ok(json!({ "applied": true }))
     }
 
     fn tray_create(&self, params: &Value) -> ApiResult {
@@ -2005,10 +2042,15 @@ impl ApiRouter {
             "tray.manage",
         )?;
         let spec: TraySpec = parse_params(params)?;
-        self.menu_store
-            .create_tray(&self.manifest.id, spec, &self.package_root)
-            .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
-            .map_err(|error| ("TRAY_ERROR", error.to_string()))
+        let info = self.menu_store
+            .create_tray(&self.manifest.id, spec.clone(), &self.package_root)
+            .map_err(|error| ("TRAY_ERROR", error.to_string()))?;
+        self.execute_host(HostCommand::CreateTray(
+            info.id.clone(),
+            spec,
+            self.package_root.clone(),
+        ))?;
+        Ok(serde_json::to_value(info).unwrap_or(Value::Null))
     }
 
     fn tray_destroy(&self, params: &Value) -> ApiResult {
@@ -2022,8 +2064,9 @@ impl ApiRouter {
             .ok_or_else(|| ("INVALID_PARAMS", "missing `id`".to_owned()))?;
         self.menu_store
             .destroy_tray(&self.manifest.id, tray_id)
-            .map(|_| json!({ "destroyed": true }))
-            .map_err(|error| ("TRAY_ERROR", error.to_string()))
+            .map_err(|error| ("TRAY_ERROR", error.to_string()))?;
+        self.execute_host(HostCommand::DestroyTray(tray_id.to_owned()))?;
+        Ok(json!({ "destroyed": true }))
     }
 
     fn shortcuts_register(&self, params: &Value) -> ApiResult {
@@ -2037,8 +2080,11 @@ impl ApiRouter {
             .ok_or_else(|| ("INVALID_PARAMS", "missing `accelerator`".to_owned()))?;
         self.menu_store
             .register_shortcut(&self.manifest.id, accelerator)
-            .map(|_| json!({ "registered": true }))
-            .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))
+            .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
+        let normalized = crate::menu_tray::normalize_accelerator_public(accelerator)
+            .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
+        self.execute_host(HostCommand::RegisterShortcut(normalized))?;
+        Ok(json!({ "registered": true }))
     }
 
     fn shortcuts_unregister(&self, params: &Value) -> ApiResult {
@@ -2063,6 +2109,8 @@ impl ApiRouter {
                 list.retain(|accel| accel != &normalized);
             }
         }
+        drop(state);
+        self.execute_host(HostCommand::UnregisterShortcut(normalized))?;
         Ok(json!({ "unregistered": true }))
     }
 

@@ -65,3 +65,14 @@ test("event subscriptions can be removed", () => {
   assert.deepEqual(received, [{ width: 800, height: 600 }]);
   assert.equal(listeners.has("window.resized"), false);
 });
+
+test("openDirectory unwraps the first file-token grant", async () => {
+  const grant = { path: "folder", token: "file-token", expiresAt: 123 };
+  const client = createAlexClient({
+    async invoke(method) {
+      assert.equal(method, "dialog.openDirectory");
+      return { paths: [grant] };
+    },
+  });
+  assert.deepEqual(await client.dialog.openDirectory(), grant);
+});

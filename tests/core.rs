@@ -18,6 +18,22 @@ use alex::{
 };
 use serde_json::json;
 
+#[derive(Debug)]
+struct TestNativeHost;
+
+impl alex::native::NativeHost for TestNativeHost {
+    fn execute(
+        &self,
+        _command: alex::native::HostCommand,
+    ) -> Result<(), alex::native::NativeError> {
+        Ok(())
+    }
+
+    fn supports_secondary_windows(&self) -> bool {
+        true
+    }
+}
+
 // Tests below manage the global ALEX_DATA_DIR. Hold this lock to keep
 // `PermissionStore` writes from racing between parallel tests.
 static ALEX_ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
@@ -2002,7 +2018,13 @@ fn chrono_like_parse(value: &str) -> Option<u64> {
 fn hello_router() -> (std::path::PathBuf, ApiRouter) {
     let root = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/full");
     let app = load_app(&root).unwrap();
-    (root.clone(), ApiRouter::new(root, app))
+    let storage_root = tempfile::tempdir().unwrap().keep();
+    (
+        root.clone(),
+        ApiRouter::new(root, app)
+            .with_storage_root(storage_root)
+            .with_native_host(Arc::new(TestNativeHost)),
+    )
 }
 
 fn call(router: &ApiRouter, method: &str, params: serde_json::Value) -> ipc::Response {
