@@ -45,7 +45,12 @@ Daemon 启动时会读取持久化状态，并尝试恢复所有 `desired=runnin
 
 Named Pipe 服务端现在为每个连接启动独立 worker，并将并发客户端限制为 32；超限连接会得到明确
 错误。`alex shutdown` 会先停止当前 Supervisor 管理的 backend（不改变 desired state），返回逐应用
-错误后唤醒 accept 循环并让 Daemon 自行退出。当前用户 ACL 加固和客户端身份校验仍待开发。
+错误后唤醒 accept 循环并让 Daemon 自行退出。
+
+管道创建时使用 protected DACL，只授予 LocalSystem 和 Daemon 当前 Windows 用户完全访问权，不继承
+Authenticated Users 等宽泛 ACE。连接建立后，服务端还会读取 Named Pipe 客户端 PID，打开其进程
+Token，并与 Daemon 的 Token User SID 比较；不同用户连接会被拒绝。同用户真实 CLI 连接和 shutdown
+已通过测试，跨用户拒绝仍需在多账户 Windows CI/VM 中验收。
 
 当前运行链路为：
 

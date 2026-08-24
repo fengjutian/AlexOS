@@ -17,7 +17,8 @@ nav_order: 4
 - [进行中] `alex daemon` 常驻服务入口；
 - [进行中] Windows Named Pipe 版本化控制协议；
 - [进行中] 应用 desired state 原子持久化；
-- 当前用户 ACL 加固和客户端身份校验；
+- [已接线] 当前用户 protected DACL 和客户端 Token User SID 校验；
+- 在多账户 Windows CI/VM 中验证跨用户连接拒绝；
 - [已完成] 32 客户端有界并发连接和 `alex shutdown` 优雅退出；
 - [已接线] Daemon 持有共享 `LocalAppManager/RuntimeSupervisor`，生命周期命令驱动真实进程；
 - [已完成基础闭环] Daemon 启动时按 desired state 恢复应用，并持久化 observed/lastError；
