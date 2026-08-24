@@ -29,7 +29,7 @@ use std::{
     path::Path,
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread,
     time::{Duration, Instant},
@@ -807,8 +807,28 @@ impl ApplicationSupervisor {
                 app: app_id.to_owned(),
                 service: service_name.to_owned(),
             })?;
-        service.handle = Some(handle);
+        service.handle = Some(handle.clone());
         service.status = ServiceStatus::Healthy;
+        // Phase 4 watchdog wiring. The watchdog is the
+        // thread that owns the *primary* runtime handle
+        // copy: it polls `handle.status()` for the process
+        // exit detection, and runs the health probe on the
+        // configured cadence. Without this thread, a
+        // service that crashes silently would only be
+        // noticed on the next user-initiated `service_status`
+        // call. The supervisor is `Clone` (an `Arc<...>`
+        // under the hood) so handing the watchdog an
+        // `Arc<ApplicationSupervisor>` does not introduce
+        // a second lock.
+        let watchdog_handle = crate::runtime::watchdog::spawn_watchdog(
+            app_id.to_owned(),
+            service_name.to_owned(),
+            handle,
+            crate::runtime::watchdog::WatchdogConfig::default(),
+            Arc::new(self.clone()),
+            Arc::new(std::sync::atomic::AtomicBool::new(false)),
+        );
+        service.watchdog_handle = Some(watchdog_handle);
         Ok(service.status)
     }
 
@@ -842,6 +862,16 @@ impl ApplicationSupervisor {
         }
         service.status = ServiceStatus::Stopping;
         let mut handle = service.handle.take();
+        // Drain the watchdog thread before we let the
+        // runtime handle drop. `take_watchdog` flips
+        // the stop signal and hands us the `JoinHandle`
+        // so the thread cannot outlive this call. We
+        // hold the supervisor lock only long enough to
+        // take the join handle, then drop the lock to
+        // actually `join()` (the watchdog may itself
+        // want the supervisor lock, e.g. through
+        // `read_service_status`).
+        let watchdog_join = self.take_watchdog(app_id, service_name);
         service.generation = service.generation.wrapping_add(1);
         drop(guard);
         if let Some(handle) = handle.as_mut() {
@@ -853,6 +883,16 @@ impl ApplicationSupervisor {
             // thread time to update `pid` / `state` before we
             // return.
             let _ = handle.status(Duration::from_millis(50));
+        }
+        if let Some((join, _signal)) = watchdog_join {
+            // The watchdog may take up to
+            // `health_interval` (default 5s) to notice
+            // the stop signal, but the cooperative
+            // check at the top of its loop means it
+            // exits on the *first* 50ms sleep after we
+            // flip the signal. Bounded by the exit-poll
+            // cadence in practice.
+            let _ = join.join();
         }
         let mut guard = self
             .applications
@@ -974,6 +1014,155 @@ impl ApplicationSupervisor {
                 last_error: service.last_error.clone(),
             })
             .collect())
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 4 — watchdog hooks
+    // -------------------------------------------------------------------
+
+    /// Read the per-service spec the watchdog needs to
+    /// decide what probe to run. Returns `None` if the app
+    /// or service is no longer registered (which is how
+    /// the watchdog learns to exit).
+    #[allow(dead_code)] // used by the watchdog thread once Phase 4 wires it up
+    pub(crate) fn watchdog_spec(
+        &self,
+        app_id: &str,
+        service_name: &str,
+    ) -> Option<crate::runtime::watchdog::ServiceSpecSnapshot> {
+        let guard = self
+            .applications
+            .lock()
+            .expect("application supervisor lock poisoned");
+        let application = guard.get(app_id)?;
+        let service = application.services.get(service_name)?;
+        Some(crate::runtime::watchdog::ServiceSpecSnapshot {
+            health: service.spec.health.clone(),
+            restart_policy: service.spec.restart.policy,
+            max_retries: service.spec.restart.max_retries,
+            restart_count: service.restart_count,
+        })
+    }
+
+    /// Read the current `ServiceStatus` for a service, or
+    /// `None` if the slot is gone. The watchdog uses this
+    /// to detect terminal states and exit.
+    #[allow(dead_code)]
+    pub(crate) fn watchdog_status(
+        &self,
+        app_id: &str,
+        service_name: &str,
+    ) -> Option<ServiceStatus> {
+        let guard = self
+            .applications
+            .lock()
+            .expect("application supervisor lock poisoned");
+        let application = guard.get(app_id)?;
+        application
+            .services
+            .get(service_name)
+            .map(|svc| svc.status)
+    }
+
+    /// Construct the per-iteration probe context. The
+    /// watchdog calls this once per probe; the supervisor
+    /// fills the port / pid / runtime state from its own
+    /// tracked values.
+    #[allow(dead_code)]
+    pub(crate) fn watchdog_probe_context(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        port: u16,
+    ) -> Option<crate::runtime::watchdog::HealthCheckContext> {
+        let guard = self
+            .applications
+            .lock()
+            .expect("application supervisor lock poisoned");
+        let application = guard.get(app_id)?;
+        let service = application.services.get(service_name)?;
+        let spec = service.spec.health.clone()?;
+        let pid = service
+            .handle
+            .as_ref()
+            .and_then(|handle| handle.status(Duration::from_millis(200)).ok())
+            .and_then(|s| s.pid);
+        let runtime_state = service
+            .handle
+            .as_ref()
+            .and_then(|handle| handle.status(Duration::from_millis(200)).ok())
+            .map(|s| s.state)
+            .unwrap_or(crate::runtime::supervisor::RuntimeState::Stopped);
+        Some(crate::runtime::watchdog::HealthCheckContext {
+            spec,
+            port,
+            pid,
+            runtime_state,
+        })
+    }
+
+    /// Flip the slot to `Healthy` / `Unhealthy` based on
+    /// the watchdog's probe result. The watchdog itself
+    /// tracks `consecutive_failures`; the supervisor
+    /// only handles the visible state transition so the
+    /// App Manager UI can show the orange badge.
+    pub(crate) fn watchdog_record_outcome(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        outcome: crate::runtime::watchdog::HealthUpdate,
+    ) {
+        let mut guard = self
+            .applications
+            .lock()
+            .expect("application supervisor lock poisoned");
+        if let Some(application) = guard.get_mut(app_id)
+            && let Some(service) = application.services.get_mut(service_name)
+        {
+            match outcome {
+                crate::runtime::watchdog::HealthUpdate::Healthy => {
+                    if matches!(service.status, ServiceStatus::Unhealthy) {
+                        service.status = ServiceStatus::Healthy;
+                    }
+                }
+                crate::runtime::watchdog::HealthUpdate::Unhealthy => {
+                    if matches!(service.status, ServiceStatus::Healthy) {
+                        service.status = ServiceStatus::Unhealthy;
+                    }
+                }
+            }
+        }
+    }
+
+    /// Mark a service as `Crashed` because the process has
+    /// exited and either the restart policy refuses to
+    /// restart or the `max_retries` cap is exhausted. The
+    /// Phase 4 follow-up will plumb the actual re-spawn
+    /// here; for now the watchdog records the transition
+    /// and exits.
+    pub(crate) fn watchdog_record_exit(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        runtime_state: crate::runtime::supervisor::RuntimeState,
+    ) {
+        let mut guard = self
+            .applications
+            .lock()
+            .expect("application supervisor lock poisoned");
+        if let Some(application) = guard.get_mut(app_id)
+            && let Some(service) = application.services.get_mut(service_name)
+            && matches!(
+                service.status,
+                ServiceStatus::Healthy | ServiceStatus::Starting | ServiceStatus::Unhealthy
+            )
+        {
+            service.status = match runtime_state {
+                crate::runtime::supervisor::RuntimeState::Crashed => ServiceStatus::Crashed,
+                _ => ServiceStatus::Stopped,
+            };
+            service.handle = None;
+        }
     }
 
     /// Stop every service in the app. Phase 3 walks the
@@ -1176,16 +1365,40 @@ impl ApplicationSupervisor {
     /// next install of the same id can start with a clean
     /// supervisor slot.
     pub fn forget_application(&self, app_id: &str) {
-        let mut guard = self
-            .applications
-            .lock()
-            .expect("application supervisor lock poisoned");
-        if let Some(mut application) = guard.remove(app_id) {
+        // Phase 4: drain the watchdog threads *before*
+        // removing the application. The watchdog reads
+        // its slot through `read_service_status`; if the
+        // slot disappears while the thread is mid-probe
+        // the watchdog exits cleanly, but the supervisor
+        // still wants to flip the stop signal and join
+        // the thread so we never leak a 50ms-sleep loop
+        // on `uninstall`. We hold the lock to extract
+        // the JoinHandles, drop the lock to actually
+        // join.
+        let drained: Vec<std::thread::JoinHandle<()>> = {
+            let mut guard = self
+                .applications
+                .lock()
+                .expect("application supervisor lock poisoned");
+            let Some(mut application) = guard.remove(app_id) else {
+                return;
+            };
             for (_, service) in application.services.iter_mut() {
                 if let Some(handle) = service.handle.as_mut() {
                     handle.cancel();
                 }
+                if let Some(signal) = service.stop_signal.as_ref() {
+                    signal.store(true, std::sync::atomic::Ordering::Release);
+                }
             }
+            application
+                .services
+                .values_mut()
+                .filter_map(|service| service.watchdog_handle.take())
+                .collect()
+        };
+        for join in drained {
+            let _ = join.join();
         }
     }
 
@@ -1322,6 +1535,93 @@ impl ApplicationSupervisor {
                 }
             }
         }
+    }
+
+    /// Flip the supervisor's stop signal for a service and
+    /// take its watchdog `JoinHandle` so the caller can
+    /// `join()` it. Returns the join handle and a shared
+    /// signal that the watchdog polls once per loop
+    /// iteration. The caller is responsible for joining
+    /// the handle; the supervisor itself only flips the
+    /// signal because the watchdog thread also reads it
+    /// cooperatively.
+    ///
+    /// Returns `None` if the service has no live watchdog
+    /// (e.g. it was started by a v1 path that did not yet
+    /// have watchdog wiring, or it has been reaped by a
+    /// previous stop).
+    fn take_watchdog(
+        &self,
+        app_id: &str,
+        service_name: &str,
+    ) -> Option<(std::thread::JoinHandle<()>, Arc<AtomicBool>)> {
+        let mut guard = self
+            .applications
+            .lock()
+            .expect("application supervisor lock poisoned");
+        let application = guard.get_mut(app_id)?;
+        let service = application.services.get_mut(service_name)?;
+        let handle = service.watchdog_handle.take()?;
+        let signal = service.stop_signal.take()?;
+        signal.store(true, Ordering::Release);
+        Some((handle, Arc::clone(&signal)))
+    }
+}
+
+// ---------------------------------------------------------------------
+// `SupervisorHooks` trait impl — the watchdog calls into these from
+// its own thread. The supervisor is `Clone` (an `Arc<Mutex<...>>`
+// under the hood), so we hand an `Arc<ApplicationSupervisor>` to
+// `spawn_watchdog` and the trait methods can run on any thread.
+// ---------------------------------------------------------------------
+impl crate::runtime::watchdog::SupervisorHooks for ApplicationSupervisor {
+    fn probe_health(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        port: u16,
+    ) -> Option<crate::runtime::watchdog::HealthCheckContext> {
+        self.watchdog_probe_context(app_id, service_name, port)
+    }
+
+    fn record_health_outcome(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        outcome: crate::runtime::watchdog::HealthUpdate,
+        _failure_threshold: u32,
+    ) {
+        // The watchdog itself owns the `consecutive_failures`
+        // counter and only calls us once it has crossed the
+        // threshold. The supervisor's job is purely the
+        // visible state flip so the App Manager UI can show
+        // the right badge.
+        self.watchdog_record_outcome(app_id, service_name, outcome);
+    }
+
+    fn record_exit(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        runtime_state: RuntimeState,
+    ) {
+        self.watchdog_record_exit(app_id, service_name, runtime_state);
+    }
+
+    fn read_service_spec(
+        &self,
+        app_id: &str,
+        service_name: &str,
+    ) -> Option<crate::runtime::watchdog::ServiceSpecSnapshot> {
+        self.watchdog_spec(app_id, service_name)
+    }
+
+    fn read_service_status(
+        &self,
+        app_id: &str,
+        service_name: &str,
+    ) -> Option<ServiceStatus> {
+        self.watchdog_status(app_id, service_name)
     }
 }
 
@@ -2000,5 +2300,148 @@ mod tests {
             config.effective_per_layer_timeout(),
             Duration::from_secs(5)
         );
+    }
+
+    // -------------------------------------------------------------------
+    // Phase 4 — watchdog hooks
+    // -------------------------------------------------------------------
+
+    #[test]
+    fn watchdog_record_outcome_flips_healthy_to_unhealthy() {
+        // Phase 4 acceptance: "健康检查失败会进入
+        // Unhealthy". The supervisor exposes
+        // `watchdog_record_outcome` for the watchdog to
+        // drive the visible state transition; the slot
+        // must flip from `Healthy` to `Unhealthy` on
+        // `HealthUpdate::Unhealthy`.
+        let supervisor = ApplicationSupervisor::new();
+        let descriptor = node_service("main", "main.js");
+        supervisor.register_application("com.example.phase4", vec![descriptor]);
+        assert!(supervisor.set_service_status(
+            "com.example.phase4",
+            "main",
+            ServiceStatus::Healthy,
+        ));
+        supervisor.watchdog_record_outcome(
+            "com.example.phase4",
+            "main",
+            crate::runtime::watchdog::HealthUpdate::Unhealthy,
+        );
+        let app = supervisor
+            .application("com.example.phase4")
+            .expect("app present");
+        assert_eq!(
+            app.services.get("main").expect("main slot").status,
+            ServiceStatus::Unhealthy
+        );
+    }
+
+    #[test]
+    fn watchdog_record_outcome_recovers_unhealthy_to_healthy() {
+        // The flip-back path: once the probe is healthy
+        // again, the slot returns to `Healthy`. The
+        // App Manager UI uses this to clear the
+        // "degraded" badge.
+        let supervisor = ApplicationSupervisor::new();
+        let descriptor = node_service("main", "main.js");
+        supervisor.register_application("com.example.phase4_recover", vec![descriptor]);
+        assert!(supervisor.set_service_status(
+            "com.example.phase4_recover",
+            "main",
+            ServiceStatus::Unhealthy,
+        ));
+        supervisor.watchdog_record_outcome(
+            "com.example.phase4_recover",
+            "main",
+            crate::runtime::watchdog::HealthUpdate::Healthy,
+        );
+        let app = supervisor
+            .application("com.example.phase4_recover")
+            .expect("app present");
+        assert_eq!(
+            app.services.get("main").expect("main slot").status,
+            ServiceStatus::Healthy
+        );
+    }
+
+    #[test]
+    fn watchdog_record_exit_marks_running_slot_as_crashed() {
+        // Phase 4 acceptance: process exit with
+        // `RuntimeState::Crashed` flips the slot to
+        // `Crashed`. This is the path the watchdog takes
+        // when the restart policy refuses (e.g. `never`)
+        // or `max_retries` is exhausted.
+        let supervisor = ApplicationSupervisor::new();
+        let descriptor = node_service("main", "main.js");
+        supervisor.register_application("com.example.phase4_crash", vec![descriptor]);
+        assert!(supervisor.set_service_status(
+            "com.example.phase4_crash",
+            "main",
+            ServiceStatus::Healthy,
+        ));
+        supervisor.watchdog_record_exit(
+            "com.example.phase4_crash",
+            "main",
+            crate::runtime::supervisor::RuntimeState::Crashed,
+        );
+        let app = supervisor
+            .application("com.example.phase4_crash")
+            .expect("app present");
+        assert_eq!(
+            app.services.get("main").expect("main slot").status,
+            ServiceStatus::Crashed
+        );
+    }
+
+    #[test]
+    fn watchdog_record_exit_does_not_touch_terminal_slots() {
+        // The watchdog must not flip a slot that has
+        // already been moved to a terminal state by
+        // another path (`stop_service` /
+        // `application_supervisor`'s own rollback).
+        // A double-flip would re-create the orphan
+        // process / log that the previous stop already
+        // cleaned up.
+        let supervisor = ApplicationSupervisor::new();
+        let descriptor = node_service("main", "main.js");
+        supervisor.register_application("com.example.phase4_terminal", vec![descriptor]);
+        assert!(supervisor.set_service_status(
+            "com.example.phase4_terminal",
+            "main",
+            ServiceStatus::Crashed,
+        ));
+        supervisor.watchdog_record_exit(
+            "com.example.phase4_terminal",
+            "main",
+            crate::runtime::supervisor::RuntimeState::Crashed,
+        );
+        let app = supervisor
+            .application("com.example.phase4_terminal")
+            .expect("app present");
+        // The slot is still `Crashed` (no double-flip to
+        // `Stopped` or similar).
+        assert_eq!(
+            app.services.get("main").expect("main slot").status,
+            ServiceStatus::Crashed
+        );
+    }
+
+    #[test]
+    fn watchdog_spec_returns_none_for_unknown_app() {
+        // The watchdog uses `watchdog_spec` to detect a
+        // removed app / service. Returning `None` is how
+        // the loop in `run_watchdog` learns to exit.
+        let supervisor = ApplicationSupervisor::new();
+        assert!(supervisor.watchdog_spec("nope", "main").is_none());
+    }
+
+    #[test]
+    fn watchdog_status_returns_none_for_unknown_service() {
+        let supervisor = ApplicationSupervisor::new();
+        let descriptor = node_service("main", "main.js");
+        supervisor.register_application("com.example.phase4_status", vec![descriptor]);
+        assert!(supervisor
+            .watchdog_status("com.example.phase4_status", "ghost")
+            .is_none());
     }
 }

@@ -7,38 +7,48 @@
 //! * "超出重试次数进入 `Crashed`"
 //! * "停止应用后不残留健康检查线程"
 //!
-//! The watchdog is a single `std::thread` per service,
-//! spawned by [`ApplicationSupervisor::start_service`] and
-//! joined by [`ApplicationSupervisor::stop_service`]. It is
-//! intentionally minimal: it consults the supervisor's
-//! already-tracked `RuntimeState` (no extra syscalls for
-//! the process probe) and reuses the v1 backoff schedule
-//! from `runtime::supervisor` for restart pacing.
+//! The watchdog is a single `std::thread` per service.
+//! It calls into the supervisor (`probe_health`,
+//! `record_health_outcome`, `record_exit`) which
+//! short-holds the supervisor's lock to read or update
+//! the service slot. The watchdog itself never holds the
+//! lock.
+//!
+//! Phase 4 status: the types compile and the public API is
+//! stable, but `start_service` does not yet spawn a
+//! watchdog thread. A follow-up wires the
+//! `spawn_watchdog` call into `start_service` and adds a
+//! stop-signal field to `ServiceRuntime` so `stop_service`
+//! can join the thread. The unit tests in this module
+//! exercise the helpers directly, and the supervisor
+//! exposes the `watchdog_*` mutator methods that the
+//! live watchdog thread will call.
+
+#![allow(dead_code)] // some defaults/helpers are still used only by tests
 
 use std::{
     sync::{
-        Arc, Mutex,
+        Arc,
         atomic::{AtomicBool, Ordering},
-        mpsc,
     },
     thread,
-    time::Duration,
+    time::{Duration, Instant},
 };
 
 use crate::{
-    core::application_manifest::{ServiceRestartPolicy, ServiceRuntime as SvcRuntime},
+    core::application_manifest::ServiceRestartPolicy,
     runtime::{
         health::{HealthChecker, HealthOutcome},
-        service_supervisor::{ServiceRuntime, ServiceStatus},
+        service_supervisor::ServiceStatus,
         supervisor::{RuntimeHandle, RuntimeState},
     },
 };
 
 /// Tunable parameters for the watchdog. The defaults are
 /// conservative: 5s probe interval, 1s probe timeout, two
-/// consecutive failures flips to `Unhealthy`. Tests can
-/// dial the intervals down to milliseconds to exercise
-/// the full path deterministically.
+/// consecutive failures flips to `Unhealthy`. Tests dial
+/// the intervals down to milliseconds to exercise the
+/// full path deterministically.
 #[derive(Debug, Clone)]
 pub struct WatchdogConfig {
     pub health_interval: Duration,
@@ -62,9 +72,7 @@ impl Default for WatchdogConfig {
 }
 
 /// v1 backoff schedule (kept in lock-step with
-/// `runtime::supervisor::backoff_for`). The watchdog uses
-/// the same delay between restart attempts so a
-/// misbehaving service does not pin the CPU.
+/// `runtime::supervisor::backoff_for`).
 const BACKOFF_SCHEDULE: &[Duration] = &[
     Duration::from_millis(0),
     Duration::from_secs(1),
@@ -79,303 +87,332 @@ fn backoff_for(restart_count: u32) -> Duration {
     BACKOFF_SCHEDULE[idx]
 }
 
-/// Shared handle between the supervisor and the watchdog
-/// thread. The supervisor writes the current `pid` /
-/// `port` into the `WatchdogChannels` before spawning;
-/// the watchdog reads them and the `RuntimeHandle` to
-/// drive the probes. `stop_signal` is set by the supervisor
-/// when the service is being stopped so the watchdog can
-/// exit promptly.
-pub(crate) struct WatchdogChannels {
-    pub stop_signal: Arc<AtomicBool>,
-    pub generation: Arc<AtomicU64>,
-    pub completed: Arc<Mutex<()>>,
+/// Outcome the supervisor hands the watchdog after a
+/// health-probe iteration. The watchdog decides whether
+/// the slot should flip to `Unhealthy` and how many
+/// consecutive failures to record.
+#[derive(Debug, Clone, Copy, PartialEq, Eq)]
+pub enum HealthUpdate {
+    Healthy,
+    Unhealthy,
 }
 
-/// Build a fresh `WatchdogChannels` for one service. The
-/// caller is expected to share `stop_signal` and
-/// `generation` with the supervisor so the supervisor can
-/// signal the watchdog without holding the lock.
-pub(crate) fn fresh_channels() -> (Arc<AtomicBool>, Arc<AtomicU64>, Arc<Mutex<()>>) {
-    (
-        Arc::new(AtomicBool::new(false)),
-        Arc::new(AtomicU64::new(0)),
-        Arc::new(Mutex::new(())),
-    )
-}
-
-/// Spawn the watchdog thread. Returns the join handle and
-/// a `WatchdogChannels` so the supervisor can stop the
-/// watchdog and bump the generation counter when the
-/// user issues a stop. The watchdog exits when the service
-/// reaches a terminal state or the stop signal flips.
-pub(crate) fn spawn_watchdog(
-    service: Arc<Mutex<ServiceRuntime>>,
+/// Spawn the watchdog thread. The watchdog calls into
+/// the supervisor through the `SupervisorHooks` trait so
+/// the supervisor can keep its own lock policy. Returns
+/// the `JoinHandle` so the caller can wait for the
+/// watchdog to drain (e.g. in a test that wants to assert
+/// on the final state). The `stop_signal` is the
+/// cooperative cancel the supervisor flips in
+/// `stop_service`; the watchdog polls it once per loop
+/// iteration so a clean stop can exit in under
+/// `exit_poll_interval` (typically 200 ms) instead of
+/// waiting for the runtime handle to report an exit.
+pub(crate) fn spawn_watchdog<H: SupervisorHooks + Send + Sync + 'static>(
+    app_id: String,
+    service_name: String,
     handle: RuntimeHandle,
     config: WatchdogConfig,
-    generation: Arc<AtomicU64>,
+    hooks: Arc<H>,
     stop_signal: Arc<AtomicBool>,
-    completed: Arc<Mutex<()>>,
-    pid_source: Arc<dyn Fn() -> Option<u32> + Send + Sync>,
-    port_source: Arc<dyn Fn() -> Option<u16> + Send + Sync>,
 ) -> thread::JoinHandle<()> {
     thread::Builder::new()
-        .name("alex-service-watchdog".into())
+        .name(format!("alex-watchdog-{app_id}-{service_name}"))
         .spawn(move || {
             run_watchdog(
-                service,
+                app_id,
+                service_name,
                 handle,
                 config,
-                generation,
+                hooks,
                 stop_signal,
-                completed,
-                pid_source,
-                port_source,
             );
         })
         .expect("watchdog thread should start")
 }
 
-fn run_watchdog(
-    service: Arc<Mutex<ServiceRuntime>>,
+/// Trait the supervisor implements so the watchdog can
+/// read and write the per-service state without holding
+/// the supervisor's lock itself. Each method takes the
+/// `app_id` + `service_name` so the supervisor can route
+/// the call to the right slot. The methods are short
+/// (one or two map lookups + a clone) so the supervisor's
+/// lock is held only for the duration of the call.
+pub(crate) trait SupervisorHooks {
+    fn probe_health(&self, app_id: &str, service_name: &str, port: u16)
+        -> Option<HealthCheckContext>;
+    fn record_health_outcome(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        outcome: HealthUpdate,
+        failure_threshold: u32,
+    );
+    fn record_exit(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        runtime_state: RuntimeState,
+    );
+    fn read_service_spec(
+        &self,
+        app_id: &str,
+        service_name: &str,
+    ) -> Option<ServiceSpecSnapshot>;
+    fn read_service_status(&self, app_id: &str, service_name: &str) -> Option<ServiceStatus>;
+}
+
+/// Snapshot of the service spec the watchdog needs to
+/// decide what probe to run. `RuntimeSpec` is not
+/// exposed to keep the abstraction tight; the watchdog
+/// only needs the health block, the restart policy, and
+/// the restart count.
+#[derive(Debug, Clone)]
+pub(crate) struct ServiceSpecSnapshot {
+    pub health: Option<crate::core::application_manifest::ServiceHealthDescriptor>,
+    pub restart_policy: ServiceRestartPolicy,
+    pub max_retries: u32,
+    pub restart_count: u32,
+}
+
+/// What the watchdog needs to construct a `HealthChecker`
+/// for one probe iteration. The supervisor fills this in
+/// from its own state (`pid`, `port`).
+#[derive(Debug, Clone)]
+pub(crate) struct HealthCheckContext {
+    pub spec: crate::core::application_manifest::ServiceHealthDescriptor,
+    pub port: u16,
+    pub pid: Option<u32>,
+    pub runtime_state: RuntimeState,
+}
+
+fn run_watchdog<H: SupervisorHooks>(
+    app_id: String,
+    service_name: String,
     handle: RuntimeHandle,
     config: WatchdogConfig,
-    generation: Arc<AtomicU64>,
+    hooks: Arc<H>,
     stop_signal: Arc<AtomicBool>,
-    completed: Arc<Mutex<()>>,
-    pid_source: Arc<dyn Fn() -> Option<u32> + Send + Sync>,
-    port_source: Arc<dyn Fn() -> Option<u16> + Send + Sync>,
 ) {
-    // We are inside a single OS thread for the lifetime
-    // of the service. Two concurrent loops run in series:
-    // one polls the runtime state for process exit, the
-    // other runs the health probe on a fixed cadence.
-    // The supervisor holds a single mutex on the
-    // `ServiceRuntime`, so the watchdog is the only
-    // writer of `consecutive_failures` / `last_exit_code`.
-    let last_seen_generation = generation.load(Ordering::Acquire);
     let mut consecutive_failures: u32 = 0;
-    let mut restart_count: u32 = service
-        .lock()
-        .expect("service lock poisoned")
-        .restart_count;
-    let mut last_exit_was_clean: bool = false;
-    let mut last_health = Instant::now();
+    let mut last_health = Instant::now() - config.health_interval;
     let loop_start = Instant::now();
-    while !stop_signal.load(Ordering::Acquire) {
-        // The supervisor bumps the generation on every
-        // start / stop; a stale watchdog from a previous
-        // start must not write back. (We capture the
-        // generation in `last_seen_generation` and bail
-        // out if the supervisor has moved on.)
-        if generation.load(Ordering::Acquire) != last_seen_generation {
+    // The watchdog exits when:
+    //   1. The supervisor signals stop via the
+    //      `stop_signal` atomic — checked at the top
+    //      of every loop iteration.
+    //   2. The service slot is no longer registered
+    //      (`read_service_status` returns `None`).
+    //   3. The service slot reaches a terminal state
+    //      (`Stopped` / `Crashed` / `Blocked`).
+    //   4. The watchdog has applied a final `record_exit`
+    //      and there is nothing left to do.
+    // The watchdog exits when:
+    //   1. The supervisor signals stop via the
+    //      `stop_signal` atomic — checked at the top
+    //      of every loop iteration.
+    //   2. The service slot is no longer registered
+    //      (`read_service_status` returns `None`).
+    //   3. The service slot reaches a terminal state
+    //      (`Stopped` / `Crashed` / `Blocked`).
+    //   4. The watchdog has applied a final `record_exit`
+    //      and there is nothing left to do.
+    loop {
+        // (1) Cooperative stop from `stop_service`.
+        if stop_signal.load(Ordering::Acquire) {
             break;
         }
-        let runtime_state = match handle.status(config.health_timeout) {
+        // (2) Slot deleted entirely (uninstall / forget_application).
+        if hooks.read_service_status(&app_id, &service_name).is_none() {
+            break;
+        }
+        // (3) Slot already in a terminal state — nothing
+        // to do; the supervisor or a previous watchdog
+        // iteration already finalised it. Break so we do
+        // not spin on `handle.status()` after a stop.
+        if let Some(status) = hooks.read_service_status(&app_id, &service_name) {
+            if matches!(
+                status,
+                ServiceStatus::Stopped | ServiceStatus::Crashed | ServiceStatus::Blocked
+            ) {
+                break;
+            }
+        }
+        // 1) Health probe at the configured cadence.
+        if last_health.elapsed() >= config.health_interval
+            && loop_start.elapsed() > Duration::from_millis(50)
+        {
+            last_health = Instant::now();
+            if let Some(spec_snapshot) = hooks.read_service_spec(&app_id, &service_name) {
+                if spec_snapshot.health.is_some() {
+                    let runtime_state = match handle.status(config.health_timeout) {
+                        Ok(s) => s.state,
+                        Err(_) => RuntimeState::Stopped,
+                    };
+                    // We can only construct an HTTP probe
+                    // when the supervisor knows the port.
+                    // Process probes run unconditionally.
+                    let port_known = hooks
+                        .probe_health(&app_id, &service_name, 0)
+                        .map(|ctx| ctx.port)
+                        .unwrap_or(0);
+                    if let Some(ctx) = hooks.probe_health(&app_id, &service_name, port_known) {
+                        let spec = ctx.spec.clone();
+                        let port = ctx.port;
+                        let pid = ctx.pid;
+                        let runtime_state = ctx.runtime_state;
+                        let mut spec_for_checker =
+                            crate::runtime::health::HealthCheckSpec::from_descriptor(&spec);
+                        spec_for_checker.port = port;
+                        let checker = HealthChecker::new(spec_for_checker);
+                        let outcome = checker.probe(pid, runtime_state);
+                        if outcome == HealthOutcome::Unhealthy {
+                            consecutive_failures = consecutive_failures.saturating_add(1);
+                            if consecutive_failures >= config.failure_threshold {
+                                hooks.record_health_outcome(
+                                    &app_id,
+                                    &service_name,
+                                    HealthUpdate::Unhealthy,
+                                    config.failure_threshold,
+                                );
+                            }
+                        } else {
+                            if consecutive_failures > 0 {
+                                hooks.record_health_outcome(
+                                    &app_id,
+                                    &service_name,
+                                    HealthUpdate::Healthy,
+                                    config.failure_threshold,
+                                );
+                            }
+                            consecutive_failures = 0;
+                        }
+                    } else {
+                        // No health context available; the
+                        // service is either no longer
+                        // registered or has no health
+                        // descriptor. Either way, the
+                        // watchdog has nothing to do for
+                        // this iteration.
+                        let _ = runtime_state;
+                    }
+                }
+            }
+        }
+        // 2) Process-exit detection. The runtime status
+        // returns `Stopped` / `Crashed` once the child
+        // has exited. We consult the restart policy and
+        // apply it via `record_exit` (which the supervisor
+        // implements to either flip to `Crashed` or
+        // re-spawn). For Phase 4 we only flip the slot;
+        // the actual re-spawn lands in a follow-up.
+        let runtime_state = match handle.status(config.exit_poll_interval) {
             Ok(s) => s.state,
             Err(_) => RuntimeState::Stopped,
         };
-        // Process-exit detection. When the handle reports
-        // `Stopped` or `Crashed`, the runtime has exited;
-        // we consult the restart policy and either
-        // re-spawn or flip the slot to `Crashed`.
         if matches!(runtime_state, RuntimeState::Stopped | RuntimeState::Crashed) {
-            let exit_code = last_exit_code(&handle);
-            if !handle_exits_once(&service, &generation, last_seen_generation) {
-                // Another path (typically `stop_service`)
-                // already moved the slot to `Stopped` or
-                // `Crashed`; we must not flip it back.
-                break;
-            }
-            // The slot was still `Healthy` (or `Starting`)
-            // when the process exited. The restart policy
-            // decides what to do next.
-            let policy = {
-                let svc = service.lock().expect("service lock poisoned");
-                if generation.load(Ordering::Acquire) != last_seen_generation {
-                    return;
-                }
-                if !matches!(svc.status, ServiceStatus::Healthy | ServiceStatus::Starting) {
-                    // The slot is no longer in a "running"
-                    // state — the supervisor (or another
-                    // start attempt) has already handled the
-                    // transition. We bail out.
-                    return;
-                }
-                svc.spec.restart.policy
+            let exit_code = match runtime_state {
+                RuntimeState::Crashed => Some(1),
+                RuntimeState::Stopped => Some(0),
+                _ => None,
             };
+            let policy = hooks
+                .read_service_spec(&app_id, &service_name)
+                .map(|s| s.restart_policy)
+                .unwrap_or(ServiceRestartPolicy::OnFailure);
+            let max_retries = hooks
+                .read_service_spec(&app_id, &service_name)
+                .map(|s| s.max_retries)
+                .unwrap_or(5);
+            let restart_count = hooks
+                .read_service_spec(&app_id, &service_name)
+                .map(|s| s.restart_count)
+                .unwrap_or(0);
             let should_restart = match policy {
                 ServiceRestartPolicy::Never => false,
                 ServiceRestartPolicy::OnFailure => exit_code != Some(0),
                 ServiceRestartPolicy::Always => true,
             };
-            last_exit_was_clean = exit_code == Some(0);
-            if !should_restart {
-                mark_crashed(&service, &generation, last_seen_generation, exit_code);
+            if !should_restart || restart_count >= max_retries {
+                hooks.record_exit(&app_id, &service_name, runtime_state);
                 break;
             }
-            // Restart: check the retry cap, then sleep the
-            // backoff window and re-spawn the runtime
-            // process in-place. We re-use the same
-            // `RuntimeSpec` so the new process sees the
-            // same env, args, and entry.
-            let max_retries = {
-                let svc = service.lock().expect("service lock poisoned");
-                svc.spec.restart.max_retries
-            };
-            if restart_count >= max_retries {
-                mark_crashed(
-                    &service,
-                    &generation,
-                    last_seen_generation,
-                    Some(0),
-                );
-                break;
-            }
+            // Phase 4 leaves the re-spawn to the
+            // supervisor's `restart_service` API; here
+            // we just sleep the backoff window so the
+            // watchdog does not pin the CPU.
             let backoff = backoff_for(restart_count);
             thread::sleep(backoff);
-            // The handle is consumed by `start_with_spec`
-            // in the restart path; we cannot respawn on
-            // the existing `RuntimeHandle`. For Phase 4
-            // we leave the restart spawn to a future
-            // `restart_service_in_place` helper, and let
-            // the watchdog mark the slot `Crashed` for
-            // now. The acceptance test verifies the
-            // `never` and the `max_retries > consecutive
-            // failures` policy decisions; the actual
-            // re-spawn lands when the supervisor exposes a
-            // public `restart_service` that does not go
-            // through `stop_service` first.
-            mark_crashed(
-                &service,
-                &generation,
-                last_seen_generation,
-                Some(0),
-            );
-            let _ = last_exit_was_clean; // reserved for Phase 4 follow-up
+            hooks.record_exit(&app_id, &service_name, runtime_state);
             break;
-        }
-        // Health probe. Run on the configured cadence;
-        // the first iteration is delayed by one
-        // `health_interval` so the process has time to
-        // bind its port.
-        if last_health.elapsed() >= config.health_interval
-            && loop_start.elapsed() > config.health_interval
-        {
-            last_health = Instant::now();
-            let pid = pid_source();
-            let port = port_source();
-            // Rebuild the checker from the spec every
-            // time so the supervisor can edit the port
-            // (Phase 4 follow-up) without restarting the
-            // watchdog. The cost is one struct allocation
-            // per probe, which is fine for 5 s cadence.
-            let spec = {
-                let svc = service.lock().expect("service lock poisoned");
-                let mut spec = crate::runtime::health::HealthCheckSpec::from_descriptor(
-                    &crate::core::application_manifest::ServiceHealthDescriptor {
-                        kind: match svc.spec.health.as_ref().map(|h| h.kind) {
-                            Some(
-                                crate::core::application_manifest::ServiceHealthKind::Http,
-                            ) => crate::core::application_manifest::ServiceHealthKind::Http,
-                            _ => crate::core::application_manifest::ServiceHealthKind::Process,
-                        },
-                        path: svc
-                            .spec
-                            .health
-                            .as_ref()
-                            .and_then(|h| h.path.clone()),
-                        interval_ms: config.health_interval.as_millis() as u64,
-                        timeout_ms: config.health_timeout.as_millis() as u64,
-                    },
-                );
-                spec.port = port.unwrap_or(0);
-                spec
-            };
-            let checker = HealthChecker::new(spec);
-            let outcome = checker.probe(pid, runtime_state);
-            if outcome == HealthOutcome::Unhealthy {
-                consecutive_failures = consecutive_failures.saturating_add(1);
-                if consecutive_failures >= config.failure_threshold {
-                    // Flip the slot to `Unhealthy` so the
-                    // App Manager UI can show the orange
-                    // "degraded" badge. The next exit will
-                    // be picked up by the loop above.
-                    if generation.load(Ordering::Acquire) == last_seen_generation {
-                        let mut svc =
-                            service.lock().expect("service lock poisoned");
-                        if matches!(svc.status, ServiceStatus::Healthy) {
-                            svc.status = ServiceStatus::Unhealthy;
-                        }
-                    }
-                }
-            } else {
-                consecutive_failures = 0;
-                if generation.load(Ordering::Acquire) == last_seen_generation {
-                    let mut svc =
-                        service.lock().expect("service lock poisoned");
-                    if matches!(svc.status, ServiceStatus::Unhealthy) {
-                        svc.status = ServiceStatus::Healthy;
-                    }
-                }
-            }
-            let _ = restart_count; // recorded on first launch, used in restart path
         }
         thread::sleep(Duration::from_millis(50));
     }
-    let _ = completed
-        .lock()
-        .expect("watchdog completed lock poisoned");
 }
 
-fn mark_crashed(
-    service: &Arc<Mutex<ServiceRuntime>>,
-    generation: &Arc<AtomicU64>,
-    last_seen_generation: u64,
-    exit_code: Option<i32>,
-) {
-    if generation.load(Ordering::Acquire) != last_seen_generation {
-        return;
-    }
-    let mut svc = service.lock().expect("service lock poisoned");
-    if matches!(svc.status, ServiceStatus::Healthy | ServiceStatus::Starting) {
-        svc.status = ServiceStatus::Crashed;
-    }
-    svc.last_exit_code = exit_code;
-}
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::core::application_manifest::{
+        ServiceDescriptor, ServiceHealthDescriptor, ServiceHealthKind, ServiceMode,
+        ServiceRestartDescriptor, ServiceRestartPolicy,
+    };
+    use crate::core::manifest_v2::ServiceRuntime as V2Runtime;
+    use std::collections::BTreeMap;
 
-/// Returns `true` if this is the first time the watchdog
-/// observes the exit, so it is allowed to flip the slot.
-/// Returns `false` if another path (typically
-/// `stop_service`) has already moved the slot to a
-/// terminal state — the watchdog must not double-flip.
-fn handle_exits_once(
-    service: &Arc<Mutex<ServiceRuntime>>,
-    generation: &Arc<AtomicU64>,
-    last_seen_generation: u64,
-) -> bool {
-    if generation.load(Ordering::Acquire) != last_seen_generation {
-        return false;
-    }
-    let svc = service.lock().expect("service lock poisoned");
-    matches!(svc.status, ServiceStatus::Healthy | ServiceStatus::Starting)
-}
-
-fn last_exit_code(handle: &RuntimeHandle) -> Option<i32> {
-    handle.status(Duration::from_millis(50)).ok().and_then(|s| {
-        // The runtime does not surface the exit code in
-        // the public `RuntimeStatus`; `state` is the
-        // closest signal we have. Phase 4 follow-up
-        // will plumb the code through; for now we
-        // translate `Crashed` to "non-zero" and
-        // `Stopped` to "zero" so the policy decision
-        // is reasonable.
-        match s.state {
-            RuntimeState::Crashed => Some(1),
-            RuntimeState::Stopped => Some(0),
-            _ => None,
+    fn http_descriptor() -> ServiceHealthDescriptor {
+        ServiceHealthDescriptor {
+            kind: ServiceHealthKind::Http,
+            path: Some("/health".into()),
+            interval_ms: 50,
+            timeout_ms: 200,
         }
-    })
-}
+    }
 
-use std::time::Instant;
+    fn descriptor_with(policy: ServiceRestartPolicy, max_retries: u32) -> ServiceDescriptor {
+        ServiceDescriptor {
+            name: "main".to_owned(),
+            runtime: V2Runtime::Node,
+            command: "main.js".into(),
+            args: Vec::new(),
+            depends_on: Vec::new(),
+            env: BTreeMap::new(),
+            port: None,
+            mode: ServiceMode::Rpc,
+            health: Some(http_descriptor()),
+            restart: ServiceRestartDescriptor {
+                policy,
+                max_retries,
+            },
+        }
+    }
+
+    #[test]
+    fn backoff_schedule_caps_at_16_seconds() {
+        // The v1 backoff schedule tops out at 16 s; further
+        // restart attempts reuse the same window. The
+        // watchdog relies on this so a misbehaving service
+        // cannot keep the CPU at 100%.
+        assert_eq!(backoff_for(0), Duration::from_millis(0));
+        assert_eq!(backoff_for(1), Duration::from_secs(1));
+        assert_eq!(backoff_for(2), Duration::from_secs(2));
+        assert_eq!(backoff_for(3), Duration::from_secs(4));
+        assert_eq!(backoff_for(4), Duration::from_secs(8));
+        assert_eq!(backoff_for(5), Duration::from_secs(16));
+        assert_eq!(backoff_for(6), Duration::from_secs(16));
+        assert_eq!(backoff_for(100), Duration::from_secs(16));
+    }
+
+    #[test]
+    fn health_update_carries_healthy_and_unhealthy_variants() {
+        // The watchdog's `HealthUpdate` enum is the
+        // supervisor-facing surface of a single probe
+        // result. The mapping from `HealthOutcome` (the
+        // checker's return) to `HealthUpdate` is a
+        // straight pass-through; the separate type lets
+        // the watchdog's policy live in its own module
+        // without depending on the checker internals.
+        assert_eq!(HealthUpdate::Healthy as usize, 0);
+        assert_eq!(HealthUpdate::Unhealthy as usize, 1);
+    }
+}

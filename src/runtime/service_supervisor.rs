@@ -12,6 +12,10 @@
 //! the spec to drive the start order; Phase 2 only needs the data
 //! shape so the supervisor can hold multiple services per app.
 
+use std::sync::Arc;
+use std::sync::atomic::AtomicBool;
+use std::thread::JoinHandle;
+
 use serde::Serialize;
 
 use crate::core::application_manifest::ServiceDescriptor;
@@ -98,7 +102,7 @@ impl ServiceStatus {
 /// including across stop / start cycles: a restart bumps
 /// [`Self::restart_count`] and [`Self::generation`] but does not
 /// drop the slot.
-#[derive(Debug, Clone)]
+#[derive(Debug)]
 pub struct ServiceRuntime {
     /// Service identifier, unique within the application. For v1
     /// single-backend apps this is always
@@ -115,6 +119,20 @@ pub struct ServiceRuntime {
     /// observable until the new process is healthy.
     pub handle: Option<RuntimeHandle>,
     pub status: ServiceStatus,
+    /// Watchdog thread handle, present when the service has a
+    /// live watchdog. `start_service` populates this after the
+    /// runtime handle is up; `stop_service` joins it. The
+    /// watchdog itself is responsible for the health probe
+    /// cadence and the process-exit detection. Without this
+    /// field, a `stop_service` would leak a thread that polls
+    /// `handle.status()` in a 50ms sleep loop.
+    pub watchdog_handle: Option<JoinHandle<()>>,
+    /// Stop signal for the watchdog. The supervisor flips
+    /// this to `true` before joining the watchdog so the
+    /// thread can exit the moment the next loop iteration
+    /// polls it, instead of waiting for either the slot to
+    /// disappear or the runtime handle to report an exit.
+    pub stop_signal: Option<Arc<AtomicBool>>,
     /// Total number of times the supervisor has started this
     /// service since the slot was created. Reset only when the
     /// slot itself is removed (e.g. on `uninstall`).
@@ -144,11 +162,38 @@ impl ServiceRuntime {
             spec,
             handle: None,
             status: ServiceStatus::Pending,
+            watchdog_handle: None,
+            stop_signal: None,
             restart_count: 0,
             consecutive_failures: 0,
             last_exit_code: None,
             last_error: None,
             generation: 0,
+        }
+    }
+}
+
+impl Clone for ServiceRuntime {
+    /// Snapshot clone used by `ApplicationSupervisor::application`
+    /// to return a value-typed view. The watchdog `JoinHandle`
+    /// is **not** cloneable, so the cloned slot has it set to
+    /// `None`; the live thread still belongs to the original
+    /// slot. The `stop_signal` is a cheap `Arc` clone so a
+    /// `ServiceRuntime` snapshot can still flip the live
+    /// watchdog's signal (handy for tests).
+    fn clone(&self) -> Self {
+        Self {
+            name: self.name.clone(),
+            spec: self.spec.clone(),
+            handle: self.handle.clone(),
+            status: self.status,
+            watchdog_handle: None,
+            stop_signal: self.stop_signal.clone(),
+            restart_count: self.restart_count,
+            consecutive_failures: self.consecutive_failures,
+            last_exit_code: self.last_exit_code,
+            last_error: self.last_error.clone(),
+            generation: self.generation,
         }
     }
 }
