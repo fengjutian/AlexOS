@@ -148,9 +148,19 @@ impl ApiRouter {
             .is_some_and(|host| host.supports_secondary_windows());
         let available = crate::api::capabilities::available(native_desktop);
         let experimental = crate::api::capabilities::experimental();
+        let platform = crate::platform::native();
+        let platform_capabilities = crate::platform::PlatformServices::capabilities(&platform);
         Ok(json!({
             "capabilities": available,
             "experimental": experimental,
+            "platform": {
+                "os": format!("{:?}", crate::platform::PlatformServices::operating_system(&platform)).to_ascii_lowercase(),
+                "atomicReplace": platform_capabilities.atomic_replace,
+                "processTreeLimits": platform_capabilities.process_tree_limits,
+                "filesystemSandbox": platform_capabilities.filesystem_sandbox,
+                "networkSandbox": platform_capabilities.network_sandbox,
+                "oci": platform_capabilities.oci,
+            },
         }))
     }
 

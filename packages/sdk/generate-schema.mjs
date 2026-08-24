@@ -9,12 +9,19 @@ if (duplicates.length) throw new Error(`duplicate API methods: ${duplicates.join
 for (const { name } of all) {
   const domain = name.split(".")[0];
   if (!schema.domains[domain]) throw new Error(`method ${name} has no domain metadata`);
+  if (!schema.methods?.[name]?.params || !schema.methods?.[name]?.result) {
+    throw new Error(`method ${name} has no explicit params/result JSON Schema`);
+  }
 }
+const unknownMethods = Object.keys(schema.methods ?? {}).filter(name => !all.some(method => method.name === name));
+if (unknownMethods.length) throw new Error(`schemas exist for unregistered methods: ${unknownMethods.join(", ")}`);
 
 const capabilities = all.filter(x => x.group !== "experimental").map(({ name }) => `  | ${JSON.stringify(name)}`).join("\n");
 const events = Object.entries(schema.events).map(([name, type]) => `  ${JSON.stringify(name)}: ${type};`).join("\n");
 const schemaType = value => {
   if (!value) return "unknown";
+  if (value.anyOf) return value.anyOf.map(schemaType).join(" | ");
+  if (value.oneOf) return value.oneOf.map(schemaType).join(" | ");
   if (value.$ref) return value.$ref.split("/").at(-1);
   if (value.const !== undefined) return JSON.stringify(value.const);
   if (value.enum) return value.enum.map(item => JSON.stringify(item)).join(" | ");
@@ -27,6 +34,8 @@ const schemaType = value => {
   if (value.type === "object" || value.properties) {
     const required = new Set(value.required ?? []);
     const fields = Object.entries(value.properties ?? {}).map(([key, child]) => `${JSON.stringify(key)}${required.has(key) ? "" : "?"}: ${schemaType(child)}`);
+    if (value.additionalProperties === true) fields.push("[key: string]: unknown");
+    else if (value.additionalProperties && typeof value.additionalProperties === "object") fields.push(`[key: string]: ${schemaType(value.additionalProperties)}`);
     return `{ ${fields.join("; ")} }`;
   }
   return "unknown";

@@ -167,6 +167,14 @@ export type { AlexCapability, AlexGeneratedEventMap } from "./schema.generated.j
 export interface SystemCapabilities {
   capabilities: import("./schema.generated.js").AlexCapability[];
   experimental: import("./schema.generated.js").AlexCapability[];
+  platform: {
+    os: "windows" | "macos" | "linux" | "other";
+    atomicReplace: boolean;
+    processTreeLimits: boolean;
+    filesystemSandbox: boolean;
+    networkSandbox: boolean;
+    oci: boolean;
+  };
 }
 
 export interface SystemInfo {

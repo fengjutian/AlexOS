@@ -1,64 +1,2549 @@
 {
   "version": 1,
-  "errors": ["INVALID_PARAMS", "PERMISSION_DENIED", "OPERATION_FAILED", "DEADLINE_EXCEEDED", "HOST_BUSY", "METHOD_NOT_FOUND"],
+  "errors": [
+    "INVALID_PARAMS",
+    "PERMISSION_DENIED",
+    "OPERATION_FAILED",
+    "DEADLINE_EXCEEDED",
+    "HOST_BUSY",
+    "METHOD_NOT_FOUND"
+  ],
   "domains": {
-    "filesystem": { "permission": "filesystem.*", "execution": "blocking" },
-    "storage": { "permission": "storage", "execution": "blocking" },
-    "paths": { "permission": "none", "execution": "inline" },
-    "dialog": { "permission": "dialog.*", "execution": "native" },
-    "clipboard": { "permission": "clipboard.*", "execution": "native" },
-    "system": { "permission": "method-specific", "execution": "blocking" },
-    "window": { "permission": "window.*", "execution": "native" },
-    "menu": { "permission": "menu", "execution": "native" },
-    "tray": { "permission": "tray", "execution": "native" },
-    "shortcuts": { "permission": "shortcuts", "execution": "native" },
-    "notification": { "permission": "notification", "execution": "native" },
-    "runtime": { "permission": "runtime", "execution": "blocking" },
-    "events": { "permission": "none", "execution": "inline" },
-    "process": { "permission": "process.*", "execution": "blocking" },
-    "net": { "permission": "network.fetch", "execution": "blocking" }
+    "filesystem": {
+      "permission": "filesystem.*",
+      "execution": "blocking"
+    },
+    "storage": {
+      "permission": "storage",
+      "execution": "blocking"
+    },
+    "paths": {
+      "permission": "none",
+      "execution": "inline"
+    },
+    "dialog": {
+      "permission": "dialog.*",
+      "execution": "native"
+    },
+    "clipboard": {
+      "permission": "clipboard.*",
+      "execution": "native"
+    },
+    "system": {
+      "permission": "method-specific",
+      "execution": "blocking"
+    },
+    "window": {
+      "permission": "window.*",
+      "execution": "native"
+    },
+    "menu": {
+      "permission": "menu",
+      "execution": "native"
+    },
+    "tray": {
+      "permission": "tray",
+      "execution": "native"
+    },
+    "shortcuts": {
+      "permission": "shortcuts",
+      "execution": "native"
+    },
+    "notification": {
+      "permission": "notification",
+      "execution": "native"
+    },
+    "runtime": {
+      "permission": "runtime",
+      "execution": "blocking"
+    },
+    "events": {
+      "permission": "none",
+      "execution": "inline"
+    },
+    "process": {
+      "permission": "process.*",
+      "execution": "blocking"
+    },
+    "net": {
+      "permission": "network.fetch",
+      "execution": "blocking"
+    }
   },
   "capabilities": {
     "always": [
-      "filesystem.readText", "filesystem.readBinary", "filesystem.writeText", "filesystem.writeBinary",
-      "filesystem.exists", "filesystem.stat", "filesystem.readDir", "filesystem.createDir",
-      "filesystem.remove", "filesystem.rename", "filesystem.copy", "filesystem.watch", "filesystem.unwatch",
-      "storage.get", "storage.set", "storage.delete", "storage.clear", "storage.keys",
-      "paths.dataDir", "paths.cacheDir", "paths.tempDir",
-      "dialog.openFile", "dialog.openFiles", "dialog.openDirectory", "dialog.saveFile",
-      "clipboard.readText", "clipboard.writeText", "system.info", "system.capabilities",
-      "system.requestPermission", "system.openExternal", "system.listApps", "system.listExtensions",
-      "system.install", "system.uninstall", "system.updateStart", "system.updateTasks", "system.updateCancel", "system.updateRetry", "system.listPermissions", "system.setPermission",
-      "system.listTrustedPublishers", "system.readAuditLog", "window.setTitle", "window.minimize",
-      "window.maximize", "window.close", "notification.show", "runtime.invoke", "runtime.status",
-      "runtime.restart", "runtime.cancel", "events.subscribe", "events.unsubscribe",
-      "system.instances.create", "system.instances.start", "system.instances.stop",
-      "system.instances.restart", "system.instances.remove", "system.instances.inspect",
-      "system.instances.list", "system.instances.logs", "process.spawn", "process.kill", "net.fetch"
+      "filesystem.readText",
+      "filesystem.readBinary",
+      "filesystem.writeText",
+      "filesystem.writeBinary",
+      "filesystem.exists",
+      "filesystem.stat",
+      "filesystem.readDir",
+      "filesystem.createDir",
+      "filesystem.remove",
+      "filesystem.rename",
+      "filesystem.copy",
+      "filesystem.watch",
+      "filesystem.unwatch",
+      "storage.get",
+      "storage.set",
+      "storage.delete",
+      "storage.clear",
+      "storage.keys",
+      "paths.dataDir",
+      "paths.cacheDir",
+      "paths.tempDir",
+      "dialog.openFile",
+      "dialog.openFiles",
+      "dialog.openDirectory",
+      "dialog.saveFile",
+      "clipboard.readText",
+      "clipboard.writeText",
+      "system.info",
+      "system.capabilities",
+      "system.requestPermission",
+      "system.openExternal",
+      "system.listApps",
+      "system.listExtensions",
+      "system.install",
+      "system.uninstall",
+      "system.updateStart",
+      "system.updateTasks",
+      "system.updateCancel",
+      "system.updateRetry",
+      "system.listPermissions",
+      "system.setPermission",
+      "system.listTrustedPublishers",
+      "system.readAuditLog",
+      "window.setTitle",
+      "window.minimize",
+      "window.maximize",
+      "window.close",
+      "notification.show",
+      "runtime.invoke",
+      "runtime.status",
+      "runtime.restart",
+      "runtime.cancel",
+      "events.subscribe",
+      "events.unsubscribe",
+      "system.instances.create",
+      "system.instances.start",
+      "system.instances.stop",
+      "system.instances.restart",
+      "system.instances.remove",
+      "system.instances.inspect",
+      "system.instances.list",
+      "system.instances.logs",
+      "process.spawn",
+      "process.kill",
+      "net.fetch"
     ],
     "nativeDesktop": [
-      "window.create", "window.list", "window.getBounds", "window.setBounds", "window.setFullscreen",
-      "window.isFullscreen", "window.destroy", "menu.setApplicationMenu", "menu.setContextMenu",
-      "tray.create", "tray.destroy", "shortcuts.register", "shortcuts.unregister", "shortcuts.list"
+      "window.create",
+      "window.list",
+      "window.getBounds",
+      "window.setBounds",
+      "window.setFullscreen",
+      "window.isFullscreen",
+      "window.destroy",
+      "menu.setApplicationMenu",
+      "menu.setContextMenu",
+      "tray.create",
+      "tray.destroy",
+      "shortcuts.register",
+      "shortcuts.unregister",
+      "shortcuts.list"
     ],
     "experimental": []
   },
   "$defs": {
-    "Empty": { "type": "object", "additionalProperties": false },
-    "InstanceId": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 } }, "required": ["instanceId"], "additionalProperties": false },
-    "UpdateTask": { "type": "object", "properties": { "id": { "type": "string" }, "appId": { "type": "string" }, "manifestUrl": { "type": "string", "format": "uri" }, "channel": { "enum": ["stable", "beta", "dev"] }, "state": { "type": "string" }, "stage": { "type": "string" }, "progress": { "type": "integer", "minimum": 0, "maximum": 100 }, "error": { "type": ["string", "null"] } }, "required": ["id", "appId", "manifestUrl", "channel", "state", "stage", "progress", "error"], "additionalProperties": false }
+    "Empty": {
+      "type": "object",
+      "additionalProperties": false
+    },
+    "InstanceId": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "type": "string",
+          "minLength": 1
+        }
+      },
+      "required": [
+        "instanceId"
+      ],
+      "additionalProperties": false
+    },
+    "UpdateTask": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "appId": {
+          "type": "string"
+        },
+        "manifestUrl": {
+          "type": "string",
+          "format": "uri"
+        },
+        "channel": {
+          "enum": [
+            "stable",
+            "beta",
+            "dev"
+          ]
+        },
+        "state": {
+          "type": "string"
+        },
+        "stage": {
+          "type": "string"
+        },
+        "progress": {
+          "type": "integer",
+          "minimum": 0,
+          "maximum": 100
+        },
+        "error": {
+          "type": [
+            "string",
+            "null"
+          ]
+        }
+      },
+      "required": [
+        "id",
+        "appId",
+        "manifestUrl",
+        "channel",
+        "state",
+        "stage",
+        "progress",
+        "error"
+      ],
+      "additionalProperties": false
+    },
+    "JsonValue": {},
+    "PathInput": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "path"
+      ],
+      "additionalProperties": false
+    },
+    "FileGrant": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "token": {
+          "type": "string"
+        },
+        "ops": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "read",
+              "write"
+            ]
+          }
+        },
+        "expiresAt": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "path",
+        "token",
+        "ops",
+        "expiresAt"
+      ],
+      "additionalProperties": false
+    },
+    "FileStat": {
+      "type": "object",
+      "properties": {
+        "path": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "file",
+            "directory",
+            "symlink",
+            "other"
+          ]
+        },
+        "size": {
+          "type": "integer"
+        },
+        "readOnly": {
+          "type": "boolean"
+        },
+        "modifiedMs": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        }
+      },
+      "required": [
+        "path",
+        "type",
+        "size",
+        "readOnly"
+      ],
+      "additionalProperties": false
+    },
+    "DirectoryEntry": {
+      "type": "object",
+      "properties": {
+        "name": {
+          "type": "string"
+        },
+        "type": {
+          "enum": [
+            "file",
+            "directory",
+            "symlink",
+            "other"
+          ]
+        },
+        "size": {
+          "type": "integer"
+        }
+      },
+      "required": [
+        "name",
+        "type",
+        "size"
+      ],
+      "additionalProperties": false
+    },
+    "WindowInfo": {
+      "type": "object",
+      "properties": {
+        "id": {
+          "type": "integer"
+        },
+        "url": {
+          "type": "string"
+        },
+        "title": {
+          "type": "string"
+        },
+        "width": {
+          "type": "integer"
+        },
+        "height": {
+          "type": "integer"
+        },
+        "x": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "y": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "fullscreen": {
+          "type": "boolean"
+        }
+      },
+      "required": [
+        "id",
+        "url",
+        "title",
+        "width",
+        "height",
+        "x",
+        "y",
+        "fullscreen"
+      ],
+      "additionalProperties": false
+    },
+    "ContainerView": {
+      "type": "object",
+      "properties": {
+        "instanceId": {
+          "type": "string"
+        },
+        "appId": {
+          "type": "string"
+        },
+        "appVersion": {
+          "type": "string"
+        },
+        "desired": {
+          "type": "string"
+        },
+        "observed": {
+          "type": "string"
+        },
+        "isolationRequested": {
+          "type": "string"
+        },
+        "isolationEffective": {
+          "type": "string"
+        },
+        "pid": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "port": {
+          "anyOf": [
+            {
+              "type": "integer"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "restartCount": {
+          "type": "integer"
+        },
+        "generation": {
+          "type": "integer"
+        },
+        "createdAt": {
+          "type": "string"
+        },
+        "updatedAt": {
+          "type": "string"
+        },
+        "instanceDir": {
+          "type": "string"
+        }
+      },
+      "required": [
+        "instanceId",
+        "appId",
+        "appVersion",
+        "desired",
+        "observed",
+        "isolationRequested",
+        "isolationEffective",
+        "restartCount",
+        "generation",
+        "createdAt",
+        "updatedAt",
+        "instanceDir"
+      ],
+      "additionalProperties": false
+    },
+    "MenuTemplate": {
+      "type": "object",
+      "additionalProperties": true
+    },
+    "RuntimeStatus": {
+      "type": "object",
+      "additionalProperties": true
+    }
   },
   "methods": {
-    "system.updateStart": { "params": { "type": "object", "properties": { "id": { "type": "string", "minLength": 1 }, "manifestUrl": { "type": "string", "format": "uri" }, "channel": { "enum": ["stable", "beta", "dev"] } }, "required": ["id", "manifestUrl"], "additionalProperties": false }, "result": { "$ref": "#/$defs/UpdateTask" } },
-    "system.updateTasks": { "params": { "$ref": "#/$defs/Empty" }, "result": { "type": "object", "properties": { "tasks": { "type": "array", "items": { "$ref": "#/$defs/UpdateTask" } } }, "required": ["tasks"], "additionalProperties": false } },
-    "system.updateCancel": { "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "cancelled": { "type": "boolean" } }, "required": ["cancelled"], "additionalProperties": false } },
-    "system.updateRetry": { "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false }, "result": { "$ref": "#/$defs/UpdateTask" } },
-    "system.instances.start": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
-    "system.instances.stop": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "timeoutMs": { "type": "integer", "minimum": 100, "maximum": 60000 } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object" } },
-    "system.instances.restart": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
-    "system.instances.remove": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "deleteData": { "type": "boolean" } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "removed": { "const": true } }, "required": ["removed"], "additionalProperties": false } },
-    "system.instances.inspect": { "params": { "$ref": "#/$defs/InstanceId" }, "result": { "type": "object" } },
-    "system.instances.logs": { "params": { "type": "object", "properties": { "instanceId": { "type": "string", "minLength": 1 }, "tail": { "type": "integer", "minimum": 1, "maximum": 5000 } }, "required": ["instanceId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "entries": { "type": "array", "items": { "type": "object" } } }, "required": ["entries"], "additionalProperties": false } }
+    "system.updateStart": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "manifestUrl": {
+            "type": "string",
+            "format": "uri"
+          },
+          "channel": {
+            "enum": [
+              "stable",
+              "beta",
+              "dev"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "manifestUrl"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/$defs/UpdateTask"
+      }
+    },
+    "system.updateTasks": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "tasks": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/UpdateTask"
+            }
+          }
+        },
+        "required": [
+          "tasks"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.updateCancel": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cancelled"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.updateRetry": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "taskId": {
+            "type": "string",
+            "minLength": 1
+          }
+        },
+        "required": [
+          "taskId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/$defs/UpdateTask"
+      }
+    },
+    "system.instances.start": {
+      "params": {
+        "$ref": "#/$defs/InstanceId"
+      },
+      "result": {
+        "$ref": "#/$defs/ContainerView"
+      }
+    },
+    "system.instances.stop": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "timeoutMs": {
+            "type": "integer",
+            "minimum": 100,
+            "maximum": 60000
+          }
+        },
+        "required": [
+          "instanceId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/$defs/ContainerView"
+      }
+    },
+    "system.instances.restart": {
+      "params": {
+        "$ref": "#/$defs/InstanceId"
+      },
+      "result": {
+        "$ref": "#/$defs/ContainerView"
+      }
+    },
+    "system.instances.remove": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "deleteData": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "instanceId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "const": true
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.instances.inspect": {
+      "params": {
+        "$ref": "#/$defs/InstanceId"
+      },
+      "result": {
+        "$ref": "#/$defs/ContainerView"
+      }
+    },
+    "system.instances.logs": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "instanceId": {
+            "type": "string",
+            "minLength": 1
+          },
+          "tail": {
+            "type": "integer",
+            "minimum": 1,
+            "maximum": 5000
+          }
+        },
+        "required": [
+          "instanceId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object"
+            }
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.readText": {
+      "params": {
+        "$ref": "#/$defs/PathInput"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "content"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.readBinary": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "accessToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "encoding": {
+            "const": "base64"
+          },
+          "data": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "encoding",
+          "data"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.writeText": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "content": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "content"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "written": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "written"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.writeBinary": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "data": {
+            "type": "string"
+          },
+          "accessToken": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path",
+          "data"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "written": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "written"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.exists": {
+      "params": {
+        "$ref": "#/$defs/PathInput"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "exists": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "exists"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.stat": {
+      "params": {
+        "$ref": "#/$defs/PathInput"
+      },
+      "result": {
+        "$ref": "#/$defs/FileStat"
+      }
+    },
+    "filesystem.readDir": {
+      "params": {
+        "$ref": "#/$defs/PathInput"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/DirectoryEntry"
+            }
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.createDir": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "recursive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "created": {
+            "type": "boolean"
+          },
+          "exists": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "created"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.remove": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          },
+          "recursive": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.rename": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "renamed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "renamed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.copy": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "from": {
+            "type": "string"
+          },
+          "to": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "from",
+          "to"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "copied": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "copied"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.watch": {
+      "params": {
+        "$ref": "#/$defs/PathInput"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "subscriptionId": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriptionId",
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "filesystem.unwatch": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "subscriptionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriptionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "storage.get": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "value": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        "required": [
+          "value"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "storage.set": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          },
+          "value": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        "required": [
+          "key",
+          "value"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "written": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "written"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "storage.delete": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "key": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "key"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "storage.clear": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "cleared": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cleared"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "storage.keys": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "keys": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "keys"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "paths.dataDir": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "paths.cacheDir": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "paths.tempDir": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "path": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "path"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "dialog.openFile": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "defaultPath": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "extensions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "extensions"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/FileGrant"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "null"
+              },
+              "token": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "path",
+              "token"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "dialog.openFiles": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "defaultPath": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "extensions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "extensions"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/FileGrant"
+            }
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "dialog.openDirectory": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "defaultPath": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "extensions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "extensions"
+              ],
+              "additionalProperties": false
+            }
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "paths": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/FileGrant"
+            }
+          }
+        },
+        "required": [
+          "paths"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "dialog.saveFile": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "defaultPath": {
+            "type": "string"
+          },
+          "filters": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "extensions": {
+                  "type": "array",
+                  "items": {
+                    "type": "string"
+                  }
+                }
+              },
+              "required": [
+                "name",
+                "extensions"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "suggestedName": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "anyOf": [
+          {
+            "$ref": "#/$defs/FileGrant"
+          },
+          {
+            "type": "object",
+            "properties": {
+              "path": {
+                "type": "null"
+              },
+              "token": {
+                "type": "null"
+              }
+            },
+            "required": [
+              "path",
+              "token"
+            ],
+            "additionalProperties": false
+          }
+        ]
+      }
+    },
+    "clipboard.readText": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "clipboard.writeText": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "text": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "text"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "written": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "written"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.info": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "system.capabilities": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "capabilities": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "experimental": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "capabilities",
+          "experimental"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.requestPermission": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "permission": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "permission"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "permission": {
+            "type": "string"
+          },
+          "granted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "permission",
+          "granted"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.openExternal": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "opened": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "opened"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.listApps": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "apps": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "apps"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.listExtensions": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "extensions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "extensions"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.install": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "packagePath": {
+            "type": "string"
+          },
+          "requireSignature": {
+            "type": "boolean"
+          },
+          "trustedKey": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "packagePath"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "installed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "installed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.uninstall": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.listPermissions": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "permissions": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "permissions"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.setPermission": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "permission": {
+            "type": "string"
+          },
+          "decision": {
+            "enum": [
+              "prompt",
+              "granted",
+              "denied"
+            ]
+          }
+        },
+        "required": [
+          "id",
+          "permission",
+          "decision"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "updated": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "updated"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.listTrustedPublishers": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "publishers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "publishers"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.readAuditLog": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "limit": {
+            "type": "integer"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "entries": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": true
+            }
+          }
+        },
+        "required": [
+          "entries"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "window.setTitle": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "window.minimize": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "window.maximize": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "window.close": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "accepted": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "accepted"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "window.create": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "title": {
+            "type": "string"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/$defs/WindowInfo"
+      }
+    },
+    "window.list": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "windows": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/WindowInfo"
+            }
+          }
+        },
+        "required": [
+          "windows"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "window.getBounds": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "windowId": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "windowId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "windowId": {
+            "type": "integer"
+          },
+          "x": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "y": {
+            "anyOf": [
+              {
+                "type": "integer"
+              },
+              {
+                "type": "null"
+              }
+            ]
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "windowId",
+          "x",
+          "y",
+          "width",
+          "height"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "window.setBounds": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "windowId": {
+            "type": "integer"
+          },
+          "x": {
+            "type": "integer"
+          },
+          "y": {
+            "type": "integer"
+          },
+          "width": {
+            "type": "integer"
+          },
+          "height": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "windowId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/$defs/WindowInfo"
+      }
+    },
+    "window.setFullscreen": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "windowId": {
+            "type": "integer"
+          },
+          "fullscreen": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "windowId",
+          "fullscreen"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/$defs/WindowInfo"
+      }
+    },
+    "window.isFullscreen": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "windowId": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "windowId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "fullscreen": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "fullscreen"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "window.destroy": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "windowId": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "windowId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "destroyed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "destroyed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "menu.setApplicationMenu": {
+      "params": {
+        "$ref": "#/$defs/MenuTemplate"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "applied"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "menu.setContextMenu": {
+      "params": {
+        "$ref": "#/$defs/MenuTemplate"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "applied": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "applied"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "tray.create": {
+      "params": {
+        "type": "object",
+        "additionalProperties": true
+      },
+      "result": {
+        "type": "object",
+        "additionalProperties": true
+      }
+    },
+    "tray.destroy": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "id": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "id"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "destroyed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "destroyed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "shortcuts.register": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "accelerator": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accelerator"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "registered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "registered"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "shortcuts.unregister": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "accelerator": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "accelerator"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "unregistered": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "unregistered"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "shortcuts.list": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "shortcuts": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          }
+        },
+        "required": [
+          "shortcuts"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "notification.show": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "title": {
+            "type": "string"
+          },
+          "body": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "title",
+          "body"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "shown": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "shown"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "runtime.invoke": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "method": {
+            "type": "string"
+          },
+          "params": {
+            "$ref": "#/$defs/JsonValue"
+          }
+        },
+        "required": [
+          "method"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/$defs/JsonValue"
+      }
+    },
+    "runtime.status": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/RuntimeStatus"
+      }
+    },
+    "runtime.restart": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "$ref": "#/$defs/RuntimeStatus"
+      }
+    },
+    "runtime.cancel": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "requestId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "requestId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "cancelled": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "cancelled"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "events.subscribe": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "event": {
+            "type": "string"
+          },
+          "filter": {
+            "type": "object",
+            "additionalProperties": true
+          }
+        },
+        "required": [
+          "event"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "subscriptionId": {
+            "type": "string"
+          },
+          "event": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriptionId",
+          "event"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "events.unsubscribe": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "subscriptionId": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "subscriptionId"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "removed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "removed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "process.spawn": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "executable": {
+            "type": "string"
+          },
+          "args": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "cwd": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "executable"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "pid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pid"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "process.kill": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "pid": {
+            "type": "string"
+          }
+        },
+        "required": [
+          "pid"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "killed": {
+            "type": "boolean"
+          }
+        },
+        "required": [
+          "killed"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "net.fetch": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "url": {
+            "type": "string"
+          },
+          "method": {
+            "type": "string"
+          },
+          "headers": {
+            "type": "object",
+            "additionalProperties": {
+              "type": "string"
+            }
+          },
+          "body": {
+            "type": "string"
+          },
+          "timeoutMs": {
+            "type": "integer"
+          },
+          "maxBytes": {
+            "type": "integer"
+          }
+        },
+        "required": [
+          "url"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "status": {
+            "type": "integer"
+          },
+          "url": {
+            "type": "string"
+          },
+          "headers": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "properties": {
+                "name": {
+                  "type": "string"
+                },
+                "value": {
+                  "type": "string"
+                }
+              },
+              "required": [
+                "name",
+                "value"
+              ],
+              "additionalProperties": false
+            }
+          },
+          "bodyEncoding": {
+            "const": "base64"
+          },
+          "body": {
+            "type": "string"
+          },
+          "truncated": {
+            "const": false
+          }
+        },
+        "required": [
+          "status",
+          "url",
+          "headers",
+          "bodyEncoding",
+          "body",
+          "truncated"
+        ],
+        "additionalProperties": false
+      }
+    },
+    "system.instances.create": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "appId": {
+            "type": "string"
+          },
+          "appVersion": {
+            "type": "string"
+          },
+          "instanceId": {
+            "type": "string"
+          },
+          "isolation": {
+            "enum": [
+              "process",
+              "job",
+              "appcontainer",
+              "wsl-oci"
+            ]
+          }
+        },
+        "required": [
+          "appId",
+          "appVersion"
+        ],
+        "additionalProperties": false
+      },
+      "result": {
+        "$ref": "#/$defs/ContainerView"
+      }
+    },
+    "system.instances.list": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "appId": {
+            "type": "string"
+          },
+          "observed": {
+            "type": "array",
+            "items": {
+              "type": "string"
+            }
+          },
+          "terminal": {
+            "type": "boolean"
+          }
+        },
+        "required": [],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "containers": {
+            "type": "array",
+            "items": {
+              "$ref": "#/$defs/ContainerView"
+            }
+          }
+        },
+        "required": [
+          "containers"
+        ],
+        "additionalProperties": false
+      }
+    }
   },
   "events": {
     "menu.clicked": "{ id: string }",
