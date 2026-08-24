@@ -58,8 +58,7 @@ pub fn is_ignored(matcher: &Option<&Gitignore>, package_root: &Path, path: &Path
 
 #[cfg(windows)]
 pub fn run(package_root: &Path, manifest: AppManifest) -> Result<(), AlexError> {
-    windows::run(package_root, manifest)
-        .map_err(|error| AlexError::Validation(format!("dev mode failed: {error}")))
+    crate::shell::run_development(package_root, manifest)
 }
 
 #[cfg(not(windows))]
@@ -69,7 +68,8 @@ pub fn run(_package_root: &Path, _manifest: AppManifest) -> Result<(), AlexError
     ))
 }
 
-#[cfg(windows)]
+#[cfg(all(windows, test))]
+#[allow(dead_code)]
 mod windows {
     use std::{
         path::{Path, PathBuf},
@@ -244,7 +244,8 @@ mod windows {
                     let script = format!("window.__alexResolve({json})");
                     let _ = webview.evaluate_script(&script);
                 }
-                Event::UserEvent(UserEvent::Host(command)) => match command {
+                Event::UserEvent(UserEvent::Host(command, reply)) => {
+                    match command {
                     HostCommand::SetWindowTitle(title) => window.set_title(&title),
                     HostCommand::MinimizeWindow => window.set_minimized(true),
                     HostCommand::MaximizeWindow => window.set_maximized(true),
@@ -263,7 +264,9 @@ mod windows {
                             "alex dev: native shell command is unavailable in the development host"
                         );
                     }
-                },
+                    }
+                    let _ = reply.send(Ok(()));
+                }
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
                     WindowEvent::Focused(focused) => emit_event(

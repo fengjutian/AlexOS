@@ -71,6 +71,7 @@ struct Subscription {
     /// Filesystem path filters match the selected file or any path
     /// below a selected directory.
     filter: Option<SubscriptionFilter>,
+    window_id: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
@@ -104,6 +105,15 @@ impl EventBus {
         event: &str,
         filter: Option<SubscriptionFilter>,
     ) -> Result<String, EventBusError> {
+        self.subscribe_for_window(event, filter, None)
+    }
+
+    pub fn subscribe_for_window(
+        &self,
+        event: &str,
+        filter: Option<SubscriptionFilter>,
+        window_id: Option<u64>,
+    ) -> Result<String, EventBusError> {
         if event.is_empty() {
             return Err(EventBusError::InvalidPayload("event name is empty".into()));
         }
@@ -119,6 +129,7 @@ impl EventBus {
                 event: event.to_owned(),
                 sequence: 0,
                 filter,
+                window_id,
             },
         );
         state
@@ -198,6 +209,7 @@ impl EventBus {
                 subscription_id: subscription.id.clone(),
                 sequence: subscription.sequence,
                 payload: payload.clone(),
+                window_id: subscription.window_id,
             };
             state.pending.push(PendingDelivery {
                 event: event.to_owned(),
@@ -243,6 +255,7 @@ pub struct DeliveredEvent {
     pub subscription_id: String,
     pub sequence: u64,
     pub payload: Value,
+    pub window_id: Option<u64>,
 }
 
 /// Envelope sent to the page. The protocol is JSON Lines over the
@@ -400,6 +413,17 @@ mod tests {
         assert_eq!(drained[0].1.sequence, 1);
         // A second drain returns nothing — the queue is empty.
         assert!(bus.drain_pending().is_empty());
+    }
+
+    #[test]
+    fn delivery_preserves_the_subscribing_window() {
+        let bus = EventBus::new();
+        bus.subscribe_for_window("menu.clicked", None, Some(7))
+            .unwrap();
+        bus.deliver("menu.clicked", &serde_json::json!({ "id": "open" }));
+        let drained = bus.drain_pending();
+        assert_eq!(drained.len(), 1);
+        assert_eq!(drained[0].1.window_id, Some(7));
     }
 
     #[test]

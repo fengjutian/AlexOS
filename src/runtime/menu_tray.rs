@@ -254,6 +254,22 @@ impl MenuStore {
         let state = self.state.lock().expect("menu lock poisoned");
         state.app_shortcuts.get(app_id).cloned().unwrap_or_default()
     }
+
+    pub fn unregister_shortcut(&self, app_id: &str, accelerator: &str) -> Result<(), MenuError> {
+        let normalized = normalize_accelerator(accelerator)?;
+        let mut state = self.state.lock().expect("menu lock poisoned");
+        if state
+            .shortcuts
+            .get(&normalized)
+            .is_some_and(|owner| owner == app_id)
+        {
+            state.shortcuts.remove(&normalized);
+            if let Some(list) = state.app_shortcuts.get_mut(app_id) {
+                list.retain(|item| item != &normalized);
+            }
+        }
+        Ok(())
+    }
 }
 
 fn validate_template(template: &MenuTemplate) -> Result<(), MenuError> {
@@ -322,6 +338,10 @@ fn is_safe_icon(path: &str, package_root: &std::path::Path) -> bool {
 
 pub fn normalize_accelerator_public(accelerator: &str) -> Result<String, MenuError> {
     normalize_accelerator(accelerator)
+}
+
+pub fn validate_menu_template(template: &MenuTemplate) -> Result<(), MenuError> {
+    validate_template(template)
 }
 
 fn normalize_accelerator(accelerator: &str) -> Result<String, MenuError> {

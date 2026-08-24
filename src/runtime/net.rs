@@ -121,6 +121,10 @@ fn run_curl(
     use std::process::Stdio;
 
     let curl_path = locate_curl().ok_or(NetError::CurlMissing)?;
+    let timeout_secs = spec
+        .timeout_ms
+        .map(|value| value.div_ceil(1_000).clamp(1, 120))
+        .unwrap_or(REQUEST_TIMEOUT_SECS);
     let mut command = Command::new(&curl_path);
     command
         .arg("--silent")
@@ -131,7 +135,7 @@ fn run_curl(
         .arg("--max-filesize")
         .arg(max_bytes.to_string())
         .arg("--max-time")
-        .arg(REQUEST_TIMEOUT_SECS.to_string())
+        .arg(timeout_secs.to_string())
         .arg("--write-out")
         .arg("%{http_code}|%{url_effective}")
         .arg("--request")

@@ -2341,17 +2341,20 @@ fn api_capabilities_lists_wired_and_experimental_separately() {
     // subscription never delivers. `process.spawn` is now
     // real (Command::spawn + taskkill /T /F), so it is in
     // `available`.
-    for required in ["net.fetch"] {
+    assert!(available_names.contains(&"net.fetch"));
+    assert!(experimental_names.is_empty());
+
+    let schema: serde_json::Value =
+        serde_json::from_str(include_str!("../packages/sdk/desktop-api.schema.json")).unwrap();
+    for name in schema["capabilities"]["always"]
+        .as_array()
+        .unwrap()
+        .iter()
+        .chain(schema["capabilities"]["nativeDesktop"].as_array().unwrap())
+    {
         assert!(
-            experimental_names.contains(&required),
-            "missing experimental capability {required}"
-        );
-        // Critical: the experimental APIs must not appear in
-        // the `available` list, or pages will call them and
-        // silently no-op.
-        assert!(
-            !available_names.contains(&required),
-            "experimental capability {required} should not be in `available`"
+            available.contains(name),
+            "runtime capabilities drifted from SDK schema: {name}"
         );
     }
 }

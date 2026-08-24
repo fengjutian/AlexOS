@@ -4,7 +4,8 @@ Typed frontend API for applications running in Alex OS.
 
 Current status: source-only `0.1.0` package with no runtime dependencies. It has not been
 published to npm. The JavaScript implementation and TypeScript declarations are maintained
-manually; generated API schemas and compatibility negotiation are not implemented yet.
+from `desktop-api.schema.json`. Run `npm run generate` after changing the API and
+`npm run check:schema` in CI; runtime capability tests verify the same schema.
 
 ```js
 import { alex } from "@alex/sdk";

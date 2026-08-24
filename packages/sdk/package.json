@@ -14,8 +14,14 @@
   "files": [
     "index.js",
     "index.d.ts",
-    "README.md"
+    "README.md",
+    "desktop-api.schema.json",
+    "schema.generated.d.ts"
   ],
+  "scripts": {
+    "generate": "node generate-schema.mjs",
+    "check:schema": "node generate-schema.mjs --check"
+  },
   "sideEffects": false,
   "license": "MIT"
 }

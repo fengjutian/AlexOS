@@ -14,14 +14,15 @@
 //! - CSP can stay `connect-src 'self'` because `alex://app/api/...`
 //!   is same-origin to the page that already loaded the manifest.
 //!
-//! WebSocket upgrade is intentionally out of scope for stage 3; the
-//! HTTP/1.0 forwarder is enough for JSON-over-fetch traffic. A
-//! future slice can stream WebSocket frames over the same path.
+//! WebSocket traffic uses a capability-scoped loopback tunnel. The injected
+//! WebView bridge rewrites `new WebSocket("alex://app/api/...")` to that
+//! unguessable endpoint; the tunnel injects app identity and the backend token
+//! before relaying the handshake and frames byte-for-byte.
 
 use std::borrow::Cow;
 use std::fmt::Write as _;
 use std::io::{Read, Write};
-use std::net::{Shutdown, TcpStream, ToSocketAddrs};
+use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::time::Duration;
 
 use wry::http::{Request, Response, StatusCode};
@@ -37,6 +38,96 @@ pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const READ_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+
+/// Loopback-only capability URL used to tunnel WebSocket handshakes and
+/// frames to a service backend without exposing the backend token to JS.
+pub struct WebSocketTunnel {
+    pub base_url: String,
+}
+
+impl WebSocketTunnel {
+    pub fn start(endpoint: ServiceEndpoint, app_id: String) -> std::io::Result<Self> {
+        let listener = TcpListener::bind(("127.0.0.1", 0))?;
+        let port = listener.local_addr()?.port();
+        let mut secret = [0u8; 24];
+        getrandom::fill(&mut secret).map_err(|error| std::io::Error::other(error.to_string()))?;
+        let secret = secret
+            .iter()
+            .map(|b| format!("{b:02x}"))
+            .collect::<String>();
+        let route_prefix = format!("/{secret}");
+        let base_url = format!("ws://127.0.0.1:{port}{route_prefix}");
+        std::thread::Builder::new()
+            .name("alex-websocket-tunnel".into())
+            .spawn(move || {
+                for incoming in listener.incoming() {
+                    let Ok(client) = incoming else { break };
+                    let endpoint = endpoint.clone();
+                    let app_id = app_id.clone();
+                    let route_prefix = route_prefix.clone();
+                    std::thread::spawn(move || {
+                        let _ = relay_websocket(client, &endpoint, &app_id, &route_prefix);
+                    });
+                }
+            })?;
+        Ok(Self { base_url })
+    }
+}
+
+fn relay_websocket(
+    mut client: TcpStream,
+    endpoint: &ServiceEndpoint,
+    app_id: &str,
+    route_prefix: &str,
+) -> std::io::Result<()> {
+    let _ = client.set_read_timeout(Some(READ_WRITE_TIMEOUT));
+    let mut request = Vec::new();
+    let mut chunk = [0u8; 2048];
+    while !request.windows(4).any(|w| w == b"\r\n\r\n") && request.len() < 64 * 1024 {
+        let read = client.read(&mut chunk)?;
+        if read == 0 {
+            return Ok(());
+        }
+        request.extend_from_slice(&chunk[..read]);
+    }
+    let request_text = std::str::from_utf8(&request)
+        .map_err(|_| std::io::Error::other("non-UTF8 WebSocket handshake"))?;
+    let (head, trailing) = request_text
+        .split_once("\r\n\r\n")
+        .ok_or_else(|| std::io::Error::other("incomplete WebSocket handshake"))?;
+    let mut lines = head.lines();
+    let first = lines
+        .next()
+        .ok_or_else(|| std::io::Error::other("missing request line"))?;
+    let mut parts = first.split_whitespace();
+    let method = parts.next().unwrap_or("");
+    let target = parts.next().unwrap_or("");
+    if method != "GET" || !target.starts_with(route_prefix) {
+        client.write_all(b"HTTP/1.1 403 Forbidden\r\nContent-Length: 0\r\n\r\n")?;
+        return Ok(());
+    }
+    let backend_target = &target[route_prefix.len()..];
+    let mut upstream = TcpStream::connect(("127.0.0.1", endpoint.port))?;
+    write!(
+        upstream,
+        "GET {backend_target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Alx-App-Id: {app_id}\r\nX-Alx-Token: {}\r\n",
+        endpoint.port, endpoint.token
+    )?;
+    for line in lines {
+        if !line.to_ascii_lowercase().starts_with("host:") {
+            writeln!(upstream, "{line}\r")?;
+        }
+    }
+    upstream.write_all(b"\r\n")?;
+    upstream.write_all(trailing.as_bytes())?;
+    upstream.flush()?;
+    let mut client_read = client.try_clone()?;
+    let mut upstream_write = upstream.try_clone()?;
+    let upload = std::thread::spawn(move || std::io::copy(&mut client_read, &mut upstream_write));
+    let _ = std::io::copy(&mut upstream, &mut client);
+    let _ = upload.join();
+    Ok(())
+}
 
 /// Request headers forwarded from the page. Anything not on this
 /// list (`Host`, `Origin`, `Referer`, `Cookie`, `Sec-Fetch-*`, …)
@@ -238,6 +329,43 @@ mod tests {
     use std::net::TcpListener;
     use std::sync::{Arc, Mutex};
     use std::thread;
+
+    #[test]
+    fn websocket_tunnel_injects_identity_and_returns_upgrade() {
+        let backend = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = backend.local_addr().unwrap().port();
+        let captured = Arc::new(Mutex::new(String::new()));
+        let captured_thread = Arc::clone(&captured);
+        thread::spawn(move || {
+            let (mut stream, _) = backend.accept().unwrap();
+            let mut request = Vec::new();
+            let mut byte = [0u8; 1];
+            while !request.ends_with(b"\r\n\r\n") {
+                stream.read_exact(&mut byte).unwrap();
+                request.push(byte[0]);
+            }
+            *captured_thread.lock().unwrap() = String::from_utf8(request).unwrap();
+            stream.write_all(b"HTTP/1.1 101 Switching Protocols\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n").unwrap();
+        });
+        let tunnel = WebSocketTunnel::start(
+            ServiceEndpoint {
+                port,
+                token: "secret-token".into(),
+            },
+            "com.alex.test".into(),
+        )
+        .unwrap();
+        let url = url::Url::parse(&format!("{}/api/socket", tunnel.base_url)).unwrap();
+        let mut client = TcpStream::connect(("127.0.0.1", url.port().unwrap())).unwrap();
+        write!(client, "GET {} HTTP/1.1\r\nHost: 127.0.0.1\r\nUpgrade: websocket\r\nConnection: Upgrade\r\n\r\n", url.path()).unwrap();
+        let mut response = [0u8; 128];
+        let read = client.read(&mut response).unwrap();
+        assert!(String::from_utf8_lossy(&response[..read]).contains("101 Switching Protocols"));
+        let request = captured.lock().unwrap().clone();
+        assert!(request.contains("GET /api/socket HTTP/1.1"));
+        assert!(request.contains("X-Alx-App-Id: com.alex.test"));
+        assert!(request.contains("X-Alx-Token: secret-token"));
+    }
 
     /// Spawn a one-shot TCP server: it accepts a single connection,
     /// reads until EOF, writes `reply`, then drops the stream.

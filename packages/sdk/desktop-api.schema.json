@@ -1,0 +1,33 @@
+{
+  "version": 1,
+  "capabilities": {
+    "always": [
+      "filesystem.readText", "filesystem.readBinary", "filesystem.writeText", "filesystem.writeBinary",
+      "filesystem.exists", "filesystem.stat", "filesystem.readDir", "filesystem.createDir",
+      "filesystem.remove", "filesystem.rename", "filesystem.copy", "filesystem.watch", "filesystem.unwatch",
+      "storage.get", "storage.set", "storage.delete", "storage.clear", "storage.keys",
+      "paths.dataDir", "paths.cacheDir", "paths.tempDir",
+      "dialog.openFile", "dialog.openFiles", "dialog.openDirectory", "dialog.saveFile",
+      "clipboard.readText", "clipboard.writeText", "system.info", "system.capabilities",
+      "system.requestPermission", "system.openExternal", "system.listApps", "system.listExtensions",
+      "system.install", "system.uninstall", "system.listPermissions", "system.setPermission",
+      "system.listTrustedPublishers", "system.readAuditLog", "window.setTitle", "window.minimize",
+      "window.maximize", "window.close", "notification.show", "runtime.invoke", "runtime.status",
+      "runtime.restart", "runtime.cancel", "events.subscribe", "events.unsubscribe",
+      "system.container.create", "system.container.start", "system.container.stop",
+      "system.container.restart", "system.container.remove", "system.container.inspect",
+      "system.container.list", "system.container.logs", "process.spawn", "process.kill", "net.fetch"
+    ],
+    "nativeDesktop": [
+      "window.create", "window.list", "window.getBounds", "window.setBounds", "window.setFullscreen",
+      "window.isFullscreen", "window.destroy", "menu.setApplicationMenu", "menu.setContextMenu",
+      "tray.create", "tray.destroy", "shortcuts.register", "shortcuts.unregister", "shortcuts.list"
+    ],
+    "experimental": []
+  },
+  "events": {
+    "menu.clicked": "{ id: string }",
+    "tray.clicked": "{ id: string }",
+    "shortcut.triggered": "{ accelerator: string }"
+  }
+}

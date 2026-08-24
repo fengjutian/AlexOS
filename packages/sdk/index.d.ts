@@ -145,11 +145,21 @@ export interface NetFetchInput {
   headers?: Record<string, string>;
   body?: string;
   timeoutMs?: number;
+  maxBytes?: number;
 }
 
+export interface NetFetchResponse {
+  status: number;
+  finalUrl: string;
+  /** Base64-encoded response bytes. */
+  body: string;
+}
+
+export type { AlexCapability, AlexGeneratedEventMap } from "./schema.generated.js";
+
 export interface SystemCapabilities {
-  capabilities: string[];
-  experimental: string[];
+  capabilities: import("./schema.generated.js").AlexCapability[];
+  experimental: import("./schema.generated.js").AlexCapability[];
 }
 
 export interface SystemInfo {
@@ -383,7 +393,7 @@ export interface AlexClient {
     kill(pid: string, options?: InvokeOptions): Promise<{ killed: boolean }>;
   };
   readonly net: {
-    fetch(input: NetFetchInput, options?: InvokeOptions): Promise<{ queued: boolean }>;
+    fetch(input: NetFetchInput, options?: InvokeOptions): Promise<NetFetchResponse>;
   };
   readonly system: {
     info(options?: InvokeOptions): Promise<SystemInfo>;

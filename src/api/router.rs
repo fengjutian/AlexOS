@@ -270,6 +270,10 @@ impl ApiRouter {
     }
 
     pub fn dispatch_json(&self, input: &str) -> Response {
+        self.dispatch_json_for_window(input, None)
+    }
+
+    pub fn dispatch_json_for_window(&self, input: &str, window_id: Option<u64>) -> Response {
         if input.len() > MAX_IPC_MESSAGE_BYTES {
             return Response::error(
                 "unknown",
@@ -283,10 +287,14 @@ impl ApiRouter {
                 return Response::error("unknown", "INVALID_REQUEST", error.to_string());
             }
         };
-        self.dispatch(request)
+        self.dispatch_for_window(request, window_id)
     }
 
     pub fn dispatch(&self, request: Request) -> Response {
+        self.dispatch_for_window(request, None)
+    }
+
+    pub fn dispatch_for_window(&self, request: Request, window_id: Option<u64>) -> Response {
         if request.protocol != PROTOCOL_VERSION {
             return Response::error(
                 request.id,
@@ -313,7 +321,7 @@ impl ApiRouter {
                 "an in-flight request with this id is already running",
             );
         }
-        let result = self.dispatch_inner(&request);
+        let result = self.dispatch_inner(&request, window_id);
         self.unregister_inflight(&request.id);
         match result {
             Ok(value) => Response::success(request.id, value),
@@ -321,7 +329,7 @@ impl ApiRouter {
         }
     }
 
-    fn dispatch_inner(&self, request: &Request) -> ApiResult {
+    fn dispatch_inner(&self, request: &Request, window_id: Option<u64>) -> ApiResult {
         match request.method.as_str() {
             // ---- filesystem ------------------------------------------------
             "filesystem.readText" => self.read_text(&request.params),
@@ -335,7 +343,7 @@ impl ApiRouter {
             "filesystem.remove" => self.fs_remove(&request.params),
             "filesystem.rename" => self.fs_rename(&request.params),
             "filesystem.copy" => self.fs_copy(&request.params),
-            "filesystem.watch" => self.fs_watch(&request.params),
+            "filesystem.watch" => self.fs_watch(&request.params, window_id),
             "filesystem.unwatch" => self.fs_unwatch(&request.params),
             // ---- storage ---------------------------------------------------
             "storage.get" => self.storage_get(&request.params),
@@ -405,7 +413,7 @@ impl ApiRouter {
             "runtime.restart" => self.runtime_restart(),
             "runtime.cancel" => self.runtime_cancel(&request.params),
             // ---- events ----------------------------------------------------
-            "events.subscribe" => self.events_subscribe(&request.id, &request.params),
+            "events.subscribe" => self.events_subscribe(&request.id, &request.params, window_id),
             "events.unsubscribe" => self.events_unsubscribe(&request.params),
             // ---- process ---------------------------------------------------
             "process.spawn" => self.process_spawn(&request.params),
@@ -773,16 +781,17 @@ impl ApiRouter {
         Ok(json!({ "copied": true }))
     }
 
-    fn fs_watch(&self, params: &Value) -> ApiResult {
+    fn fs_watch(&self, params: &Value, window_id: Option<u64>) -> ApiResult {
         let params: PathParams = parse_params(params)?;
         let resolved = self.resolve_scoped(&params.path, "filesystem.watch")?;
         let subscription_id = self
             .event_bus
-            .subscribe(
+            .subscribe_for_window(
                 "filesystem.changed",
                 Some(SubscriptionFilter::Path {
                     value: resolved.to_string_lossy().into_owned(),
                 }),
+                window_id,
             )
             .map_err(|error| ("SUBSCRIBE_FAILED", error.to_string()))?;
         if let Some(registry) = &self.watcher_registry {
@@ -1252,7 +1261,10 @@ impl ApiRouter {
             "system.setPermission",
             "system.listTrustedPublishers",
             "system.readAuditLog",
-            "window.setTitle", "window.minimize", "window.maximize", "window.close",
+            "window.setTitle",
+            "window.minimize",
+            "window.maximize",
+            "window.close",
             "notification.show",
             "runtime.invoke",
             "runtime.status",
@@ -1293,7 +1305,8 @@ impl ApiRouter {
                 "shortcuts.list",
             ]);
         }
-        let experimental = ["net.fetch"];
+        available.push("net.fetch");
+        let experimental: [&str; 0] = [];
         Ok(json!({
             "capabilities": available,
             "experimental": experimental,
@@ -1975,11 +1988,15 @@ impl ApiRouter {
             object.remove("windowId");
         }
         let bounds: WindowBounds = parse_params(&filtered)?;
+        let previous = self
+            .windows
+            .get(&self.manifest.id, id)
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
         let info = self
             .windows
             .set_bounds(&self.manifest.id, id, bounds)
             .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
-        self.execute_host(HostCommand::SetWindowBounds(
+        if let Err(error) = self.execute_host(HostCommand::SetWindowBounds(
             id.raw(),
             WindowBounds {
                 x: info.x,
@@ -1987,7 +2004,19 @@ impl ApiRouter {
                 width: Some(info.width),
                 height: Some(info.height),
             },
-        ))?;
+        )) {
+            let _ = self.windows.set_bounds(
+                &self.manifest.id,
+                id,
+                WindowBounds {
+                    x: previous.x,
+                    y: previous.y,
+                    width: Some(previous.width),
+                    height: Some(previous.height),
+                },
+            );
+            return Err(error);
+        }
         Ok(serde_json::to_value(info).unwrap_or(Value::Null))
     }
 
@@ -2002,11 +2031,20 @@ impl ApiRouter {
             .get("fullscreen")
             .and_then(|v| v.as_bool())
             .ok_or_else(|| ("INVALID_PARAMS", "missing `fullscreen`".to_owned()))?;
+        let previous = self
+            .windows
+            .get(&self.manifest.id, id)
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
         let info = self
             .windows
             .set_fullscreen(&self.manifest.id, id, value)
             .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
-        self.execute_host(HostCommand::SetWindowFullscreen(id.raw(), value))?;
+        if let Err(error) = self.execute_host(HostCommand::SetWindowFullscreen(id.raw(), value)) {
+            let _ = self
+                .windows
+                .set_fullscreen(&self.manifest.id, id, previous.fullscreen);
+            return Err(error);
+        }
         Ok(serde_json::to_value(info).unwrap_or(Value::Null))
     }
 
@@ -2029,10 +2067,10 @@ impl ApiRouter {
         )?;
         self.require_secondary_window_host()?;
         let id = self.parse_window_id(params)?;
+        self.execute_host(HostCommand::DestroyWindow(id.raw()))?;
         self.windows
             .destroy(&self.manifest.id, id)
             .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
-        self.execute_host(HostCommand::DestroyWindow(id.raw()))?;
         Ok(json!({ "destroyed": true }))
     }
 
@@ -2042,10 +2080,12 @@ impl ApiRouter {
             "menu.manage",
         )?;
         let template: MenuTemplate = parse_params(params)?;
-        self.menu_store
-            .set_application_menu(&self.manifest.id, template.clone())
+        crate::menu_tray::validate_menu_template(&template)
             .map_err(|error| ("MENU_ERROR", error.to_string()))?;
-        self.execute_host(HostCommand::SetApplicationMenu(template))?;
+        self.execute_host(HostCommand::SetApplicationMenu(template.clone()))?;
+        self.menu_store
+            .set_application_menu(&self.manifest.id, template)
+            .map_err(|error| ("MENU_ERROR", error.to_string()))?;
         Ok(json!({ "applied": true }))
     }
 
@@ -2055,10 +2095,12 @@ impl ApiRouter {
             "menu.manage",
         )?;
         let template: MenuTemplate = parse_params(params)?;
-        self.menu_store
-            .set_context_menu(&self.manifest.id, template.clone())
+        crate::menu_tray::validate_menu_template(&template)
             .map_err(|error| ("MENU_ERROR", error.to_string()))?;
-        self.execute_host(HostCommand::SetContextMenu(template))?;
+        self.execute_host(HostCommand::SetContextMenu(template.clone()))?;
+        self.menu_store
+            .set_context_menu(&self.manifest.id, template)
+            .map_err(|error| ("MENU_ERROR", error.to_string()))?;
         Ok(json!({ "applied": true }))
     }
 
@@ -2072,11 +2114,14 @@ impl ApiRouter {
             .menu_store
             .create_tray(&self.manifest.id, spec.clone(), &self.package_root)
             .map_err(|error| ("TRAY_ERROR", error.to_string()))?;
-        self.execute_host(HostCommand::CreateTray(
+        if let Err(error) = self.execute_host(HostCommand::CreateTray(
             info.id.clone(),
             spec,
             self.package_root.clone(),
-        ))?;
+        )) {
+            let _ = self.menu_store.destroy_tray(&self.manifest.id, &info.id);
+            return Err(error);
+        }
         Ok(serde_json::to_value(info).unwrap_or(Value::Null))
     }
 
@@ -2089,10 +2134,10 @@ impl ApiRouter {
             .get("id")
             .and_then(|v| v.as_str())
             .ok_or_else(|| ("INVALID_PARAMS", "missing `id`".to_owned()))?;
+        self.execute_host(HostCommand::DestroyTray(tray_id.to_owned()))?;
         self.menu_store
             .destroy_tray(&self.manifest.id, tray_id)
             .map_err(|error| ("TRAY_ERROR", error.to_string()))?;
-        self.execute_host(HostCommand::DestroyTray(tray_id.to_owned()))?;
         Ok(json!({ "destroyed": true }))
     }
 
@@ -2110,7 +2155,12 @@ impl ApiRouter {
             .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
         let normalized = crate::menu_tray::normalize_accelerator_public(accelerator)
             .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
-        self.execute_host(HostCommand::RegisterShortcut(normalized))?;
+        if let Err(error) = self.execute_host(HostCommand::RegisterShortcut(normalized)) {
+            let _ = self
+                .menu_store
+                .unregister_shortcut(&self.manifest.id, accelerator);
+            return Err(error);
+        }
         Ok(json!({ "registered": true }))
     }
 
@@ -2125,19 +2175,10 @@ impl ApiRouter {
             .ok_or_else(|| ("INVALID_PARAMS", "missing `accelerator`".to_owned()))?;
         let normalized = crate::menu_tray::normalize_accelerator_public(accelerator)
             .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
-        let mut state = self.menu_store.state.lock().expect("menu lock poisoned");
-        if state
-            .shortcuts
-            .get(&normalized)
-            .is_some_and(|owner| owner == &self.manifest.id)
-        {
-            state.shortcuts.remove(&normalized);
-            if let Some(list) = state.app_shortcuts.get_mut(&self.manifest.id) {
-                list.retain(|accel| accel != &normalized);
-            }
-        }
-        drop(state);
         self.execute_host(HostCommand::UnregisterShortcut(normalized))?;
+        self.menu_store
+            .unregister_shortcut(&self.manifest.id, accelerator)
+            .map_err(|error| ("SHORTCUT_ERROR", error.to_string()))?;
         Ok(json!({ "unregistered": true }))
     }
 
@@ -2245,36 +2286,23 @@ impl ApiRouter {
             "network.fetch",
         )?;
         let params: NetFetchParams = parse_params(params)?;
-        let parsed = url::Url::parse(&params.url)
-            .map_err(|error| ("INVALID_PARAMS", format!("invalid URL: {error}")))?;
-        if !matches!(parsed.scheme(), "https" | "http") {
-            return Err((
-                "INVALID_PARAMS",
-                "only http and https URLs are allowed".into(),
-            ));
-        }
-        let origin = parsed.origin().ascii_serialization();
-        let allowed = self.manifest.permissions.iter().any(|permission| {
-            matches!(permission, Permission::NetworkFetch { origins } if origins.iter().any(|o| o == &origin))
-        });
-        if !allowed {
-            return Err((
-                "PERMISSION_DENIED",
-                format!("origin {origin} is not on the network.fetch allow-list"),
-            ));
-        }
         if !self.permission_granted("network.fetch") {
             return Err(("PERMISSION_DENIED", "network.fetch was revoked".into()));
         }
-        // The 0.2 P1 slice does not actually perform the
-        // request; the host layer in shell.rs is the one
-        // that owns the TLS / DNS rebinding checks. This
-        // method just enforces the manifest / permission
-        // gate and returns a stable envelope.
+        let spec = crate::net::FetchSpec {
+            url: params.url,
+            method: params.method,
+            headers: params.headers,
+            body: params.body,
+            timeout_ms: params.timeout_ms,
+            max_bytes: params.max_bytes,
+        };
+        let response = crate::net::fetch(&spec, &self.manifest.permissions)
+            .map_err(|error| ("NETWORK_ERROR", error.to_string()))?;
         Ok(json!({
-            "url": params.url,
-            "method": params.method.unwrap_or_else(|| "GET".into()),
-            "queued": true,
+            "status": response.status,
+            "finalUrl": response.final_url,
+            "body": base64::engine::general_purpose::STANDARD.encode(response.body),
         }))
     }
 
@@ -2303,7 +2331,12 @@ impl ApiRouter {
     // Events
     // ------------------------------------------------------------------
 
-    fn events_subscribe(&self, request_id: &str, params: &Value) -> ApiResult {
+    fn events_subscribe(
+        &self,
+        request_id: &str,
+        params: &Value,
+        window_id: Option<u64>,
+    ) -> ApiResult {
         let parsed: SubscribeRequest = serde_json::from_value(params.clone())
             .map_err(|error| ("INVALID_PARAMS", error.to_string()))?;
         let filter = match parsed.filter {
@@ -2317,7 +2350,7 @@ impl ApiRouter {
         };
         let id = self
             .event_bus
-            .subscribe(&parsed.event, filter)
+            .subscribe_for_window(&parsed.event, filter, window_id)
             .map_err(|error| ("SUBSCRIBE_FAILED", error.to_string()))?;
         let _ = request_id;
         Ok(json!({ "subscriptionId": id, "event": parsed.event }))
@@ -2621,6 +2654,8 @@ struct NetFetchParams {
     body: Option<String>,
     #[serde(default)]
     timeout_ms: Option<u64>,
+    #[serde(default)]
+    max_bytes: Option<usize>,
 }
 
 // ---- helpers -------------------------------------------------------------

@@ -17,18 +17,20 @@ nav_order: 6
 - RPC/service 运行时、取消、状态、重启和订阅事件。
 - 进程启动/终止，以及插件安装、权限、信任库、审计和容器 API。
 - 生产 shell 的多窗口：独立 IPC、窗口事件、拖放、service proxy 和关闭同步。
+- Service WebSocket 使用带随机 capability 路径的 loopback 隧道，自动注入应用身份和
+  后端 token；页面继续使用 `new WebSocket("alex://app/api/...")`。
 - 生产 shell 的应用菜单、右键菜单、托盘和全局快捷键；点击通过
   `menu.clicked`、`tray.clicked`、`shortcut.triggered` 返回页面。
 
-`alex dev` 不模拟第二个原生窗口以及菜单/托盘/全局快捷键。调用这些 API 会返回
-`NATIVE_UNAVAILABLE`，并且它们不会出现在该宿主的 `capabilities` 中；不会再出现
-“IPC 返回 ok、宿主随后忽略命令”的虚假成功。
+`alex dev` 与生产 Shell 共享同一套原生窗口、菜单、托盘和全局快捷键宿主，并在
+此基础上启用文件监听、自动刷新和 DevTools。
 
 ## 实验能力
 
 | API | 当前状态 | 剩余工作 |
 | --- | --- | --- |
-| `net.fetch` | 已完成权限、来源白名单和参数校验，只返回 queued | 接入已有的受限 HTTP 客户端并返回真实响应 |
+当前没有实验能力。`net.fetch` 已接入 HTTPS-only、来源白名单、禁止自动重定向和
+响应体大小限制的真实客户端，返回状态码、最终 URL 与 Base64 响应体。
 
 摄像头、麦克风和定位不是 Alex IPC 方法。应用先通过
 `system.requestPermission` 请求权限，再调用 WebView 的浏览器 API，因此不列入
@@ -45,6 +47,5 @@ nav_order: 6
 
 ## 验证
 
-常规回归使用 `cargo test --all --offline`。原生窗口、系统托盘和全局快捷键还应在
-Windows 交互会话中运行 `alex run <package>` 做冒烟测试；无桌面的 CI 只能覆盖路由、
-状态同步和命令接线。
+常规回归使用 `cargo test --all --offline`。Windows 交互式 GUI 冒烟测试使用
+`ALEX_RUN_NATIVE_GUI_TESTS=1 cargo test --test native_gui -- --nocapture`。

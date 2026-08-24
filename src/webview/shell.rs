@@ -9,13 +9,20 @@ pub fn run(
     system_install_root: Option<&Path>,
     system_trust_root: Option<&Path>,
 ) -> Result<(), AlexError> {
-    windows::run(
+    windows::run_mode(
         package_root,
         manifest,
         system_install_root,
         system_trust_root,
+        false,
     )
     .map_err(|error| AlexError::Validation(format!("shell failed: {error}")))
+}
+
+#[cfg(windows)]
+pub fn run_development(package_root: &Path, manifest: AppManifest) -> Result<(), AlexError> {
+    windows::run_mode(package_root, manifest, None, None, true)
+        .map_err(|error| AlexError::Validation(format!("dev shell failed: {error}")))
 }
 
 #[cfg(not(windows))]
@@ -139,13 +146,22 @@ pub mod windows {
     #[derive(Debug)]
     pub enum UserEvent {
         IpcResponse(Option<u64>, String),
-        Host(HostCommand),
+        Host(
+            HostCommand,
+            std::sync::mpsc::SyncSender<Result<(), NativeError>>,
+        ),
     }
 
     #[derive(Clone)]
     pub struct WindowHost {
         pub proxy: tao::event_loop::EventLoopProxy<UserEvent>,
         pub secondary_windows: bool,
+    }
+
+    #[derive(Clone, Copy)]
+    enum ShellDevCommand {
+        Reload,
+        RestartRuntime,
     }
 
     impl NativeHost for WindowHost {
@@ -167,9 +183,13 @@ pub mod windows {
             {
                 return Err(NativeError::Unsupported);
             }
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
             self.proxy
-                .send_event(UserEvent::Host(command))
-                .map_err(|_| NativeError::Failed("window event loop is closed".into()))
+                .send_event(UserEvent::Host(command, reply_tx))
+                .map_err(|_| NativeError::Failed("window event loop is closed".into()))?;
+            reply_rx
+                .recv_timeout(Duration::from_secs(30))
+                .map_err(|_| NativeError::Failed("native command timed out".into()))?
         }
 
         fn supports_secondary_windows(&self) -> bool {
@@ -177,16 +197,21 @@ pub mod windows {
         }
     }
 
-    pub fn run(
+    pub fn run_mode(
         package_root: &Path,
         manifest: AppManifest,
         system_install_root: Option<&Path>,
         system_trust_root: Option<&Path>,
+        dev_mode: bool,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let event_loop = EventLoopBuilder::<UserEvent>::with_user_event().build();
         let proxy = event_loop.create_proxy();
         let window = WindowBuilder::new()
-            .with_title(&manifest.name)
+            .with_title(if dev_mode {
+                format!("{} (dev)", manifest.name)
+            } else {
+                manifest.name.clone()
+            })
             .build(&event_loop)?;
 
         let permissions = PermissionStore::for_app(&manifest.id)?;
@@ -266,15 +291,34 @@ pub mod windows {
         let root = package_root.to_path_buf();
         let frontend = manifest.frontend.entry.clone();
         let package_id = serde_json::to_string(&manifest.id)?;
-        let init_script = BRIDGE.replace("__ALEX_PACKAGE_ID__", &package_id)
+        let mut init_script = BRIDGE.replace("__ALEX_PACKAGE_ID__", &package_id)
             + &crate::permission_shim::shim_source(&manifest.permissions);
+        if let Some(endpoint) = service_endpoint.clone() {
+            let tunnel = crate::proxy::WebSocketTunnel::start(endpoint, manifest.id.clone())?;
+            let base = serde_json::to_string(&tunnel.base_url)?;
+            init_script.push_str(&format!(r#"
+              (() => {{
+                const NativeWebSocket = window.WebSocket;
+                const base = {base};
+                window.WebSocket = new Proxy(NativeWebSocket, {{
+                  construct(Target, args) {{
+                    const value = String(args[0]);
+                    if (value.startsWith("alex://app/api/")) args[0] = base + value.slice("alex://app".length);
+                    return Reflect.construct(Target, args);
+                  }}
+                }});
+              }})();
+            "#));
+        }
         let endpoint_for_handler = service_endpoint.clone();
         let app_id_for_handler = manifest.id.clone();
         let drop_router = Arc::clone(&router);
 
         let webview = WebViewBuilder::new()
             .with_initialization_script(&init_script)
-            .with_devtools(cfg!(debug_assertions) && std::env::var_os("ALEX_DEVTOOLS").is_some())
+            .with_devtools(
+                dev_mode || (cfg!(debug_assertions) && std::env::var_os("ALEX_DEVTOOLS").is_some()),
+            )
             .with_incognito(true)
             .with_clipboard(false)
             .with_navigation_handler(|url| crate::is_internal_webview_url(&url, "app"))
@@ -330,8 +374,33 @@ pub mod windows {
         let mut tray_icons: HashMap<String, TrayIcon> = HashMap::new();
         let hotkey_manager = GlobalHotKeyManager::new()?;
         let mut hotkeys: HashMap<u32, (HotKey, String)> = HashMap::new();
+        let (reload_tx, reload_rx) = std::sync::mpsc::sync_channel(1);
+        let mut _dev_watcher = if dev_mode {
+            use notify::Watcher as _;
+            let backend_root = manifest.backend.as_ref().map(|backend| {
+                package_root.join(Path::new(&backend.entry).parent().unwrap_or(Path::new("")))
+            });
+            let mut watcher =
+                notify::recommended_watcher(move |result: notify::Result<notify::Event>| {
+                    if let Ok(event) = result {
+                        let command = if backend_root.as_ref().is_some_and(|root| {
+                            event.paths.iter().any(|path| path.starts_with(root))
+                        }) {
+                            ShellDevCommand::RestartRuntime
+                        } else {
+                            ShellDevCommand::Reload
+                        };
+                        let _ = reload_tx.try_send(command);
+                    }
+                })?;
+            watcher.watch(package_root, notify::RecursiveMode::Recursive)?;
+            Some(watcher)
+        } else {
+            None
+        };
 
         event_loop.run(move |event, event_loop_target, control_flow| {
+            let _keep_watcher_alive = &_dev_watcher;
             *control_flow =
                 ControlFlow::WaitUntil(std::time::Instant::now() + Duration::from_millis(50));
             match event {
@@ -345,194 +414,254 @@ pub mod windows {
                         let _ = webview.evaluate_script(&script);
                     }
                 }
-                Event::UserEvent(UserEvent::Host(command)) => match command {
-                    HostCommand::SetWindowTitle(title) => window.set_title(&title),
-                    HostCommand::MinimizeWindow => window.set_minimized(true),
-                    HostCommand::MaximizeWindow => window.set_maximized(true),
-                    HostCommand::CloseWindow => *control_flow = ControlFlow::Exit,
-                    HostCommand::CreateWindow(info) => {
-                        let mut builder = WindowBuilder::new()
-                            .with_title(&info.title)
-                            .with_inner_size(PhysicalSize::new(info.width, info.height));
-                        if let (Some(x), Some(y)) = (info.x, info.y) {
-                            builder = builder.with_position(PhysicalPosition::new(x, y));
-                        }
-                        match builder.build(event_loop_target) {
-                            Ok(child_window) => {
-                                let native_id = child_window.id();
-                                let ipc_router = Arc::clone(&child_router);
-                                let ipc_proxy = child_proxy.clone();
-                                let child_id = info.id.raw();
-                                let asset_root = child_root.clone();
-                                let frontend = child_frontend.clone();
-                                let service_endpoint = child_service_endpoint.clone();
-                                let service_app_id = child_app_id.clone();
-                                let drop_router = Arc::clone(&child_router);
-                                let url = if info.url.starts_with("alex://app/") {
-                                    info.url.clone()
-                                } else {
-                                    format!("alex://app/{}", info.url.trim_start_matches('/'))
-                                };
-                                let built = WebViewBuilder::new()
-                                    .with_initialization_script(child_init_script.clone())
-                                    .with_incognito(true)
-                                    .with_clipboard(false)
-                                    .with_navigation_handler(|url| {
-                                        crate::is_internal_webview_url(&url, "app")
-                                    })
-                                    .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
-                                    .with_download_started_handler(|_, _| false)
-                                    .with_drag_drop_handler(move |event| match event {
-                                        wry::DragDropEvent::Drop { paths, position } => drop_router
-                                            .deliver_file_drop(paths, position.0, position.1),
-                                        _ => false,
-                                    })
-                                    .with_ipc_handler(move |request| {
-                                        let router = Arc::clone(&ipc_router);
-                                        let proxy = ipc_proxy.clone();
-                                        let body = request.body().clone();
-                                        std::thread::spawn(move || {
-                                            let response = router.dispatch_json(&body);
-                                            if let Ok(json) = serde_json::to_string(&response) {
-                                                let _ = proxy.send_event(UserEvent::IpcResponse(
-                                                    Some(child_id),
-                                                    json,
-                                                ));
+                Event::UserEvent(UserEvent::Host(command, reply)) => {
+                    let mut host_result = Ok(());
+                    match command {
+                        HostCommand::SetWindowTitle(title) => window.set_title(&title),
+                        HostCommand::MinimizeWindow => window.set_minimized(true),
+                        HostCommand::MaximizeWindow => window.set_maximized(true),
+                        HostCommand::CloseWindow => *control_flow = ControlFlow::Exit,
+                        HostCommand::CreateWindow(info) => {
+                            let mut builder = WindowBuilder::new()
+                                .with_title(&info.title)
+                                .with_inner_size(PhysicalSize::new(info.width, info.height));
+                            if let (Some(x), Some(y)) = (info.x, info.y) {
+                                builder = builder.with_position(PhysicalPosition::new(x, y));
+                            }
+                            match builder.build(event_loop_target) {
+                                Ok(child_window) => {
+                                    let native_id = child_window.id();
+                                    let ipc_router = Arc::clone(&child_router);
+                                    let ipc_proxy = child_proxy.clone();
+                                    let child_id = info.id.raw();
+                                    let asset_root = child_root.clone();
+                                    let frontend = child_frontend.clone();
+                                    let service_endpoint = child_service_endpoint.clone();
+                                    let service_app_id = child_app_id.clone();
+                                    let drop_router = Arc::clone(&child_router);
+                                    let url = if info.url.starts_with("alex://app/") {
+                                        info.url.clone()
+                                    } else {
+                                        format!("alex://app/{}", info.url.trim_start_matches('/'))
+                                    };
+                                    let built = WebViewBuilder::new()
+                                        .with_initialization_script(child_init_script.clone())
+                                        .with_incognito(true)
+                                        .with_clipboard(false)
+                                        .with_navigation_handler(|url| {
+                                            crate::is_internal_webview_url(&url, "app")
+                                        })
+                                        .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+                                        .with_download_started_handler(|_, _| false)
+                                        .with_drag_drop_handler(move |event| match event {
+                                            wry::DragDropEvent::Drop { paths, position } => {
+                                                drop_router.deliver_file_drop(
+                                                    paths, position.0, position.1,
+                                                )
                                             }
-                                        });
-                                    })
-                                    .with_custom_protocol("alex".into(), move |_id, request| {
-                                        let path = request.uri().path();
-                                        if path.starts_with("/api/") {
-                                            if let Some(endpoint) = &service_endpoint {
-                                                return crate::proxy::proxy_to_service(
-                                                    endpoint,
-                                                    &service_app_id,
-                                                    path,
-                                                    &request,
+                                            _ => false,
+                                        })
+                                        .with_ipc_handler(move |request| {
+                                            let router = Arc::clone(&ipc_router);
+                                            let proxy = ipc_proxy.clone();
+                                            let body = request.body().clone();
+                                            std::thread::spawn(move || {
+                                                let response = router.dispatch_json_for_window(
+                                                    &body,
+                                                    Some(child_id),
+                                                );
+                                                if let Ok(json) = serde_json::to_string(&response) {
+                                                    let _ =
+                                                        proxy.send_event(UserEvent::IpcResponse(
+                                                            Some(child_id),
+                                                            json,
+                                                        ));
+                                                }
+                                            });
+                                        })
+                                        .with_custom_protocol("alex".into(), move |_id, request| {
+                                            let path = request.uri().path();
+                                            if path.starts_with("/api/") {
+                                                if let Some(endpoint) = &service_endpoint {
+                                                    return crate::proxy::proxy_to_service(
+                                                        endpoint,
+                                                        &service_app_id,
+                                                        path,
+                                                        &request,
+                                                    );
+                                                }
+                                                return crate::proxy::service_unavailable_response(
                                                 );
                                             }
-                                            return crate::proxy::service_unavailable_response();
+                                            asset_response(&asset_root, &frontend, path)
+                                        })
+                                        .with_url(&url)
+                                        .build(&child_window);
+                                    match built {
+                                        Ok(child_webview) => {
+                                            native_child_ids.insert(native_id, info.id.raw());
+                                            child_windows.insert(info.id.raw(), child_window);
+                                            child_webviews.insert(info.id.raw(), child_webview);
                                         }
-                                        asset_response(&asset_root, &frontend, path)
-                                    })
-                                    .with_url(&url)
-                                    .build(&child_window);
-                                match built {
-                                    Ok(child_webview) => {
-                                        native_child_ids.insert(native_id, info.id.raw());
-                                        child_windows.insert(info.id.raw(), child_window);
-                                        child_webviews.insert(info.id.raw(), child_webview);
+                                        Err(error) => {
+                                            host_result = Err(NativeError::Failed(format!(
+                                                "failed to create child webview: {error}"
+                                            )))
+                                        }
                                     }
+                                }
+                                Err(error) => {
+                                    host_result = Err(NativeError::Failed(format!(
+                                        "failed to create child window: {error}"
+                                    )))
+                                }
+                            }
+                        }
+                        HostCommand::SetWindowBounds(id, bounds) => {
+                            if let Some(child) = child_windows.get(&id) {
+                                if let (Some(x), Some(y)) = (bounds.x, bounds.y) {
+                                    child.set_outer_position(PhysicalPosition::new(x, y));
+                                }
+                                if let (Some(width), Some(height)) = (bounds.width, bounds.height) {
+                                    child.set_inner_size(PhysicalSize::new(width, height));
+                                }
+                            } else {
+                                host_result =
+                                    Err(NativeError::Failed(format!("unknown child window {id}")));
+                            }
+                        }
+                        HostCommand::SetWindowFullscreen(id, fullscreen) => {
+                            if let Some(child) = child_windows.get(&id) {
+                                child.set_fullscreen(
+                                    fullscreen.then(|| tao::window::Fullscreen::Borderless(None)),
+                                );
+                            } else {
+                                host_result =
+                                    Err(NativeError::Failed(format!("unknown child window {id}")));
+                            }
+                        }
+                        HostCommand::DestroyWindow(id) => {
+                            child_webviews.remove(&id);
+                            if let Some(child) = child_windows.remove(&id) {
+                                native_child_ids.remove(&child.id());
+                            } else {
+                                host_result =
+                                    Err(NativeError::Failed(format!("unknown child window {id}")));
+                            }
+                        }
+                        HostCommand::SetApplicationMenu(template) => match build_menu(&template) {
+                            Ok(menu) => {
+                                if let Some(previous) = application_menu.take() {
+                                    let _ =
+                                        unsafe { previous.remove_for_hwnd(window.hwnd() as isize) };
+                                }
+                                match unsafe { menu.init_for_hwnd(window.hwnd() as isize) } {
+                                    Ok(()) => application_menu = Some(menu),
                                     Err(error) => {
-                                        eprintln!("alex window: failed to create webview: {error}")
+                                        host_result = Err(NativeError::Failed(format!(
+                                            "failed to attach application menu: {error}"
+                                        )))
                                     }
                                 }
                             }
                             Err(error) => {
-                                eprintln!("alex window: failed to create window: {error}")
+                                host_result = Err(NativeError::Failed(format!(
+                                    "invalid native menu: {error}"
+                                )))
                             }
-                        }
-                    }
-                    HostCommand::SetWindowBounds(id, bounds) => {
-                        if let Some(child) = child_windows.get(&id) {
-                            if let (Some(x), Some(y)) = (bounds.x, bounds.y) {
-                                child.set_outer_position(PhysicalPosition::new(x, y));
+                        },
+                        HostCommand::SetContextMenu(template) => match build_menu(&template) {
+                            Ok(menu) => context_menu = Some(menu),
+                            Err(error) => {
+                                host_result = Err(NativeError::Failed(format!(
+                                    "invalid context menu: {error}"
+                                )))
                             }
-                            if let (Some(width), Some(height)) = (bounds.width, bounds.height) {
-                                child.set_inner_size(PhysicalSize::new(width, height));
-                            }
-                        }
-                    }
-                    HostCommand::SetWindowFullscreen(id, fullscreen) => {
-                        if let Some(child) = child_windows.get(&id) {
-                            child.set_fullscreen(
-                                fullscreen.then(|| tao::window::Fullscreen::Borderless(None)),
-                            );
-                        }
-                    }
-                    HostCommand::DestroyWindow(id) => {
-                        child_webviews.remove(&id);
-                        if let Some(child) = child_windows.remove(&id) {
-                            native_child_ids.remove(&child.id());
-                        }
-                    }
-                    HostCommand::SetApplicationMenu(template) => match build_menu(&template) {
-                        Ok(menu) => {
-                            if let Some(previous) = application_menu.take() {
-                                let _ = unsafe { previous.remove_for_hwnd(window.hwnd() as isize) };
-                            }
-                            match unsafe { menu.init_for_hwnd(window.hwnd() as isize) } {
-                                Ok(()) => application_menu = Some(menu),
-                                Err(error) => {
-                                    eprintln!("alex menu: failed to attach menu: {error}")
-                                }
-                            }
-                        }
-                        Err(error) => eprintln!("alex menu: invalid native menu: {error}"),
-                    },
-                    HostCommand::SetContextMenu(template) => match build_menu(&template) {
-                        Ok(menu) => context_menu = Some(menu),
-                        Err(error) => eprintln!("alex menu: invalid context menu: {error}"),
-                    },
-                    HostCommand::CreateTray(id, spec, root) => {
-                        let icon_path = url::Url::parse(&spec.icon)
-                            .ok()
-                            .filter(|url| url.scheme() == "file")
-                            .and_then(|url| url.to_file_path().ok())
-                            .unwrap_or_else(|| root.join(&spec.icon));
-                        match tray_icon::Icon::from_path(&icon_path, None) {
-                            Ok(icon) => {
-                                let mut builder =
-                                    TrayIconBuilder::new().with_id(id.clone()).with_icon(icon);
-                                if let Some(tooltip) = spec.tooltip {
-                                    builder = builder.with_tooltip(tooltip);
-                                }
-                                if let Some(template) = spec.menu {
-                                    if let Ok(menu) = build_menu(&template) {
-                                        builder = builder.with_menu(Box::new(menu));
+                        },
+                        HostCommand::CreateTray(id, spec, root) => {
+                            let icon_path = url::Url::parse(&spec.icon)
+                                .ok()
+                                .filter(|url| url.scheme() == "file")
+                                .and_then(|url| url.to_file_path().ok())
+                                .unwrap_or_else(|| root.join(&spec.icon));
+                            match tray_icon::Icon::from_path(&icon_path, None) {
+                                Ok(icon) => {
+                                    let mut builder =
+                                        TrayIconBuilder::new().with_id(id.clone()).with_icon(icon);
+                                    if let Some(tooltip) = spec.tooltip {
+                                        builder = builder.with_tooltip(tooltip);
+                                    }
+                                    if let Some(template) = spec.menu {
+                                        if let Ok(menu) = build_menu(&template) {
+                                            builder = builder.with_menu(Box::new(menu));
+                                        }
+                                    }
+                                    match builder.build() {
+                                        Ok(tray) => {
+                                            tray_icons.insert(id, tray);
+                                        }
+                                        Err(error) => {
+                                            host_result = Err(NativeError::Failed(format!(
+                                                "failed to create tray icon: {error}"
+                                            )))
+                                        }
                                     }
                                 }
-                                match builder.build() {
-                                    Ok(tray) => {
-                                        tray_icons.insert(id, tray);
+                                Err(error) => {
+                                    host_result = Err(NativeError::Failed(format!(
+                                        "failed to load tray icon {}: {error}",
+                                        icon_path.display()
+                                    )))
+                                }
+                            }
+                        }
+                        HostCommand::DestroyTray(id) => {
+                            if tray_icons.remove(&id).is_none() {
+                                host_result =
+                                    Err(NativeError::Failed(format!("unknown tray icon {id}")));
+                            }
+                        }
+                        HostCommand::RegisterShortcut(accelerator) => {
+                            match accelerator.parse::<HotKey>() {
+                                Ok(hotkey) => match hotkey_manager.register(hotkey) {
+                                    Ok(()) => {
+                                        hotkeys.insert(hotkey.id(), (hotkey, accelerator));
                                     }
                                     Err(error) => {
-                                        eprintln!("alex tray: failed to create icon: {error}")
+                                        host_result = Err(NativeError::Failed(format!(
+                                            "shortcut registration failed: {error}"
+                                        )))
                                     }
+                                },
+                                Err(error) => {
+                                    host_result = Err(NativeError::Failed(format!(
+                                        "invalid accelerator: {error}"
+                                    )))
                                 }
                             }
-                            Err(error) => eprintln!(
-                                "alex tray: failed to load {}: {error}",
-                                icon_path.display()
-                            ),
                         }
-                    }
-                    HostCommand::DestroyTray(id) => {
-                        tray_icons.remove(&id);
-                    }
-                    HostCommand::RegisterShortcut(accelerator) => match accelerator
-                        .parse::<HotKey>()
-                    {
-                        Ok(hotkey) => match hotkey_manager.register(hotkey) {
-                            Ok(()) => {
-                                hotkeys.insert(hotkey.id(), (hotkey, accelerator));
+                        HostCommand::UnregisterShortcut(accelerator) => {
+                            if let Some((id, (hotkey, _))) = hotkeys
+                                .iter()
+                                .find(|(_, (_, value))| value == &accelerator)
+                                .map(|(id, value)| (*id, value.clone()))
+                            {
+                                if let Err(error) = hotkey_manager.unregister(hotkey) {
+                                    host_result = Err(NativeError::Failed(format!(
+                                        "shortcut unregister failed: {error}"
+                                    )));
+                                } else {
+                                    hotkeys.remove(&id);
+                                }
+                            } else {
+                                host_result = Err(NativeError::Failed(format!(
+                                    "shortcut is not registered: {accelerator}"
+                                )));
                             }
-                            Err(error) => eprintln!("alex shortcut: registration failed: {error}"),
-                        },
-                        Err(error) => eprintln!("alex shortcut: invalid accelerator: {error}"),
-                    },
-                    HostCommand::UnregisterShortcut(accelerator) => {
-                        if let Some((id, (hotkey, _))) = hotkeys
-                            .iter()
-                            .find(|(_, (_, value))| value == &accelerator)
-                            .map(|(id, value)| (*id, value.clone()))
-                        {
-                            let _ = hotkey_manager.unregister(hotkey);
-                            hotkeys.remove(&id);
                         }
                     }
-                },
+                    let _ = reply.send(host_result);
+                }
                 Event::WindowEvent {
                     window_id, event, ..
                 } => match event {
@@ -579,10 +708,20 @@ pub mod windows {
                         state: tao::event::ElementState::Pressed,
                         button: tao::event::MouseButton::Right,
                         ..
-                    } if window_id == window.id() => {
+                    } => {
                         if let Some(menu) = &context_menu {
-                            unsafe {
-                                menu.show_context_menu_for_hwnd(window.hwnd() as isize, None);
+                            let hwnd = if window_id == window.id() {
+                                Some(window.hwnd() as isize)
+                            } else {
+                                native_child_ids
+                                    .get(&window_id)
+                                    .and_then(|id| child_windows.get(id))
+                                    .map(|child| child.hwnd() as isize)
+                            };
+                            if let Some(hwnd) = hwnd {
+                                unsafe {
+                                    menu.show_context_menu_for_hwnd(hwnd, None);
+                                }
                             }
                         }
                     }
@@ -610,17 +749,40 @@ pub mod windows {
                     }
                 }
             }
+            if dev_mode {
+                while let Ok(command) = reload_rx.try_recv() {
+                    match command {
+                        ShellDevCommand::Reload => {
+                            let _ = webview.evaluate_script("location.reload()");
+                            for child in child_webviews.values() {
+                                let _ = child.evaluate_script("location.reload()");
+                            }
+                            eprintln!("alex dev: reloaded frontend");
+                        }
+                        ShellDevCommand::RestartRuntime => {
+                            match router.restart_runtime(Duration::from_secs(2)) {
+                                Some(Ok(())) => eprintln!("alex dev: restarted backend runtime"),
+                                Some(Err(error)) => eprintln!("alex dev: backend restart failed: {error}"),
+                                None => {}
+                            }
+                        }
+                    }
+                }
+            }
             for (event, delivered) in router.event_bus().drain_pending() {
-                emit_subscribed(
-                    &webview,
-                    &event,
-                    &delivered.subscription_id,
-                    delivered.sequence,
-                    &delivered.payload,
-                );
-                for child in child_webviews.values() {
+                if let Some(window_id) = delivered.window_id {
+                    if let Some(child) = child_webviews.get(&window_id) {
+                        emit_subscribed(
+                            child,
+                            &event,
+                            &delivered.subscription_id,
+                            delivered.sequence,
+                            &delivered.payload,
+                        );
+                    }
+                } else {
                     emit_subscribed(
-                        child,
+                        &webview,
                         &event,
                         &delivered.subscription_id,
                         delivered.sequence,
@@ -762,7 +924,7 @@ pub mod windows {
             // CSP must allow both the native scheme and the rewritten
             // http://alex.app/ origin. `connect-src` needs them both for
             // `fetch('alex://app/api/...')` to clear the policy check.
-            .header("Content-Security-Policy", "default-src 'self' alex: http://alex.app; script-src 'self' alex: http://alex.app; style-src 'self' alex: http://alex.app; img-src 'self' data:; connect-src 'self' alex: http://alex.app; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'")
+            .header("Content-Security-Policy", "default-src 'self' alex: http://alex.app; script-src 'self' alex: http://alex.app; style-src 'self' alex: http://alex.app; img-src 'self' data:; connect-src 'self' alex: http://alex.app ws://127.0.0.1:*; object-src 'none'; base-uri 'none'; frame-src 'none'; form-action 'none'")
             .body(body.into())
             .expect("static response is valid")
     }

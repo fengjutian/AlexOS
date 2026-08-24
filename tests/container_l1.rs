@@ -30,18 +30,23 @@ const KILL_WAIT: Duration = Duration::from_secs(2);
 const SPIN_POLL_MS: u64 = 50;
 
 fn is_pid_alive(pid: u32) -> bool {
-    use windows::Win32::System::Threading::{OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION};
+    use windows::Win32::System::Threading::{
+        GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION,
+    };
     // SAFETY: `OpenProcess` is safe to call with any pid; a
     // non-existent pid returns a null handle, not a crash.
     let result = unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) };
     match result {
         Ok(handle) => {
-            // The handle is to a live process; close it and return.
+            const STILL_ACTIVE: u32 = 259;
+            let mut exit_code = 0u32;
+            let running = unsafe { GetExitCodeProcess(handle, &mut exit_code) }.is_ok()
+                && exit_code == STILL_ACTIVE;
             use windows::Win32::Foundation::CloseHandle;
             unsafe {
                 let _ = CloseHandle(handle);
             }
-            true
+            running
         }
         Err(_) => false,
     }
@@ -65,10 +70,13 @@ fn ping_executable() -> Option<PathBuf> {
 }
 
 #[test]
-#[ignore = "KILL_ON_JOB_CLOSE does not currently terminate the spawned \
+#[cfg_attr(
+    any(),
+    ignore = "KILL_ON_JOB_CLOSE does not currently terminate the spawned \
             child even after dropping the IsolationHandle. Tracked as \
             a follow-up — the 1000-cycle smoke test below exercises the \
-            same code path and passes, so the boundary itself is sound."]
+            same code path and passes, so the boundary itself is sound."
+)]
 fn dropping_isolation_handle_terminates_assigned_process() {
     let provider = WindowsJobProvider;
     assert_eq!(provider.level(), IsolationLevel::Job);
