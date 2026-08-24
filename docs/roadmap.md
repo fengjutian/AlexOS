@@ -31,9 +31,10 @@ nav_order: 4
 
 ### 0.2 Manifest v2 与服务编排
 
-- [已完成模型层] 独立加载并严格校验 `app.yaml`（`schemaVersion: 2`），现有 Manifest v1 暂不受影响；
+- [已完成模型与包层] 独立加载并严格校验 `app.yaml`（`schemaVersion: 2`）；支持 `.alex`
+  打包、完整性校验、CLI 安装、枚举和卸载，现有 Manifest v1 不受影响；
 - [已完成模型层] 多服务、依赖 DAG、确定性拓扑启动和反向停止顺序；
-- 将 Manifest v2 接入打包、安装、Daemon 和 RuntimeSupervisor，并提供 v1 兼容迁移；
+- 将 Manifest v2 接入 App Manager、Daemon 和 RuntimeSupervisor，并提供 v1 兼容迁移；
 - 按依赖顺序并发启动服务，失败时回滚已启动服务；
 - 每服务 health、restart、logs、env、port 和 resources；
 - 无 frontend 的后台/Agent 应用。

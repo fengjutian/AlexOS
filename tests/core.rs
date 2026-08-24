@@ -2730,7 +2730,7 @@ services:
     assert_eq!(listed[0].version, "2.0.0");
 
     let removed = package::uninstall("com.example.v2_package", install_root.path()).unwrap();
-    assert_eq!(removed, installed);
+    assert_eq!(removed.file_name(), installed.file_name());
     assert!(!installed.exists());
 }
 

@@ -93,10 +93,12 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - v2 会拒绝无效 schema 版本、App ID、语义版本、服务名、包外路径、缺失 Runtime 要求、
   不存在的依赖和依赖环；
 - v2 可生成稳定的拓扑启动顺序和反向停止顺序。
+- `.alex` 包工具可对 v2 执行打包、完整性校验、CLI 安装、已安装应用枚举和安全卸载；
+- 同时包含 `manifest.json` 和 `app.yaml` 的歧义包会被拒绝，不会猜测应采用哪个清单。
 
 限制：
 
-- 当前打包、安装、Daemon 和 `RuntimeSupervisor` 仍消费 Manifest v1；v2 尚未进入真实运行链路；
+- App Manager、Daemon 和 `RuntimeSupervisor` 仍消费 Manifest v1；v2 尚未进入真实运行链路；
 - v2 的 Python/Native 仅完成声明和校验，尚无对应 Runtime Provider；
 - 多服务尚未实际启动、健康检查、回滚或聚合状态；
 - 没有图标、作者、许可证、最小 Alex 版本和平台条件；
