@@ -594,7 +594,7 @@ mod tests {
 
     #[test]
     fn proxy_forwards_get_and_preserves_status() {
-        let reply: &'static [u8] = b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: 17\r\n\r\n{\"status\":\"ready\"}";
+        let reply: &'static [u8] = b"HTTP/1.0 200 OK\r\nContent-Type: application/json\r\nContent-Length: 18\r\n\r\n{\"status\":\"ready\"}";
         let (port, captured) = spawn_one_shot_backend(reply);
         let endpoint = endpoint_for(port);
         let request = make_get_request("alex://app/api/health");
@@ -651,7 +651,7 @@ mod tests {
     #[test]
     fn proxy_preserves_4xx_status_code() {
         let reply: &'static [u8] =
-            b"HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 9\r\n\r\nnot here";
+            b"HTTP/1.0 404 Not Found\r\nContent-Type: text/plain\r\nContent-Length: 8\r\n\r\nnot here";
         let (port, _captured) = spawn_one_shot_backend(reply);
         let endpoint = endpoint_for(port);
         let request = make_get_request("alex://app/api/missing");

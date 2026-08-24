@@ -22,6 +22,7 @@ const browseBtn = document.querySelector("#browse");
 const packagePathInput = document.querySelector("#package-path");
 const installStatusEl = document.querySelector("#install-status");
 const searchInput = document.querySelector("#app-search");
+const sortInput = document.querySelector("#app-sort");
 const chipButtons = Array.from(document.querySelectorAll(".filter-chips .chip"));
 const updateStatusEl = document.querySelector("#update-status");
 const updateTasksEl = document.querySelector("#update-tasks");
@@ -33,6 +34,7 @@ const state = {
   allApps: [],
   query: "",
   filter: "all",
+  sort: "name",
 };
 
 // Host-side `SignatureState` (kebab-case) → UI label. Anything
@@ -176,7 +178,21 @@ function makeAppRow(app) {
   permBtn.className = "perm-toggle-btn";
   permBtn.textContent = "Permissions…";
   permBtn.addEventListener("click", () => togglePermissions(li, app, permBtn));
-  actions.append(permBtn, uninstallBtn);
+  actions.append(permBtn);
+  if (app.update?.manifestUrl) {
+    const updateBtn = document.createElement("button");
+    updateBtn.type = "button"; updateBtn.textContent = "Update";
+    updateBtn.addEventListener("click", async () => {
+      updateBtn.disabled = true;
+      try {
+        await window.alex.invoke("system.updateStart", { id: app.id, manifestUrl: app.update.manifestUrl, channel: app.update.channel ?? "stable" });
+        await loadUpdateTasks();
+      } catch (error) { setStatus(`Could not start update: ${error?.message ?? error}`, true); }
+      finally { updateBtn.disabled = false; }
+    });
+    actions.append(updateBtn);
+  }
+  actions.append(uninstallBtn);
   li.append(name, id, version, sig, runtime, storage, actions);
   return li;
 }
@@ -250,7 +266,13 @@ function appMatchesFilter(app) {
 
 function renderApps() {
   listEl.replaceChildren();
-  const matched = state.allApps.filter(appMatchesFilter);
+  const matched = state.allApps.filter(appMatchesFilter).sort((left, right) => {
+    if (state.sort === "storage") {
+      const total = (app) => (app.storage?.installBytes ?? 0) + (app.storage?.dataBytes ?? 0) + (app.storage?.cacheBytes ?? 0);
+      return total(right) - total(left);
+    }
+    return String(left[state.sort] ?? "").localeCompare(String(right[state.sort] ?? ""), undefined, { numeric: true, sensitivity: "base" });
+  });
   if (state.allApps.length === 0) {
     setStatus("No applications installed.");
     return;
@@ -713,6 +735,7 @@ searchInput.addEventListener("input", () => {
   state.query = searchInput.value.trim().toLowerCase();
   renderApps();
 });
+sortInput.addEventListener("change", () => { state.sort = sortInput.value; renderApps(); });
 
 // Filter chips: tab-style toggle. Only one active at a time. The
 // "all" chip is the default; clicking a state chip filters by

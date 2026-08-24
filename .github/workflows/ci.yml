@@ -41,6 +41,8 @@ jobs:
         run: cargo test --offline
       - name: SDK tests
         run: node --test packages/sdk/test/sdk.test.mjs
+      - name: SDK schema is generated
+        run: node packages/sdk/generate-schema.mjs --check
 
   windows-build:
     name: Windows · build + test
@@ -68,6 +70,8 @@ jobs:
         run: cargo test --offline
       - name: SDK tests
         run: node --test packages/sdk/test/sdk.test.mjs
+      - name: SDK schema is generated
+        run: node packages/sdk/generate-schema.mjs --check
       - name: Smoke · manager subcommand help
         # Validates that the CLI surface builds and prints help on Windows;
         # the actual WebView is not started (it would block the runner).

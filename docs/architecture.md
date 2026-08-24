@@ -279,7 +279,8 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
 ## 9. 已知架构性限制
 
 - **单窗口**：Shell 现在只能开一个 WebView。多窗口是 P1。
-- **无流式响应**：1 MiB 一次性 read_to_end，大文件 / WS 都不行。
+- **有界增量响应**：代理识别 Content-Length 和 chunked framing，不依赖后端关闭
+  keep-alive 连接，并在读取过程中执行 32 MiB 上限；WebSocket 走独立 capability tunnel。
 - **无 SDK 兼容性握手**：SDK 版本与 host 版本不匹配时直接拒绝。
 - **CSP 仍允许内联**：兼容性妥协，目标是 0.1 P0 §3.2 收严。
 - **Node 绕过权限**：service 模式后端一旦 listen 上端口，权限就归它；0.1 信任同一作者，0.2 靠 L1/L2 OS 沙箱补。

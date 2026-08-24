@@ -168,6 +168,27 @@ pub fn update_from_url(
     channel: UpdateChannel,
     trust_root: &Path,
 ) -> Result<UpdateResult, UpdateError> {
+    update_from_url_with_progress(
+        manifest_url,
+        install_root,
+        app_id,
+        channel,
+        trust_root,
+        |_, _| true,
+    )
+}
+
+pub fn update_from_url_with_progress(
+    manifest_url: &str,
+    install_root: &Path,
+    app_id: &str,
+    channel: UpdateChannel,
+    trust_root: &Path,
+    mut progress: impl FnMut(&str, u8) -> bool,
+) -> Result<UpdateResult, UpdateError> {
+    if !progress("checking", 5) {
+        return Err(UpdateError::Transport("update cancelled".into()));
+    }
     require_https(manifest_url)?;
     let current = crate::load_app(&install_root.join(app_id))?;
     let agent = secure_agent();
@@ -185,8 +206,14 @@ pub fn update_from_url(
         serde_json::from_slice(&bytes).map_err(|error| UpdateError::Manifest(error.to_string()))?;
     let trust = TrustStore::open(trust_root)?;
     verify_manifest(&envelope, app_id, &current.version, channel, &trust)?;
+    if !progress("verified", 15) {
+        return Err(UpdateError::Transport("update cancelled".into()));
+    }
 
-    let package_file = download_package(&agent, &envelope.manifest, install_root)?;
+    let package_file = download_package(&agent, &envelope.manifest, install_root, &mut progress)?;
+    if !progress("installing", 90) {
+        return Err(UpdateError::Transport("update cancelled".into()));
+    }
     package::update_verified(
         package_file.path(),
         install_root,
@@ -201,6 +228,7 @@ fn download_package(
     agent: &ureq::Agent,
     manifest: &UpdateManifest,
     install_root: &Path,
+    progress: &mut impl FnMut(&str, u8) -> bool,
 ) -> Result<tempfile::NamedTempFile, UpdateError> {
     require_https(&manifest.url)?;
     let mut response = agent
@@ -231,6 +259,10 @@ fn download_package(
         }
         output.write_all(&buffer[..count])?;
         hasher.update(&buffer[..count]);
+        let percent = 15 + ((size.saturating_mul(70) / manifest.size.max(1)).min(70) as u8);
+        if !progress("downloading", percent) {
+            return Err(UpdateError::Transport("update cancelled".into()));
+        }
     }
     if size != manifest.size || format!("{:x}", hasher.finalize()) != manifest.sha256 {
         return Err(UpdateError::Manifest(

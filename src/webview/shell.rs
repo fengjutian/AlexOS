@@ -536,7 +536,7 @@ pub mod windows {
                         HostCommand::SetWindowFullscreen(id, fullscreen) => {
                             if let Some(child) = child_windows.get(&id) {
                                 child.set_fullscreen(
-                                    fullscreen.then(|| tao::window::Fullscreen::Borderless(None)),
+                                    fullscreen.then_some(tao::window::Fullscreen::Borderless(None)),
                                 );
                             } else {
                                 host_result =
@@ -594,10 +594,10 @@ pub mod windows {
                                     if let Some(tooltip) = spec.tooltip {
                                         builder = builder.with_tooltip(tooltip);
                                     }
-                                    if let Some(template) = spec.menu {
-                                        if let Ok(menu) = build_menu(&template) {
-                                            builder = builder.with_menu(Box::new(menu));
-                                        }
+                                    if let Some(template) = spec.menu
+                                        && let Ok(menu) = build_menu(&template)
+                                    {
+                                        builder = builder.with_menu(Box::new(menu));
                                     }
                                     match builder.build() {
                                         Ok(tray) => {
@@ -719,7 +719,7 @@ pub mod windows {
                                 native_child_ids
                                     .get(&window_id)
                                     .and_then(|id| child_windows.get(id))
-                                    .map(|child| child.hwnd() as isize)
+                                    .map(|child| child.hwnd())
                             };
                             if let Some(hwnd) = hwnd {
                                 unsafe {
@@ -743,13 +743,13 @@ pub mod windows {
                     .deliver("tray.clicked", &serde_json::json!({ "id": event.id().0 }));
             }
             while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                if event.state == HotKeyState::Pressed {
-                    if let Some((_, accelerator)) = hotkeys.get(&event.id) {
-                        router.event_bus().deliver(
-                            "shortcut.triggered",
-                            &serde_json::json!({ "accelerator": accelerator }),
-                        );
-                    }
+                if event.state == HotKeyState::Pressed
+                    && let Some((_, accelerator)) = hotkeys.get(&event.id)
+                {
+                    router.event_bus().deliver(
+                        "shortcut.triggered",
+                        &serde_json::json!({ "accelerator": accelerator }),
+                    );
                 }
             }
             if dev_mode {

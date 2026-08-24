@@ -103,11 +103,20 @@ fn run(id: &str, cancel: Arc<AtomicBool>) {
     let Some((url, app, channel, install, trust)) = params else {
         return;
     };
-    mutate(id, |task| {
-        task.stage = "downloading".into();
-        task.progress = 20;
-    });
-    let result = update::update_from_url(&url, &install, &app, channel, &trust);
+    let result = update::update_from_url_with_progress(
+        &url,
+        &install,
+        &app,
+        channel,
+        &trust,
+        |stage, progress| {
+            mutate(id, |task| {
+                task.stage = stage.into();
+                task.progress = progress;
+            });
+            !cancel.load(Ordering::Acquire)
+        },
+    );
     if cancel.load(Ordering::Acquire) {
         return finish_cancelled(id);
     }

@@ -621,7 +621,7 @@ mod windows {
             let out = truncate_params(&value, 12);
             assert!(out.ends_with('…'));
             // Re-encoding the prefix must not panic.
-            let _ = serde_json::from_str::<serde_json::Value>(&out.trim_end_matches('…'));
+            let _ = serde_json::from_str::<serde_json::Value>(out.trim_end_matches('…'));
         }
     }
 }

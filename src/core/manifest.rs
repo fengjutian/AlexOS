@@ -23,6 +23,8 @@ pub struct AppManifest {
     pub homepage: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub license: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub update: Option<UpdateSource>,
     pub frontend: Frontend,
     #[serde(default)]
     pub backend: Option<Backend>,
@@ -32,6 +34,18 @@ pub struct AppManifest {
     /// 0.1 切片 3:只解析和聚合,host 不主动调用(那是 0.2 的事)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub extension_points: Option<Vec<ExtensionPoint>>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct UpdateSource {
+    pub manifest_url: String,
+    #[serde(default = "default_update_channel")]
+    pub channel: String,
+}
+
+fn default_update_channel() -> String {
+    "stable".into()
 }
 
 /// 0.1 引入的字段。`App` 是默认(向后兼容),`Plugin` 启用扩展点挂载。

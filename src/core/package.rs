@@ -84,6 +84,7 @@ pub struct InstalledApp {
     pub name: String,
     pub version: String,
     pub path: PathBuf,
+    pub update: Option<crate::manifest::UpdateSource>,
 }
 
 #[derive(Debug)]
@@ -807,6 +808,7 @@ pub fn list_installed(install_root: &Path) -> Result<Vec<InstalledApp>, PackageE
                 id: manifest.id,
                 name: manifest.name,
                 version: manifest.version,
+                update: manifest.update,
                 path,
             });
         }

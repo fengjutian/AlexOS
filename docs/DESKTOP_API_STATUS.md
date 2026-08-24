@@ -48,4 +48,11 @@ nav_order: 6
 ## 验证
 
 常规回归使用 `cargo test --all --offline`。Windows 交互式 GUI 冒烟测试使用
-`ALEX_RUN_NATIVE_GUI_TESTS=1 cargo test --test native_gui -- --nocapture`。
+交互式 Windows 桌面回归测试使用
+`cargo test --test native_gui -- --ignored --nocapture`。普通 CI 会明确显示为 ignored，
+不会再用“提前 return 但测试成功”掩盖未执行状态。
+
+`net.fetch` 使用跨平台 HTTPS transport，返回状态、最终 URL、响应头和有界 Base64
+body；SDK 另提供 `bytes`、`text()` 和 `json()` 解码助手。Service HTTP proxy 支持
+Content-Length、chunked response、keep-alive backend，并在增量读取过程中执行 32 MiB
+上限。WebSocket tunnel 由 Shell 持有并在窗口生命周期结束时主动关闭。

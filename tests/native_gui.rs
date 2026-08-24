@@ -4,11 +4,8 @@
 #![cfg(windows)]
 
 #[test]
+#[ignore = "requires an interactive Windows desktop; run with --ignored"]
 fn production_shell_creates_a_real_top_level_window() {
-    if std::env::var_os("ALEX_RUN_NATIVE_GUI_TESTS").is_none() {
-        eprintln!("skipped: set ALEX_RUN_NATIVE_GUI_TESTS=1 in an interactive Windows session");
-        return;
-    }
     use std::{
         os::windows::ffi::OsStrExt,
         process::Command,

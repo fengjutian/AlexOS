@@ -1476,6 +1476,7 @@ impl ApiRouter {
                     "name": a.name,
                     "version": a.version,
                     "path": a.path.display().to_string(),
+                    "update": a.update,
                     "storage": {
                         "installBytes": directory_size(&a.path),
                         "dataBytes": dirs.as_ref().map(|d| directory_size(&d.data)).unwrap_or(0),

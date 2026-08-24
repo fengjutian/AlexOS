@@ -39,6 +39,12 @@
             spellcheck="false"
             placeholder="Search by name or id…"
           />
+          <select id="app-sort" aria-label="Sort applications">
+            <option value="name">Name</option>
+            <option value="id">ID</option>
+            <option value="version">Version</option>
+            <option value="storage">Storage</option>
+          </select>
           <div class="filter-chips" role="tablist" aria-label="Filter by runtime state">
             <button type="button" class="chip active" data-filter="all" role="tab" aria-selected="true">All</button>
             <button type="button" class="chip" data-filter="running" role="tab" aria-selected="false">Running</button>

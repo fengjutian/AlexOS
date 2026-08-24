@@ -140,12 +140,12 @@ fn run_fetch(
     let mut request = ureq::http::Request::builder()
         .method(method)
         .uri(url.as_str());
-    if let Some(headers_value) = &spec.headers {
-        if let Some(map) = headers_value.as_object() {
-            for (key, value) in map {
-                if let Some(value_str) = value.as_str() {
-                    request = request.header(key, value_str);
-                }
+    if let Some(headers_value) = &spec.headers
+        && let Some(map) = headers_value.as_object()
+    {
+        for (key, value) in map {
+            if let Some(value_str) = value.as_str() {
+                request = request.header(key, value_str);
             }
         }
     }

@@ -129,7 +129,7 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - stdout 被协议独占（RPC 模式）；service 模式 stdout 留作应用日志，但 host 不读；
 - Node 可以绕过 Alex 权限直接访问本机能力；
 - 健康检查路径只能 `GET`；非 GET health check 暂未支持；
-- WebSocket 升级转发**未实现**（HTTP/1.0 + HTTP/1.1 only，stage 3 MVP）；详见 [`roadmap.md` P1](./roadmap.md#35-插件系统)。
+- WebSocket 升级通过 capability-scoped loopback tunnel 转发，并注入应用身份与 backend token。
 
 ### 2.5 Native API 与 SDK
 
@@ -252,8 +252,8 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 限制：
 
 - 仅 HTTP/1.0 + HTTP/1.1；不支持 HTTP/2 / HTTP/3；
-- WebSocket upgrade **未实现**（设计文档要求，stage 3 MVP 跳过；详见 [`roadmap.md` P1](./roadmap.md#35-插件系统)）；
-- **流式响应**未实现 — 大响应 body 一次性 read_to_end 后再返回（阻塞 WebView 主线程）；
+- WebSocket upgrade 已通过带随机 capability path 的 loopback tunnel 实现；tunnel 随 Shell 生命周期关闭；
+- HTTP response 使用增量有界读取，支持 Content-Length、chunked 与 keep-alive backend；WebView custom protocol 最终仍要求完整 body，因此不会向页面暴露 Rust stream；
 - 没有 per-app 限速、并发限制、QPS 配额；
 - backend 错误状态没有重试（502 / 504 一次性返给 page）。
 

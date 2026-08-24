@@ -148,7 +148,7 @@ impl ProcessEntry {
                     // Exited; keep the entry around for
                     // `status` queries but mark it as
                     // not-alive.
-                    return false;
+                    false
                 }
                 Ok(None) => true,
                 Err(_) => false,
@@ -185,16 +185,17 @@ impl ProcessEntry {
                 .stdout(Stdio::null())
                 .stderr(Stdio::null())
                 .status();
-            if let Ok(status) = status {
-                if !status.success() && status.code() != Some(128) {
-                    // 128 = "process not found" (already
-                    // exited) — that is success for our
-                    // purposes.
-                    return Err(ProcessError::Kill(format!(
-                        "taskkill exit={:?}",
-                        status.code()
-                    )));
-                }
+            if let Ok(status) = status
+                && !status.success()
+                && status.code() != Some(128)
+            {
+                // 128 = "process not found" (already
+                // exited) — that is success for our
+                // purposes.
+                return Err(ProcessError::Kill(format!(
+                    "taskkill exit={:?}",
+                    status.code()
+                )));
             }
         }
         Ok(())

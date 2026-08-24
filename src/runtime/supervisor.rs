@@ -852,13 +852,13 @@ impl RuntimeProcess {
         });
         // Service mode also gets a stdout drain. RPC mode keeps
         // stdout in `Self::stdout` for the JSON Lines read loop.
-        if matches!(spec.backend.mode, BackendMode::Service) {
-            if let Some(stdout_pipe) = child.stdout.take() {
-                let logs_for_stdout = Arc::clone(&logs);
-                thread::spawn(move || {
-                    stdout_pump(stdout_pipe, logs_for_stdout);
-                });
-            }
+        if matches!(spec.backend.mode, BackendMode::Service)
+            && let Some(stdout_pipe) = child.stdout.take()
+        {
+            let logs_for_stdout = Arc::clone(&logs);
+            thread::spawn(move || {
+                stdout_pump(stdout_pipe, logs_for_stdout);
+            });
         }
 
         if let Some(rx) = ready_rx {
