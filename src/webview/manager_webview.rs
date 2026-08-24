@@ -97,12 +97,16 @@ pub fn run(manager: Arc<ManagerRouter>) -> Result<(), AlexError> {
             let router = Arc::clone(&ipc_router);
             let proxy = proxy.clone();
             let body = request.body().clone();
-            std::thread::spawn(move || {
+            let fallback_proxy = proxy.clone();
+            if crate::runtime::task_executor::ipc_executor().submit(move || {
                 let response = router.dispatch_json(&body);
                 if let Ok(json) = serde_json::to_string(&response) {
                     let _ = proxy.send_event(ManagerEvent::IpcResponse(json));
                 }
-            });
+            }).is_err() {
+                let response = crate::ipc::Response::error("unknown", "HOST_BUSY", "host IPC queue is full");
+                if let Ok(json) = serde_json::to_string(&response) { let _ = fallback_proxy.send_event(ManagerEvent::IpcResponse(json)); }
+            }
         })
         .with_custom_protocol("alex".into(), move |_id, request| {
             serve_system_asset(request.uri().path())

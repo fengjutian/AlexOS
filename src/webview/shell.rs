@@ -337,12 +337,16 @@ pub mod windows {
                 let router = Arc::clone(&ipc_router);
                 let proxy = proxy.clone();
                 let body = request.body().clone();
-                std::thread::spawn(move || {
+                let fallback_proxy = proxy.clone();
+                if crate::runtime::task_executor::ipc_executor().submit(move || {
                     let response = router.dispatch_json(&body);
                     if let Ok(json) = serde_json::to_string(&response) {
                         let _ = proxy.send_event(UserEvent::IpcResponse(None, json));
                     }
-                });
+                }).is_err() {
+                    let response = crate::ipc::Response::error("unknown", "HOST_BUSY", "host IPC queue is full");
+                    if let Ok(json) = serde_json::to_string(&response) { let _ = fallback_proxy.send_event(UserEvent::IpcResponse(None, json)); }
+                }
             })
             .with_custom_protocol("alex".into(), move |_id, request| {
                 let path = request.uri().path();

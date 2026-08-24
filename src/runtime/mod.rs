@@ -4,6 +4,7 @@ pub mod event_bus;
 pub mod menu_tray;
 pub mod net;
 pub mod process;
+pub mod task_executor;
 pub mod proxy;
 mod supervisor;
 pub mod watcher;
