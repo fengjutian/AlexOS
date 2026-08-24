@@ -3,6 +3,7 @@
 pub mod application_supervisor;
 pub mod backend;
 pub mod event_bus;
+pub mod health;
 pub mod menu_tray;
 pub mod net;
 pub mod process;
@@ -11,6 +12,7 @@ pub mod service_supervisor;
 mod supervisor;
 pub mod task_executor;
 pub mod watcher;
+pub mod watchdog;
 pub mod window_manager;
 pub mod windows;
 
