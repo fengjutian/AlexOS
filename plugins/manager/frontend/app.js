@@ -797,5 +797,11 @@ async function waitForBridge() {
 
 (async () => {
   await waitForBridge();
-  await Promise.all([loadApps(), loadExtensions()]);
+  await Promise.all([
+    loadApps(),
+    loadExtensions(),
+    loadTrustStore(),
+    loadAuditLog(),
+    loadHostInfo(),
+  ]);
 })();
