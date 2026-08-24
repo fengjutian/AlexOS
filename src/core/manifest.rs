@@ -1,8 +1,9 @@
-use std::{collections::BTreeMap, path::Path};
+﻿use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{AlexError, permission::Permission};
+
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -224,12 +225,37 @@ pub struct Backend {
     /// from the private 28000–28999 range.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub port: Option<u16>,
+    /// Extra command-line arguments appended after `entry`. The
+    /// host spawns `<runtime> <entry> <args...>`. v1 manifests
+    /// leave this empty; the Phase 2 multi-service supervisor
+    /// uses it to project v2 `ServiceSpec.args` onto a
+    /// `Backend` so the lower-level `RuntimeHandle` can launch
+    /// a service that takes its own CLI flags.
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    /// Per-launch environment variables. The host injects these
+    /// alongside the framework-managed `ALEX_*` set. v1 manifests
+    /// leave this empty; v2 services may declare arbitrary
+    /// `env:` entries that the supervisor forwards.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub env: BTreeMap<String, String>,
 }
 
-#[derive(Debug, Clone, Copy, Serialize, Deserialize)]
+#[derive(Debug, Clone, Copy, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "lowercase")]
 pub enum RuntimeKind {
+    /// Node.js backend. The host locates a `node` binary on
+    /// `PATH` (or honours `ALEX_NODE`) and runs
+    /// `node <entry> <args...>`.
     Node,
+    /// Python backend. Phase 7's managed Python runtime lands
+    /// the actual implementation; today the supervisor surfaces
+    /// a clear "not yet supported" error if a v2 service
+    /// declares this runtime.
+    Python,
+    /// Native executable. The host runs `<entry> <args...>`
+    /// directly, without an interpreter.
+    Native,
 }
 
 impl AppManifest {

@@ -1,11 +1,13 @@
 //! Backend runtime: Node supervisor, reverse proxy, file watcher, native windows.
 
+pub mod application_supervisor;
 pub mod backend;
 pub mod event_bus;
 pub mod menu_tray;
 pub mod net;
 pub mod process;
 pub mod proxy;
+pub mod service_supervisor;
 mod supervisor;
 pub mod task_executor;
 pub mod watcher;

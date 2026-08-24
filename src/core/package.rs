@@ -16,9 +16,13 @@ use thiserror::Error;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
 use crate::{
-    AlexError, load_app,
-    manifest::{AppManifest, UpdateSource},
-    manifest_v2::{self, ManifestV2Error},
+    AlexError,
+    core::{
+        application_manifest::{load_application, ManifestError},
+        manifest::{AppManifest, UpdateSource},
+        manifest_v2::{self, ManifestV2Error},
+    },
+    load_app,
 };
 
 const INTEGRITY_PATH: &str = ".alex/integrity.json";
@@ -49,6 +53,8 @@ pub enum PackageError {
     NotInstalled(String),
     #[error("package integrity check failed: {0}")]
     Integrity(String),
+    #[error("invalid package manifest: {0}")]
+    Manifest(String),
     #[error("package limit exceeded: {0}")]
     Limit(String),
     #[error("package signature check failed: {0}")]
@@ -102,33 +108,38 @@ struct PackageMetadata {
 }
 
 fn package_metadata(root: &Path) -> Result<PackageMetadata, PackageError> {
-    let has_v1 = root.join("manifest.json").is_file();
-    let has_v2 = root.join("app.yaml").is_file();
-    match (has_v1, has_v2) {
-        (true, true) => Err(PackageError::Integrity(
-            "package contains both manifest.json and app.yaml".into(),
-        )),
-        (true, false) => {
-            let manifest = load_app(root)?;
-            Ok(PackageMetadata {
-                id: manifest.id,
-                name: manifest.name,
-                version: manifest.version,
-                update: manifest.update,
-            })
+    // Phase 1: the unified `load_application` is the single source
+    // of truth for "is this directory a valid package?". It
+    // already implements the v1/v2/both/neither dispatch, the
+    // 1 MiB size cap, and the entry-path safety check, so the
+    // historical hand-rolled match here is now dead code.
+    let manifest = load_application(root).map_err(map_manifest_error)?;
+    Ok(PackageMetadata {
+        id: manifest.id().to_owned(),
+        name: manifest.name().to_owned(),
+        version: manifest.version().to_owned(),
+        update: manifest.update_source(),
+    })
+}
+
+fn map_manifest_error(error: ManifestError) -> PackageError {
+    match error {
+        ManifestError::Io(source) => PackageError::Io(source),
+        // The "both manifests present" case is a deliberate
+        // integrity violation — the user packaged a directory with
+        // two manifest files and we want to surface that with the
+        // existing `Integrity` variant so the rest of the package
+        // subsystem treats it like any other extraction failure.
+        ManifestError::BothManifests => {
+            PackageError::Integrity("package contains both manifest.json and app.yaml".into())
         }
-        (false, true) => {
-            let manifest = manifest_v2::load(root)?;
-            Ok(PackageMetadata {
-                id: manifest.id,
-                name: manifest.name,
-                version: manifest.version,
-                update: None,
-            })
-        }
-        (false, false) => Err(PackageError::Integrity(
+        ManifestError::MissingManifest(_) => PackageError::Integrity(
             "package has neither manifest.json nor app.yaml".into(),
-        )),
+        ),
+        ManifestError::ManifestTooLarge => {
+            PackageError::Limit("manifest exceeds 1 MiB".into())
+        }
+        ManifestError::Invalid(message) => PackageError::Manifest(message),
     }
 }
 
@@ -767,14 +778,27 @@ pub fn signer_public_key(archive_path: &Path) -> Result<Option<String>, PackageE
 }
 
 pub fn archive_identity(archive_path: &Path) -> Result<(String, String), PackageError> {
+    // The archive may carry either a v1 `manifest.json` or a v2
+    // `app.yaml`. Read just enough of each to extract
+    // `(id, version)` without paying for the full validation
+    // pass — callers that need the rest of the manifest go
+    // through `install_verified` / `load_application`.
     let mut archive = ZipArchive::new(File::open(archive_path)?)?;
-    let manifest: AppManifest = serde_json::from_reader(
-        archive
-            .by_name("manifest.json")
-            .map_err(|_| PackageError::Integrity("missing manifest.json".into()))?,
-    )
-    .map_err(|error| PackageError::Integrity(format!("invalid manifest.json: {error}")))?;
-    Ok((manifest.id, manifest.version))
+    if let Ok(entry) = archive.by_name("manifest.json") {
+        let manifest: AppManifest = serde_json::from_reader(entry)
+            .map_err(|error| PackageError::Integrity(format!("invalid manifest.json: {error}")))?;
+        return Ok((manifest.id, manifest.version));
+    }
+    if let Ok(entry) = archive.by_name("app.yaml") {
+        let manifest: manifest_v2::ApplicationManifestV2 =
+            serde_yaml_ng::from_reader(entry).map_err(|error| {
+                PackageError::Integrity(format!("invalid app.yaml: {error}"))
+            })?;
+        return Ok((manifest.id, manifest.version));
+    }
+    Err(PackageError::Integrity(
+        "archive contains neither manifest.json nor app.yaml".into(),
+    ))
 }
 
 pub fn update_verified(
@@ -790,30 +814,36 @@ pub fn update_verified(
         .tempdir_in(install_root)?;
     let staged_path =
         install_verified(archive_path, staging.path(), require_signature, trusted_key)?;
-    let next = load_app(&staged_path)?;
-    let destination = install_root.join(&next.id);
+    // Phase 1: update identity is read from the unified
+    // manifest. This is the first place `update_verified` ever
+    // sees a v2 package; the same identity / version checks
+    // apply, just sourced from the `load_application` path.
+    let next = load_application(&staged_path).map_err(map_manifest_error)?;
+    let next_id = next.id().to_owned();
+    let next_version_str = next.version().to_owned();
+    let destination = install_root.join(&next_id);
     if !destination.is_dir() {
-        return Err(PackageError::NotInstalled(next.id));
+        return Err(PackageError::NotInstalled(next_id));
     }
-    let current = load_app(&destination)?;
-    if current.id != next.id {
+    let current = load_application(&destination).map_err(map_manifest_error)?;
+    if current.id() != next.id() {
         return Err(PackageError::IdentityMismatch {
-            expected: current.id,
-            actual: next.id,
+            expected: current.id().to_owned(),
+            actual: next.id().to_owned(),
         });
     }
-    let current_version = Version::parse(&current.version)
+    let current_version = Version::parse(current.version())
         .map_err(|error| PackageError::Version(format!("installed version: {error}")))?;
-    let next_version = Version::parse(&next.version)
+    let next_version = Version::parse(next.version())
         .map_err(|error| PackageError::Version(format!("update version: {error}")))?;
     if !allow_downgrade && next_version <= current_version {
         return Err(PackageError::Version(format!(
             "{} is not newer than {}",
-            next.version, current.version
+            next_version_str, current.version()
         )));
     }
 
-    let backup = install_root.join(format!(".alex-backup-{}-{}", next.id, std::process::id()));
+    let backup = install_root.join(format!(".alex-backup-{}-{}", next_id, std::process::id()));
     if backup.exists() {
         return Err(PackageError::AlreadyInstalled(backup));
     }
@@ -824,9 +854,9 @@ pub fn update_verified(
     }
     let backup_retained = fs::remove_dir_all(&backup).is_err();
     Ok(UpdateResult {
-        id: next.id,
-        previous_version: current.version,
-        version: next.version,
+        id: next_id,
+        previous_version: current.version().to_owned(),
+        version: next_version_str,
         path: destination,
         backup_retained,
     })

@@ -14,12 +14,12 @@
 //! 不在 MVP 阶段 1 范围:更新检查、任务队列、远程拉取、UI 系统身份
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::BTreeMap,
     fs,
     io::Write,
     path::{Path, PathBuf},
-    sync::{Arc, Mutex},
-    time::{Duration, SystemTime},
+    sync::Arc,
+    time::SystemTime,
 };
 
 use serde::{Deserialize, Serialize};
@@ -27,11 +27,16 @@ use thiserror::Error;
 
 use crate::{
     authorization::{AuthorizationError, PermissionDecision, PermissionStore},
-    load_app,
-    manifest::{AppManifest, BackendMode},
+    core::{
+        application_manifest::{load_application, ApplicationManifest, ManifestError},
+        manifest::{AppManifest, BackendMode, RuntimeKind},
+    },
     package,
     package::PackageError,
-    runtime::{RuntimeHandle, RuntimeSpec, RuntimeState, RuntimeStatus},
+    runtime::{
+        application_supervisor::{ApplicationSupervisor, ApplicationSupervisorError},
+        RuntimeState, RuntimeStatus,
+    },
     trust,
 };
 
@@ -189,6 +194,16 @@ impl From<crate::runtime::RuntimeError> for ManagerError {
 
 impl From<SupervisorError> for ManagerError {
     fn from(error: SupervisorError) -> Self {
+        ManagerError::Runtime(error.to_string())
+    }
+}
+
+impl From<ManifestError> for ManagerError {
+    fn from(error: ManifestError) -> Self {
+        // The unified loader is just a thin wrapper over the
+        // historical AlexError / ManifestV2Error paths, so the
+        // call-site error remains a `runtime` failure (the manager
+        // is not the right place to surface parser-level detail).
         ManagerError::Runtime(error.to_string())
     }
 }
@@ -535,7 +550,14 @@ impl AppManager for LocalAppManager {
             if !app_path.is_dir() {
                 continue;
             }
-            let manifest = match load_app(&app_path) {
+            // Phase 1: support both v1 and v2 manifests in the list
+            // view. Apps whose manifest fails to load (corrupt,
+            // missing, rejected) are silently skipped — the same
+            // behaviour the pre-Phase-1 v1-only path had. A
+            // follow-up Phase 6 change will surface a
+            // `manifestError` field on the summary so the UI can
+            // show why an installed app no longer loads.
+            let manifest = match load_application(&app_path) {
                 Ok(m) => m,
                 Err(_) => continue,
             };
@@ -560,8 +582,30 @@ impl AppManager for LocalAppManager {
         if !install_path.is_dir() {
             return Err(ManagerError::NotFound(id.to_owned()));
         }
-        let manifest = load_app(&install_path)?;
-        let summary = summary_from(&manifest, &record, &install_path, &trust_lookup);
+        let unified = load_application(&install_path)?;
+        // Phase 1 keeps the `manifest: AppManifest` field on
+        // `AppDetails` for v1 packages. v2 packages are surfaced
+        // as v1-flavored details built from the projected service
+        // set (frontend entry, single "main" service description,
+        // empty permission list) so the existing App Manager UI
+        // can still render the row without crashing. Phase 6
+        // changes the detail model to carry the unified manifest
+        // view directly.
+        let (manifest, summary) = match unified {
+            ApplicationManifest::V1(manifest) => {
+                let summary = summary_from(
+                    &ApplicationManifest::V1(manifest.clone()),
+                    &record,
+                    &install_path,
+                    &trust_lookup,
+                );
+                (manifest, summary)
+            }
+            ApplicationManifest::V2(_) => {
+                let summary = summary_from(&unified, &record, &install_path, &trust_lookup);
+                (v2_fallback_manifest(&unified), summary)
+            }
+        };
         let permissions = self.permissions(id)?;
         Ok(AppDetails {
             summary,
@@ -582,7 +626,7 @@ impl AppManager for LocalAppManager {
             options.require_signature,
             options.trusted_key.as_deref(),
         )?;
-        let manifest = load_app(&installed)?;
+        let manifest = load_application(&installed)?;
         let now = iso8601_now();
         // Record the trust-store fingerprint (NOT the raw public key)
         // so the UI can display a short identifier and match it
@@ -605,14 +649,14 @@ impl AppManager for LocalAppManager {
             package_sha256: None,
             signature_state,
         };
-        self.registry.upsert(manifest.id.clone(), record)?;
+        self.registry.upsert(manifest.id().to_owned(), record)?;
         let record_ref = self
             .registry
             .records()
             .into_iter()
-            .find(|(rid, _)| rid == &manifest.id)
+            .find(|(rid, _)| rid == manifest.id())
             .map(|(_, r)| r)
-            .ok_or_else(|| ManagerError::NotFound(manifest.id.clone()))?;
+            .ok_or_else(|| ManagerError::NotFound(manifest.id().to_owned()))?;
         Ok(summary_from(
             &manifest,
             &record_ref,
@@ -651,18 +695,26 @@ impl AppManager for LocalAppManager {
 
     fn permissions(&self, id: &str) -> Result<Vec<PermissionState>, ManagerError> {
         let install_path = self.install_root.join(id);
-        let manifest = load_app(&install_path)?;
+        let manifest = load_application(&install_path)?;
         let store = PermissionStore::open_at(&self.permissions_root, id)?;
         let decisions = store.list();
         let mut out = Vec::new();
-        for permission in &manifest.permissions {
-            // Use the manifest permission name (e.g. `filesystem.read`)
-            // — the IPC method name (e.g. `filesystem.readText`) is a
-            // detail of the runtime, not the manifest, and writing
-            // under the wrong key here would make UI changes look
-            // successful while the runtime keeps reading the original
-            // key.
-            let name = permission.name().to_owned();
+        // Phase 1: permission state rows are sourced from the
+        // unified accessor. v1's `permission.name()` strings and
+        // v2's synthesised `fs:read:<path>` / `net:allow:<origin>`
+        // / `shell:allow:<command>` strings both flow through the
+        // same `PermissionStore` key space, so the same row shape
+        // works for both manifest schemas. The IPC runtime still
+        // understands only the v1 names today — v2 permissions are
+        // surfaced for visibility in the manager UI but do not yet
+        // affect the running app. Phase 9 (security boundaries)
+        // will teach the IPC layer to honour the v2 policy blocks.
+        let declared: Vec<String> = manifest
+            .permissions()
+            .into_iter()
+            .map(|descriptor| descriptor.name)
+            .collect();
+        for name in declared {
             let decision = decisions
                 .get(&name)
                 .copied()
@@ -683,8 +735,13 @@ impl AppManager for LocalAppManager {
         decision: PermissionDecision,
     ) -> Result<(), ManagerError> {
         let install_path = self.install_root.join(id);
-        let manifest = load_app(&install_path)?;
-        if !manifest.permissions.iter().any(|p| p.name() == permission) {
+        let manifest = load_application(&install_path)?;
+        let declared: Vec<String> = manifest
+            .permissions()
+            .into_iter()
+            .map(|descriptor| descriptor.name)
+            .collect();
+        if !declared.iter().any(|name| name == permission) {
             return Err(ManagerError::UndeclaredPermission(permission.to_owned()));
         }
         let store = PermissionStore::open_at(&self.permissions_root, id)?;
@@ -702,10 +759,25 @@ impl AppManager for LocalAppManager {
 
     fn launch(&self, id: &str) -> Result<RuntimeStatus, ManagerError> {
         let install_path = self.install_root.join(id);
-        let manifest = load_app(&install_path)?;
-        let backend = manifest
-            .backend
-            .as_ref()
+        let manifest = load_application(&install_path)?;
+        // Phase 1 only knows how to launch v1 single-backend
+        // packages. v2 packages declare a service DAG that the
+        // current `RuntimeSupervisor` cannot honour yet, so the
+        // honest answer is "v2 launch is wired in Phase 2" rather
+        // than silently launching the first service. The list /
+        // install / permission / uninstall paths all understand
+        // v2 today; this is the last big missing piece.
+        let backend = match manifest.as_v1() {
+            Some(manifest) => manifest.backend.as_ref(),
+            None => {
+                return Err(ManagerError::Runtime(
+                    "v2 application launch is not supported in Phase 1; \
+                     the multi-service supervisor lands in Phase 2"
+                        .into(),
+                ));
+            }
+        };
+        let backend = backend
             .ok_or_else(|| ManagerError::Runtime("application has no backend runtime".into()))?;
         let status = self.runtimes.launch(id, &install_path, backend)?;
         // Update "last launched" after a successful start so the UI
@@ -727,137 +799,189 @@ impl AppManager for LocalAppManager {
     }
 }
 
-/// In-memory map of running app backends. Keyed by app id. Phase 1.4
-/// only needs an in-process supervisor; the long-term plan is to move
-/// state to the App Registry and accept that the manager process is the
-/// single supervisor.
-#[derive(Default)]
+/// In-memory map of running app backends. Keyed by app id.
+///
+/// Phase 2 reshapes this from "one app → one process" to a
+/// thin facade over [`ApplicationSupervisor`], which holds
+/// N services per app. The legacy public methods (`launch`,
+/// `stop`, `restart`, `status`, `snapshot`, `stop_and_forget`)
+/// keep their old signatures and are implemented in terms of the
+/// new supervisor so the existing App Manager / Daemon / shell
+/// callers do not need to change.
+#[derive(Clone, Default)]
 pub struct RuntimeSupervisor {
-    runtimes: Mutex<HashMap<String, RuntimeHandle>>,
+    inner: ApplicationSupervisor,
 }
 
 #[derive(Debug, Error)]
 pub enum SupervisorError {
     #[error("application {0} is already running")]
     AlreadyRunning(String),
+    #[error("application supervisor: {0}")]
+    Supervisor(String),
     #[error("runtime error: {0}")]
     Runtime(#[from] crate::runtime::RuntimeError),
 }
 
+impl From<ApplicationSupervisorError> for SupervisorError {
+    fn from(error: ApplicationSupervisorError) -> Self {
+        match error {
+            ApplicationSupervisorError::ApplicationAlreadyRunning(id) => {
+                SupervisorError::AlreadyRunning(id)
+            }
+            ApplicationSupervisorError::Runtime(source) => SupervisorError::Runtime(source),
+            other => SupervisorError::Supervisor(other.to_string()),
+        }
+    }
+}
+
 impl RuntimeSupervisor {
+    /// Backward-compatible launch. Spawns the app's primary
+    /// service (v1 backend) and returns the v1-shaped
+    /// `RuntimeStatus` so the existing App Manager / Daemon
+    /// callers see the same fields as before. The
+    /// `ApplicationSupervisor` is the actual owner of the
+    /// process; this method is a thin shim.
     pub fn launch(
         &self,
         id: &str,
         install_root: &Path,
         backend: &crate::manifest::Backend,
     ) -> Result<RuntimeStatus, SupervisorError> {
-        let mut runtimes = self.runtimes.lock().expect("runtime lock poisoned");
-        // A stale entry from a process that already exited is a
-        // real-world hazard: the user sees the app marked as
-        // "stopped" in the UI, but the next launch returned
-        // `AlreadyRunning` and they had to dig out the supervisor to
-        // recover. Probe the existing handle before refusing; if the
-        // backend has already exited, drop the dead handle and
-        // proceed to spawn a fresh process.
-        if let Some(existing) = runtimes.get(id) {
-            let still_alive = existing
-                .status(Duration::from_millis(200))
-                .map(|status| matches!(status.state, RuntimeState::Running))
-                .unwrap_or(false);
-            if still_alive {
-                return Err(SupervisorError::AlreadyRunning(id.to_owned()));
-            }
-            runtimes.remove(id);
+        // Defensive stale-handle cleanup: a previous Phase 1
+        // test left a `RuntimeHandle` whose child has already
+        // exited. We mirror the Phase 1 behaviour by probing
+        // the live status first; if the slot is empty or the
+        // process is dead, the `start_application` path
+        // proceeds to spawn a fresh one.
+        if self.inner.is_application_running(id) {
+            return Err(SupervisorError::AlreadyRunning(id.to_owned()));
         }
-        let handle = RuntimeHandle::start_with_spec(RuntimeSpec {
-            app_id: id.to_owned(),
-            package_root: install_root.to_path_buf(),
-            backend: backend.clone(),
-            data_dir: None,
-            cache_dir: None,
-        })?;
-        let status = handle.status(Duration::from_secs(2))?;
-        runtimes.insert(id.to_owned(), handle);
+        let descriptor = service_descriptor_from_backend(backend);
+        self.inner
+            .start_service(id, "main", install_root, &descriptor)?;
+        let status = self
+            .inner
+            .runtime_status_compat(id)
+            .unwrap_or(RuntimeStatus {
+                state: RuntimeState::Running,
+                mode: backend.mode,
+                ..Default::default()
+            });
         Ok(status)
     }
 
+    /// Backward-compatible stop. Stops the app's primary
+    /// service (v1 backend) and returns a fabricated
+    /// `RuntimeStatus::Stopped`.
     pub fn stop(&self, id: &str) -> Result<RuntimeStatus, SupervisorError> {
-        let mut runtimes = self.runtimes.lock().expect("runtime lock poisoned");
-        let Some(handle) = runtimes.remove(id) else {
-            // Idempotent: stopping a non-running app is a no-op, not an error.
-            return Ok(RuntimeStatus {
-                state: RuntimeState::Stopped,
-                ..Default::default()
-            });
-        };
-        handle.cancel();
-        let _ = handle.status(Duration::from_millis(200));
+        let _ = self.inner.stop_service(id, "main");
         Ok(RuntimeStatus {
             state: RuntimeState::Stopped,
             ..Default::default()
         })
     }
 
+    /// Backward-compatible status. Returns the v1-shaped
+    /// `RuntimeStatus` for the app's primary service, or a
+    /// fabricated `Stopped` snapshot for an unknown app.
     pub fn status(&self, id: &str) -> Result<RuntimeStatus, SupervisorError> {
-        let mut runtimes = self.runtimes.lock().expect("runtime lock poisoned");
-        let Some(handle) = runtimes.get(id) else {
-            return Ok(RuntimeStatus {
+        Ok(self
+            .inner
+            .runtime_status_compat(id)
+            .unwrap_or(RuntimeStatus {
                 state: RuntimeState::Stopped,
                 ..Default::default()
-            });
-        };
-        let status = handle.status(Duration::from_millis(200))?;
-        // Best-effort cleanup: if the backend has already exited
-        // (crashed or stopped normally), drop the handle so the next
-        // `launch` doesn't hit `AlreadyRunning`. Reading the status
-        // again after we have a fresh lock could in principle race
-        // with a new `launch`, but that just causes the next launch
-        // to repeat the probe — which is harmless.
-        if matches!(status.state, RuntimeState::Stopped | RuntimeState::Crashed) {
-            runtimes.remove(id);
-        }
-        Ok(status)
+            }))
     }
 
     /// Snapshot the live runtime for `id`, or `None` when no
-    /// supervisor slot is currently held. Distinct from `status`:
-    /// that one always returns a `RuntimeStatus` and reports a
-    /// fabricated `Stopped` state for not-running apps, which would
-    /// be misleading to embed in `AppSummary.runtime`. Callers that
-    /// want the optional "is the backend up right now" view should
-    /// use this helper.
+    /// supervisor slot is currently held. Distinct from
+    /// `status`: that one always returns a `RuntimeStatus` and
+    /// reports a fabricated `Stopped` state for not-running
+    /// apps, which would be misleading to embed in
+    /// `AppSummary.runtime`. Callers that want the optional
+    /// "is the backend up right now" view should use this
+    /// helper.
     pub fn snapshot(&self, id: &str) -> Option<RuntimeStatus> {
-        let runtimes = self.runtimes.lock().expect("runtime lock poisoned");
-        let handle = runtimes.get(id)?;
-        handle.status(Duration::from_millis(200)).ok()
+        self.inner.runtime_status_compat(id)
     }
 
-    /// Stop the runtime (graceful, then forceful) and forget about
-    /// it. Used by `uninstall` so the next install of the same id
-    /// can start with a clean supervisor slot. Idempotent.
+    /// Stop the runtime (graceful, then forceful) and forget
+    /// about it. Used by `uninstall` so the next install of
+    /// the same id can start with a clean supervisor slot.
+    /// Idempotent.
     pub fn stop_and_forget(&self, id: &str) {
-        let mut runtimes = self.runtimes.lock().expect("runtime lock poisoned");
-        let Some(handle) = runtimes.remove(id) else {
-            return;
-        };
-        // First ask nicely, then poll. The runtime's stop sequence
-        // already writes a shutdown envelope and waits a couple of
-        // seconds before falling back to a process-tree kill, so the
-        // poll loop here is a safety net for backends that ignore
-        // the shutdown envelope.
-        handle.cancel();
-        for _ in 0..40 {
-            match handle.status(Duration::from_millis(50)) {
-                Ok(status)
-                    if matches!(status.state, RuntimeState::Stopped | RuntimeState::Crashed) =>
-                {
-                    return;
-                }
-                _ => {}
-            }
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let _ = handle.cancel();
+        self.inner.forget_application(id);
+    }
+
+    /// Escape hatch into the new multi-service API. Returns
+    /// a clone of the inner `ApplicationSupervisor` so the
+    /// Phase 5 daemon protocol can drive the per-service
+    /// surface without going through the v1 shim.
+    pub fn application_supervisor(&self) -> ApplicationSupervisor {
+        self.inner.clone()
+    }
+}
+
+/// Build a `ServiceDescriptor` for the v1 "main" service from a
+/// legacy `Backend` block. Used by the v1 backward-compat
+/// launch path. The reverse mapping lives in
+/// `application_supervisor::service_descriptor_to_backend`.
+fn service_descriptor_from_backend(backend: &crate::manifest::Backend) -> crate::core::application_manifest::ServiceDescriptor {
+    use crate::core::application_manifest::{
+        ServiceDescriptor, ServiceHealthDescriptor, ServiceHealthKind, ServiceMode,
+        ServiceRestartDescriptor, ServiceRestartPolicy,
+    };
+    use crate::core::manifest_v2::ServiceRuntime as V2Runtime;
+    let health = backend.health_check.as_ref().map(|check| ServiceHealthDescriptor {
+        kind: ServiceHealthKind::Http,
+        path: Some(check.path.clone()),
+        interval_ms: 5_000,
+        timeout_ms: check.timeout_ms,
+    });
+    let restart_policy = match backend.restart.as_ref().map(|p| p.policy.as_str()) {
+        Some("never") => ServiceRestartPolicy::Never,
+        Some("always") => ServiceRestartPolicy::Always,
+        _ => ServiceRestartPolicy::OnFailure,
+    };
+    let max_retries = backend
+        .restart
+        .as_ref()
+        .map(|p| p.max_retries)
+        .unwrap_or(5);
+    ServiceDescriptor {
+        name: "main".to_owned(),
+        runtime: match backend.runtime {
+            RuntimeKind::Node => V2Runtime::Node,
+            RuntimeKind::Python => V2Runtime::Python,
+            RuntimeKind::Native => V2Runtime::Native,
+        },
+        command: backend.entry.clone(),
+        args: backend.args.clone(),
+        depends_on: Vec::new(),
+        env: backend.env.clone(),
+        port: backend.port,
+        // The v1 `Backend` carries an explicit `mode`; the v2
+        // `ServiceDescriptor` carries an HTTP health check
+        // that implies `Service`. Both round-trip cleanly
+        // through the `service_descriptor_to_backend`
+        // projection in `application_supervisor`.
+        mode: match backend.mode {
+            crate::manifest::BackendMode::Rpc => ServiceMode::Rpc,
+            crate::manifest::BackendMode::Service => ServiceMode::Service,
+        },
+        health,
+        restart: ServiceRestartDescriptor {
+            policy: restart_policy,
+            max_retries,
+        },
+    }
+}
+
+impl std::fmt::Debug for RuntimeSupervisor {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter.debug_struct("RuntimeSupervisor").finish()
     }
 }
 
@@ -1096,16 +1220,16 @@ fn manager_error_response(id: &str, error: ManagerError) -> crate::ipc::Response
 }
 
 fn summary_from(
-    manifest: &AppManifest,
+    manifest: &ApplicationManifest,
     record: &AppRecord,
     path: &Path,
     trust_lookup: &dyn Fn(&str) -> bool,
 ) -> AppSummary {
     AppSummary {
-        id: manifest.id.clone(),
-        name: manifest.name.clone(),
-        version: manifest.version.clone(),
-        description: manifest.description.clone(),
+        id: manifest.id().to_owned(),
+        name: manifest.name().to_owned(),
+        version: manifest.version().to_owned(),
+        description: manifest.description().map(str::to_owned),
         path: path.to_path_buf(),
         install_source: record.source,
         last_launched_at: record.last_launched_at.clone(),
@@ -1116,6 +1240,96 @@ fn summary_from(
             trust_lookup,
         ),
         runtime: None,
+    }
+}
+
+/// Build a placeholder v1 `AppManifest` from a v2 unified
+/// manifest so the existing `AppDetails.manifest: AppManifest`
+/// field can still hold a value. The placeholder is good enough
+/// for the App Manager UI to render a row (id / name / version /
+/// frontend entry) without crashing; it deliberately carries no
+/// permissions and no backend block. Phase 6 replaces this with a
+/// first-class `ApplicationManifestView` so the UI can read the
+/// real service list instead of this lossy projection.
+fn v2_fallback_manifest(manifest: &ApplicationManifest) -> AppManifest {
+    manifest
+        .as_v2()
+        .expect("v2_fallback_manifest called with a v1 manifest");
+    let mut permissions = Vec::new();
+    // v2 permission descriptors that look like legacy IPC method
+    // names (`filesystem.read` etc.) are carried over so the
+    // existing permission store can read decisions written by
+    // earlier versions of the UI. v2-only descriptors
+    // (`fs:read:<path>`, ...) are dropped on the floor for Phase
+    // 1; they will land in a v2-shaped detail view in Phase 6.
+    for descriptor in manifest.permissions() {
+        if descriptor.name.contains(':') {
+            continue;
+        }
+        if let Some(permission) = legacy_permission_from_name(&descriptor.name) {
+            permissions.push(permission);
+        }
+    }
+    let frontend_entry = manifest
+        .frontend()
+        .map(|frontend| frontend.entry)
+        .unwrap_or_default();
+    AppManifest {
+        schema_version: 1,
+        kind: crate::manifest::PackageKind::App,
+        id: manifest.id().to_owned(),
+        name: manifest.name().to_owned(),
+        version: manifest.version().to_owned(),
+        description: None,
+        author: None,
+        icons: None,
+        homepage: None,
+        license: None,
+        update: None,
+        frontend: crate::manifest::Frontend {
+            entry: frontend_entry,
+            build: None,
+        },
+        backend: None,
+        permissions,
+        extension_points: None,
+    }
+}
+
+fn legacy_permission_from_name(name: &str) -> Option<crate::permission::Permission> {
+    use crate::permission::Permission;
+    match name {
+        "filesystem.read" => Some(Permission::FilesystemRead { paths: Vec::new() }),
+        "filesystem.write" => Some(Permission::FilesystemWrite { paths: Vec::new() }),
+        "filesystem.watch" => Some(Permission::FilesystemWatch { paths: Vec::new() }),
+        "filesystem.delete" => Some(Permission::FilesystemDelete { paths: Vec::new() }),
+        "filesystem.drop" => Some(Permission::FilesystemDrop),
+        "dialog.open" => Some(Permission::DialogOpen),
+        "dialog.save" => Some(Permission::DialogSave),
+        "clipboard.read" => Some(Permission::ClipboardRead),
+        "clipboard.write" => Some(Permission::ClipboardWrite),
+        "system.openExternal" => Some(Permission::OpenExternal { origins: Vec::new() }),
+        "storage" => Some(Permission::Storage),
+        "paths" => Some(Permission::Paths),
+        "window.manage" => Some(Permission::WindowManage),
+        "window.open" => Some(Permission::WindowOpen),
+        "notification.show" => Some(Permission::NotificationShow),
+        "menu.manage" => Some(Permission::MenuManage),
+        "tray.manage" => Some(Permission::TrayManage),
+        "shortcut.register" => Some(Permission::ShortcutRegister),
+        "runtime.invoke" => Some(Permission::RuntimeInvoke),
+        "runtime.manage" => Some(Permission::RuntimeManage),
+        "process.spawn" => Some(Permission::ProcessSpawn { executables: Vec::new() }),
+        "media.camera" => Some(Permission::MediaCamera),
+        "media.microphone" => Some(Permission::MediaMicrophone),
+        "geolocation" => Some(Permission::Geolocation),
+        "system.install" => Some(Permission::SystemInstall),
+        "system.uninstall" => Some(Permission::SystemUninstall),
+        "system.manageApps" => Some(Permission::SystemManageApps),
+        "system.manageExtensions" => Some(Permission::SystemManageExtensions),
+        "system.managePermissions" => Some(Permission::SystemManagePermissions),
+        "network.fetch" => Some(Permission::NetworkFetch { origins: Vec::new() }),
+        _ => None,
     }
 }
 
@@ -1276,6 +1490,8 @@ mod supervisor_launch_env_injection_tests {
             health_check: None,
             restart: None,
             port: None,
+            args: Vec::new(),
+            env: std::collections::BTreeMap::new(),
         };
         let install_root = workspace.join("examples").join("notes");
         let supervisor = RuntimeSupervisor::default();

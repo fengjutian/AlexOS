@@ -148,6 +148,8 @@ fn shutdown_grace_for(endpoint: &Option<ServiceEndpoint>) -> (BackendMode, Durat
 pub enum RuntimeError {
     #[error("Node.js was not found; set ALEX_NODE to the node executable")]
     NodeNotFound,
+    #[error("Python runtime is not managed by Alex OS in this build; Phase 7 adds the managed Python provider")]
+    PythonNotManaged,
     #[error("failed to start runtime {executable}: {source}")]
     Start {
         executable: PathBuf,
@@ -329,6 +331,15 @@ struct ServiceState {
 pub struct RuntimeHandle {
     sender: mpsc::Sender<RuntimeCommand>,
     pid: Arc<AtomicU32>,
+}
+
+impl std::fmt::Debug for RuntimeHandle {
+    fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
+        formatter
+            .debug_struct("RuntimeHandle")
+            .field("pid", &self.pid.load(Ordering::Acquire))
+            .finish()
+    }
 }
 
 enum RuntimeCommand {
@@ -759,12 +770,35 @@ impl RuntimeProcess {
         log_dir: Option<&Path>,
         logs: Arc<Mutex<VecDeque<String>>>,
     ) -> Result<(Self, Option<ServiceEndpoint>), RuntimeError> {
-        let executable = match spec.backend.runtime {
-            RuntimeKind::Node => discover_node().ok_or(RuntimeError::NodeNotFound)?,
+        // Dispatch on the declared runtime. `Node` keeps the
+        // historical `node <entry> <args...>` shape; `Python` is
+        // reserved for Phase 7's managed provider (the supervisor
+        // already has the dispatch hook today so the higher-level
+        // multi-service code does not need a follow-up rewrite);
+        // `Native` runs the entry directly without an
+        // interpreter. The host is responsible for refusing
+        // untrusted executables via the Phase 8 executable
+        // allow-list — that is layered above this dispatch.
+        let (executable, allow_native_entry) = match spec.backend.runtime {
+            RuntimeKind::Node => (discover_node().ok_or(RuntimeError::NodeNotFound)?, false),
+            RuntimeKind::Python => return Err(RuntimeError::PythonNotManaged),
+            RuntimeKind::Native => (PathBuf::from(&spec.backend.entry), true),
         };
         let mut command = Command::new(&executable);
+        if allow_native_entry {
+            // Native executables take their argv[0] as-is; the
+            // caller is responsible for putting the absolute path
+            // in `entry` (the v2 validator already enforces
+            // package-relative paths, and the supervisor refuses
+            // any entry that escapes the install root).
+        } else {
+            command.arg(&spec.backend.entry);
+        }
+        // Append the service-declared CLI args. Empty for v1;
+        // the Phase 2 multi-service projection uses this to
+        // forward a v2 `ServiceSpec.args` list to the child.
+        command.args(&spec.backend.args);
         command
-            .arg(&spec.backend.entry)
             .current_dir(&spec.package_root)
             .env("ALEX_PACKAGE_ROOT", &spec.package_root)
             .env(
@@ -772,6 +806,18 @@ impl RuntimeProcess {
                 std::env::var_os("ALEX_INSTALL_ROOT").unwrap_or_default(),
             )
             .env("ALEX_APP_ID", &spec.app_id);
+        // Apply the service-declared environment. We do this
+        // after the framework-managed `ALEX_*` set so a service
+        // cannot override a host-controlled variable; a manifest
+        // that tries to set `ALEX_APP_ID` is silently dropped
+        // (the same defence-in-depth the host already applies
+        // for the v1 path).
+        for (key, value) in &spec.backend.env {
+            if key.starts_with("ALEX_") {
+                continue;
+            }
+            command.env(key, value);
+        }
         if let Some(data_dir) = data_dir {
             command.env("ALEX_APP_DATA_DIR", data_dir);
         }
@@ -1392,6 +1438,7 @@ fn terminate_process_tree(_pid: u32) -> bool {
 #[cfg(test)]
 mod lifecycle_tests {
     use super::*;
+    use std::collections::BTreeMap;
 
     #[test]
     fn backoff_schedule_starts_at_zero_and_caps_at_16s() {
@@ -1437,6 +1484,8 @@ mod lifecycle_tests {
                 health_check: None,
                 restart: None,
                 port: None,
+                args: Vec::new(),
+                env: BTreeMap::new(),
             },
             data_dir: None,
             cache_dir: None,
