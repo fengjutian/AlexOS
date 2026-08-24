@@ -10,7 +10,7 @@
       "dialog.openFile", "dialog.openFiles", "dialog.openDirectory", "dialog.saveFile",
       "clipboard.readText", "clipboard.writeText", "system.info", "system.capabilities",
       "system.requestPermission", "system.openExternal", "system.listApps", "system.listExtensions",
-      "system.install", "system.uninstall", "system.listPermissions", "system.setPermission",
+      "system.install", "system.uninstall", "system.updateStart", "system.updateTasks", "system.updateCancel", "system.updateRetry", "system.listPermissions", "system.setPermission",
       "system.listTrustedPublishers", "system.readAuditLog", "window.setTitle", "window.minimize",
       "window.maximize", "window.close", "notification.show", "runtime.invoke", "runtime.status",
       "runtime.restart", "runtime.cancel", "events.subscribe", "events.unsubscribe",

@@ -24,6 +24,7 @@ use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::time::Duration;
+use std::sync::{Arc, atomic::{AtomicBool, Ordering}};
 
 use wry::http::{Request, Response, StatusCode};
 
@@ -35,6 +36,8 @@ use crate::runtime::ServiceEndpoint;
 /// (`src/ipc.rs::MAX_IPC_MESSAGE_BYTES`) so a hostile page cannot
 /// tunnel a multi-gigabyte upload through a service backend.
 pub const MAX_REQUEST_BYTES: usize = 1024 * 1024;
+pub const MAX_RESPONSE_BYTES: usize = 32 * 1024 * 1024;
+const MAX_HEADER_BYTES: usize = 64 * 1024;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const READ_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
@@ -43,6 +46,8 @@ const READ_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
 /// frames to a service backend without exposing the backend token to JS.
 pub struct WebSocketTunnel {
     pub base_url: String,
+    stop: Arc<AtomicBool>,
+    worker: Option<std::thread::JoinHandle<()>>,
 }
 
 impl WebSocketTunnel {
@@ -57,11 +62,21 @@ impl WebSocketTunnel {
             .collect::<String>();
         let route_prefix = format!("/{secret}");
         let base_url = format!("ws://127.0.0.1:{port}{route_prefix}");
-        std::thread::Builder::new()
+        listener.set_nonblocking(true)?;
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let worker = std::thread::Builder::new()
             .name("alex-websocket-tunnel".into())
             .spawn(move || {
-                for incoming in listener.incoming() {
-                    let Ok(client) = incoming else { break };
+                while !worker_stop.load(Ordering::Acquire) {
+                    let client = match listener.accept() {
+                        Ok((client, _)) => client,
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(Duration::from_millis(20));
+                            continue;
+                        }
+                        Err(_) => break,
+                    };
                     let endpoint = endpoint.clone();
                     let app_id = app_id.clone();
                     let route_prefix = route_prefix.clone();
@@ -70,8 +85,17 @@ impl WebSocketTunnel {
                     });
                 }
             })?;
-        Ok(Self { base_url })
+        Ok(Self { base_url, stop, worker: Some(worker) })
     }
+
+    pub fn shutdown(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Some(worker) = self.worker.take() { let _ = worker.join(); }
+    }
+}
+
+impl Drop for WebSocketTunnel {
+    fn drop(&mut self) { self.shutdown(); }
 }
 
 fn relay_websocket(
@@ -220,14 +244,102 @@ pub fn proxy_to_service(
     // because TCP has no other way to know the request is done.
     let _ = stream.shutdown(Shutdown::Write);
 
-    let mut raw = Vec::new();
-    if let Err(error) = stream.read_to_end(&mut raw) {
+    let raw = match read_http_response(&mut stream) {
+        Ok(raw) => raw,
+        Err(error) => {
         return text_response(
             StatusCode::BAD_GATEWAY,
             &format!("read from backend failed: {error}"),
         );
-    }
+        }
+    };
     parse_upstream_response(&raw)
+}
+
+/// Read exactly one HTTP response without waiting for the backend to close a
+/// keep-alive connection. Chunked bodies are decoded incrementally and every
+/// path enforces a hard response cap.
+fn read_http_response(stream: &mut TcpStream) -> std::io::Result<Vec<u8>> {
+    let mut raw = Vec::with_capacity(8 * 1024);
+    let head_end = loop {
+        if let Some(pos) = raw.windows(4).position(|w| w == b"\r\n\r\n") {
+            break pos + 4;
+        }
+        if raw.len() >= MAX_HEADER_BYTES {
+            return Err(std::io::Error::other("upstream headers exceed 64 KiB"));
+        }
+        let mut chunk = [0u8; 8 * 1024];
+        let count = stream.read(&mut chunk)?;
+        if count == 0 { return Err(std::io::Error::other("incomplete upstream headers")); }
+        raw.extend_from_slice(&chunk[..count]);
+    };
+    let head = std::str::from_utf8(&raw[..head_end])
+        .map_err(|_| std::io::Error::other("non-utf8 upstream headers"))?;
+    let content_length = head.lines().find_map(|line| {
+        let (name, value) = line.split_once(':')?;
+        name.eq_ignore_ascii_case("content-length").then(|| value.trim().parse::<usize>().ok()).flatten()
+    });
+    let chunked = head.lines().any(|line| {
+        line.split_once(':').is_some_and(|(name, value)|
+            name.eq_ignore_ascii_case("transfer-encoding") && value.split(',').any(|v| v.trim().eq_ignore_ascii_case("chunked")))
+    });
+    if let Some(length) = content_length {
+        if length > MAX_RESPONSE_BYTES { return Err(std::io::Error::other("upstream body exceeds 32 MiB")); }
+        let wanted = head_end + length;
+        while raw.len() < wanted {
+            let remaining = wanted - raw.len();
+            let mut chunk = vec![0u8; remaining.min(64 * 1024)];
+            let count = stream.read(&mut chunk)?;
+            if count == 0 { return Err(std::io::Error::other("truncated upstream body")); }
+            raw.extend_from_slice(&chunk[..count]);
+        }
+        raw.truncate(wanted);
+        return Ok(raw);
+    }
+    if chunked {
+        let decoded = decode_chunked(stream, &raw[head_end..])?;
+        let mut normalized = raw[..head_end].to_vec();
+        normalized.extend_from_slice(&decoded);
+        return Ok(normalized);
+    }
+    while raw.len().saturating_sub(head_end) <= MAX_RESPONSE_BYTES {
+        let mut chunk = [0u8; 64 * 1024];
+        let count = stream.read(&mut chunk)?;
+        if count == 0 { return Ok(raw); }
+        raw.extend_from_slice(&chunk[..count]);
+    }
+    Err(std::io::Error::other("upstream body exceeds 32 MiB"))
+}
+
+fn decode_chunked(stream: &mut TcpStream, initial: &[u8]) -> std::io::Result<Vec<u8>> {
+    let mut encoded = initial.to_vec();
+    let mut cursor = 0usize;
+    let mut decoded = Vec::new();
+    loop {
+        let line_end = loop {
+            if let Some(relative) = encoded[cursor..].windows(2).position(|w| w == b"\r\n") { break cursor + relative; }
+            read_more(stream, &mut encoded)?;
+        };
+        let size_text = std::str::from_utf8(&encoded[cursor..line_end]).map_err(|_| std::io::Error::other("invalid chunk size"))?;
+        let size = usize::from_str_radix(size_text.split(';').next().unwrap_or("").trim(), 16)
+            .map_err(|_| std::io::Error::other("invalid chunk size"))?;
+        cursor = line_end + 2;
+        if size == 0 { return Ok(decoded); }
+        if decoded.len().saturating_add(size) > MAX_RESPONSE_BYTES { return Err(std::io::Error::other("upstream body exceeds 32 MiB")); }
+        while encoded.len() < cursor + size + 2 { read_more(stream, &mut encoded)?; }
+        decoded.extend_from_slice(&encoded[cursor..cursor + size]);
+        cursor += size;
+        if &encoded[cursor..cursor + 2] != b"\r\n" { return Err(std::io::Error::other("malformed chunk terminator")); }
+        cursor += 2;
+    }
+}
+
+fn read_more(stream: &mut TcpStream, buffer: &mut Vec<u8>) -> std::io::Result<()> {
+    let mut chunk = [0u8; 64 * 1024];
+    let count = stream.read(&mut chunk)?;
+    if count == 0 { return Err(std::io::Error::other("truncated chunked body")); }
+    buffer.extend_from_slice(&chunk[..count]);
+    Ok(())
 }
 
 fn resolve_loopback(port: u16) -> Option<std::net::SocketAddr> {
@@ -293,11 +405,15 @@ fn parse_upstream_response(raw: &[u8]) -> Response<Cow<'static, [u8]>> {
         if let Some((name, value)) = line.split_once(':') {
             let name = name.trim();
             let value = value.trim();
+            if name.eq_ignore_ascii_case("transfer-encoding") || name.eq_ignore_ascii_case("content-length") {
+                continue;
+            }
             if FORWARDED_RESPONSE_HEADERS.contains(&name.to_ascii_lowercase().as_str()) {
                 builder = builder.header(name, value);
             }
         }
     }
+    builder = builder.header("content-length", body.len().to_string());
     builder.body(Cow::Owned(body)).unwrap_or_else(|_| {
         text_response(StatusCode::INTERNAL_SERVER_ERROR, "response build failed")
     })
@@ -509,5 +625,24 @@ mod tests {
         let raw = b"HTTP/1.0 200 OK\r\nbut no body separator";
         let response = parse_upstream_response(raw);
         assert_eq!(response.status().as_u16(), 502);
+    }
+
+    #[test]
+    fn proxy_decodes_chunked_response_without_waiting_for_eof() {
+        let backend = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = backend.local_addr().unwrap().port();
+        thread::spawn(move || {
+            let (mut stream, _) = backend.accept().unwrap();
+            let mut request = Vec::new();
+            let _ = stream.read_to_end(&mut request);
+            stream.write_all(b"HTTP/1.1 200 OK\r\nContent-Type: text/plain\r\nTransfer-Encoding: chunked\r\nConnection: keep-alive\r\n\r\n5\r\nhello\r\n6\r\n world\r\n0\r\n\r\n").unwrap();
+            stream.flush().unwrap();
+            std::thread::sleep(Duration::from_secs(1));
+        });
+        let response = proxy_to_service(&endpoint_for(port), "com.example", "/api/chunks", &make_get_request("alex://app/api/chunks"));
+        assert_eq!(response.status(), StatusCode::OK);
+        assert_eq!(response.body().as_ref(), b"hello world");
+        assert_eq!(response.headers()["content-length"], "11");
+        assert!(!response.headers().contains_key("transfer-encoding"));
     }
 }

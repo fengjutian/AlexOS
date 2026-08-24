@@ -369,6 +369,10 @@ impl ApiRouter {
             "system.requestPermission" => self.request_permission(&request.params),
             "system.install" => self.system_install(&request.params),
             "system.uninstall" => self.system_uninstall(&request.params),
+            "system.updateStart" => self.system_update_start(&request.params),
+            "system.updateTasks" => self.system_update_tasks(),
+            "system.updateCancel" => self.system_update_cancel(&request.params),
+            "system.updateRetry" => self.system_update_retry(&request.params),
             "system.listApps" => self.system_list_apps(),
             "system.listExtensions" => self.system_list_extensions(),
             "system.listPermissions" => self.system_list_permissions(&request.params),
@@ -1221,7 +1225,7 @@ impl ApiRouter {
         // should branch on `available` for production paths and
         // treat `experimental` as a "the method will accept
         // your call but no side effect happens yet" signal.
-        let mut available = vec![
+        /* let mut available = vec![
             "filesystem.readText",
             "filesystem.readBinary",
             "filesystem.writeText",
@@ -1305,8 +1309,10 @@ impl ApiRouter {
                 "shortcuts.list",
             ]);
         }
-        available.push("net.fetch");
-        let experimental: [&str; 0] = [];
+        available.push("net.fetch"); */
+        let native_desktop = self.native_host.as_ref().is_some_and(|host| host.supports_secondary_windows());
+        let available = super::capabilities::available(native_desktop);
+        let experimental = super::capabilities::experimental();
         Ok(json!({
             "capabilities": available,
             "experimental": experimental,
@@ -1470,6 +1476,46 @@ impl ApiRouter {
             })
             .collect();
         Ok(json!({ "apps": summary }))
+    }
+
+    fn require_update_roots(&self) -> Result<(PathBuf, PathBuf), (&'static str, String)> {
+        self.require_plugin()?;
+        self.require_permission(|permission| matches!(permission, Permission::SystemManageApps), "system.manageApps")?;
+        Ok((
+            self.system_install_root.clone().ok_or(("OPERATION_FAILED", "system install root is not configured".into()))?,
+            self.system_trust_root.clone().ok_or(("OPERATION_FAILED", "system trust root is not configured".into()))?,
+        ))
+    }
+
+    fn system_update_start(&self, params: &Value) -> ApiResult {
+        let (install, trust) = self.require_update_roots()?;
+        let id = params.get("id").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or(("INVALID_PARAMS", "missing `id`".into()))?;
+        let url = params.get("manifestUrl").and_then(Value::as_str).filter(|v| !v.is_empty()).ok_or(("INVALID_PARAMS", "missing `manifestUrl`".into()))?;
+        let channel = match params.get("channel").and_then(Value::as_str).unwrap_or("stable") {
+            "stable" => crate::update::UpdateChannel::Stable,
+            "beta" => crate::update::UpdateChannel::Beta,
+            "dev" => crate::update::UpdateChannel::Dev,
+            _ => return Err(("INVALID_PARAMS", "channel must be stable, beta, or dev".into())),
+        };
+        serde_json::to_value(crate::core::update_tasks::start(id.into(), url.into(), channel, install, trust)).map_err(|e| ("OPERATION_FAILED", e.to_string()))
+    }
+
+    fn system_update_tasks(&self) -> ApiResult {
+        let _ = self.require_update_roots()?;
+        Ok(json!({ "tasks": crate::core::update_tasks::list() }))
+    }
+
+    fn system_update_cancel(&self, params: &Value) -> ApiResult {
+        let _ = self.require_update_roots()?;
+        let task_id = params.get("taskId").and_then(Value::as_str).ok_or(("INVALID_PARAMS", "missing `taskId`".into()))?;
+        Ok(json!({ "cancelled": crate::core::update_tasks::cancel(task_id) }))
+    }
+
+    fn system_update_retry(&self, params: &Value) -> ApiResult {
+        let _ = self.require_update_roots()?;
+        let task_id = params.get("taskId").and_then(Value::as_str).ok_or(("INVALID_PARAMS", "missing `taskId`".into()))?;
+        let task = crate::core::update_tasks::retry(task_id).ok_or(("INVALID_STATE", "task is not failed or cancelled".into()))?;
+        serde_json::to_value(task).map_err(|e| ("OPERATION_FAILED", e.to_string()))
     }
 
     fn system_list_extensions(&self) -> ApiResult {

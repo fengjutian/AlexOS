@@ -293,7 +293,7 @@ pub mod windows {
         let package_id = serde_json::to_string(&manifest.id)?;
         let mut init_script = BRIDGE.replace("__ALEX_PACKAGE_ID__", &package_id)
             + &crate::permission_shim::shim_source(&manifest.permissions);
-        if let Some(endpoint) = service_endpoint.clone() {
+        let _websocket_tunnel = if let Some(endpoint) = service_endpoint.clone() {
             let tunnel = crate::proxy::WebSocketTunnel::start(endpoint, manifest.id.clone())?;
             let base = serde_json::to_string(&tunnel.base_url)?;
             init_script.push_str(&format!(r#"
@@ -309,7 +309,8 @@ pub mod windows {
                 }});
               }})();
             "#));
-        }
+            Some(tunnel)
+        } else { None };
         let endpoint_for_handler = service_endpoint.clone();
         let app_id_for_handler = manifest.id.clone();
         let drop_router = Arc::clone(&router);

@@ -150,9 +150,16 @@ export interface NetFetchInput {
 
 export interface NetFetchResponse {
   status: number;
-  finalUrl: string;
+  /** Effective response URL. Redirects are disabled by the host. */
+  url: string;
+  headers: Array<{ name: string; value: string }>;
+  bodyEncoding: "base64";
   /** Base64-encoded response bytes. */
   body: string;
+  truncated: false;
+  bytes: Uint8Array;
+  text(encoding?: string): string;
+  json<T = unknown>(): T;
 }
 
 export type { AlexCapability, AlexGeneratedEventMap } from "./schema.generated.js";
@@ -286,6 +293,17 @@ export interface RuntimeStatus {
   restartCount: number;
   lastError?: string;
   logs: string[];
+}
+
+export interface UpdateTask {
+  id: string;
+  appId: string;
+  manifestUrl: string;
+  channel: "stable" | "beta" | "dev";
+  state: "queued" | "running" | "completed" | "failed" | "cancelled";
+  stage: string;
+  progress: number;
+  error?: string | null;
 }
 
 export class AlexError extends Error {
@@ -423,6 +441,12 @@ export interface AlexClient {
      * that was removed.
      */
     uninstall(options: UninstallOptions): Promise<{ removed: string }>;
+    readonly update: {
+      start(spec: { id: string; manifestUrl: string; channel?: "stable" | "beta" | "dev" }, options?: InvokeOptions): Promise<UpdateTask>;
+      tasks(options?: InvokeOptions): Promise<UpdateTask[]>;
+      cancel(taskId: string, options?: InvokeOptions): Promise<{ cancelled: boolean }>;
+      retry(taskId: string, options?: InvokeOptions): Promise<UpdateTask>;
+    };
     readonly container: {
       create(spec: ContainerCreateInput, options?: InvokeOptions): Promise<ContainerView>;
       start(instanceId: string, options?: InvokeOptions): Promise<ContainerView>;

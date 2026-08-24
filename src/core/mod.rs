@@ -6,3 +6,4 @@ pub mod package;
 pub mod plugin;
 pub mod trust;
 pub mod update;
+pub mod update_tasks;

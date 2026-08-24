@@ -9,3 +9,4 @@ mod router;
 // Flatten the router's public items onto `crate::api::*` so callers can
 // keep using `use crate::api::ApiRouter` after the move.
 pub use router::*;
+pub mod capabilities;

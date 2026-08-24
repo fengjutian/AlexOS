@@ -268,7 +268,16 @@ export function createAlexClient(transport = browserTransport()) {
     }),
     net: Object.freeze({
       async fetch(input, options) {
-        return invoke("net.fetch", input, options);
+        const result = await invoke("net.fetch", input, options);
+        if (result?.bodyEncoding !== "base64") {
+          throw new AlexError("INVALID_RESPONSE", "net.fetch returned an unknown body encoding");
+        }
+        return Object.freeze({
+          ...result,
+          bytes: base64ToBytes(result.body),
+          text(encoding = "utf-8") { return new TextDecoder(encoding).decode(this.bytes); },
+          json() { return JSON.parse(this.text()); },
+        });
       },
     }),
     system: Object.freeze({
@@ -302,6 +311,12 @@ export function createAlexClient(transport = browserTransport()) {
       async uninstall({ id }, options) {
         return invoke("system.uninstall", { id }, options);
       },
+      update: Object.freeze({
+        start(spec, options) { return invoke("system.updateStart", spec, options); },
+        async tasks(options) { return (await invoke("system.updateTasks", {}, options)).tasks ?? []; },
+        cancel(taskId, options) { return invoke("system.updateCancel", { taskId }, options); },
+        retry(taskId, options) { return invoke("system.updateRetry", { taskId }, options); },
+      }),
       container: Object.freeze({
         create(spec, options) {
           return invoke("system.container.create", spec, options);

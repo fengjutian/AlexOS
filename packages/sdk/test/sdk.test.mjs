@@ -76,3 +76,16 @@ test("openDirectory unwraps the first file-token grant", async () => {
   });
   assert.deepEqual(await client.dialog.openDirectory(), grant);
 });
+
+test("net.fetch exposes headers and body decoding helpers", async () => {
+  const client = createAlexClient({
+    async invoke(method) {
+      assert.equal(method, "net.fetch");
+      return { status: 200, url: "https://example.com/data", headers: [{ name: "content-type", value: "application/json" }], bodyEncoding: "base64", body: Buffer.from('{"ok":true}').toString("base64"), truncated: false };
+    },
+  });
+  const response = await client.net.fetch({ url: "https://example.com/data" });
+  assert.equal(response.text(), '{"ok":true}');
+  assert.deepEqual(response.json(), { ok: true });
+  assert.equal(response.headers[0].name, "content-type");
+});
