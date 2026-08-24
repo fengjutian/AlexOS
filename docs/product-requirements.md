@@ -16,7 +16,7 @@ nav_order: 1
 > **Build AI applications once. Run them anywhere.**
 
 开发者构建一次 AI Application，由 Alex Runtime 负责安装、运行和管理。首个产品版本面向
-Windows，后续扩展到 macOS、Linux、Server、Android 和 Edge。
+Windows，后续扩展到 macOS、Linux、Server、Android、HarmonyOS、iOS 和 Edge。
 
 Alex Runtime 不是操作系统，也不自行实现 Node.js、Python、LLM、数据库、GPU Runtime 或
 OCI 容器。它管理这些现有 Runtime 和应用服务。
@@ -262,10 +262,19 @@ alex doctor
 - Window、Tray、Notification、Clipboard、Menu 和 Auto Start；
 - Shell 仅通过 alexd 控制 Runtime。
 
+### v0.5：Mobile Runtime Preview
+
+- Android WebView、HarmonyOS ArkWeb 与 iOS WKWebView Shell；
+- Kotlin/JNI、ArkTS/Node-API 与 Swift/C ABI 平台适配层；
+- `.alx` common slice 与 Android/HarmonyOS/iOS 平台切片；
+- Web、WASM、Agent Workflow、Model 与 MCP Client 移动端执行能力；
+- 移动端生命周期、后台任务、权限、安全存储和应用沙箱适配；
+- 不承诺在移动端直接运行任意 Node/Python backend；不兼容服务由 Server Runtime 承载。
+
 ### v1.0：平台闭环
 
 - Developer CLI/API；
-- Desktop、Server 和 Edge Runtime；
+- Desktop、Mobile、Server 和 Edge Runtime；
 - Alex Registry；
 - publish/install/update/deploy 产品闭环。
 

@@ -174,7 +174,32 @@ nav_order: 4
 - Linux AppImage/deb/rpm；
 - 平台 CI 和 GUI 自动化。
 
-### 3.9 Rust Native Worker
+验收标准：同一个兼容 `.alx` 应用可以在 Windows、macOS 和 Linux 安装运行，平台能力差异通过
+capabilities 明确报告，不能静默降级。
+
+### 3.9 Android、HarmonyOS 与 iOS
+
+- 定义 Mobile Runtime Profile，明确 Web、WASM、Agent Workflow、Model 和 MCP Client 为首批可移植执行类型；
+- `.alx` 支持 common slice，以及 Android、HarmonyOS、iOS 的架构与平台切片；
+- Registry 按 OS、系统版本、CPU 架构和 Runtime 能力解析并下发兼容切片；
+- Android WebView Shell，以及 Kotlin/JNI 到 Rust Core 的平台适配层；
+- HarmonyOS ArkWeb Shell，以及 ArkTS/Node-API 到 Rust/C++ Core 的平台适配层；
+- iOS WKWebView Shell，以及 Swift/C ABI 到 Rust Core 的平台适配层；
+- 为 Activity/UIAbility/UIApplication 生命周期建立统一 `MobileLifecycle` 接口；
+- 将持久任务、前台任务、网络约束和系统回收映射到各平台受支持的后台任务机制；
+- 将文件、通知、相机、麦克风、定位和安全存储映射到平台权限与 Alex capability；
+- WebView/ArkWeb/WKWebView 消息桥实行来源校验、方法白名单、参数校验和审计；
+- 端侧模型支持按设备能力选择 CPU/GPU/NPU Provider，并允许回退到远程 Model Runtime；
+- 移动端 MCP 默认作为受权限控制的 Client，不开放无约束的本地 MCP Server；
+- Node、Python、Native backend 必须提供平台变体，或部署到 Server Runtime 供移动端调用；
+- Android、HarmonyOS 与 iOS 真机 CI、安装升级、权限撤销、离线和进程回收测试。
+
+验收标准：同一份源码和 Manifest 可由 `alex build` 产出三个移动平台的兼容切片；示例 Agent
+能够在 Android、HarmonyOS 和 iOS 真机完成安装、Web/WASM 执行、端侧或远程模型调用、MCP 调用、
+权限撤销和状态恢复。系统不得依赖常驻 daemon，也不得把移动平台不允许的 Node/Python 动态执行
+宣传为“构建一次、到处运行”。
+
+### 3.10 Rust Native Worker
 
 - 稳定 ABI 或独立进程协议；
 - 内存和资源所有权；
@@ -182,7 +207,7 @@ nav_order: 4
 - 签名和可信等级；
 - 禁止第三方动态库进入 Shell 主进程的默认策略。
 
-### 3.10 Alex Store
+### 3.11 Alex Store
 
 - 发布者注册和身份验证；
 - 包上传、扫描和审核；
@@ -215,8 +240,10 @@ nav_order: 4
 6. 产品化后台应用更新；
 7. 定义 Plugin Package 与 Extension Point；
 8. 用 Python Runtime 验证 Runtime Adapter；
-9. 再开始 macOS/Linux；
-10. 最后建设 Store 服务。
+9. 完成 macOS/Linux 平台边界并稳定 `.alx` 跨平台能力；
+10. 定义 Mobile Runtime Profile 和 `.alx` 平台切片；
+11. 依次交付 Android、HarmonyOS、iOS Preview；
+12. 最后建设 Store 服务。
 
 在 P0 完成前，项目应继续标记为实验性开发者预览，不应承诺运行不受信任的第三方应用。
 
