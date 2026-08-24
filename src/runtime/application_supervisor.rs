@@ -843,6 +843,17 @@ impl ApplicationSupervisor {
         app_id: &str,
         service_name: &str,
     ) -> Result<ServiceStatus, ApplicationSupervisorError> {
+        // Phase 4: stop the watchdog *before* we touch
+        // the runtime handle. `take_watchdog` flips the
+        // stop signal and hands us the `JoinHandle` so
+        // the watchdog thread cannot outlive this call.
+        // We must drop the supervisor lock first
+        // because `take_watchdog` takes it again
+        // (`std::sync::Mutex` is not reentrant on
+        // Windows + std), and we must take the
+        // `handle` out from under the slot's lock so
+        // the watchdog — which polls `handle.status()`
+        // — sees a consistent view.
         let mut guard = self
             .applications
             .lock()
@@ -862,18 +873,9 @@ impl ApplicationSupervisor {
         }
         service.status = ServiceStatus::Stopping;
         let mut handle = service.handle.take();
-        // Drain the watchdog thread before we let the
-        // runtime handle drop. `take_watchdog` flips
-        // the stop signal and hands us the `JoinHandle`
-        // so the thread cannot outlive this call. We
-        // hold the supervisor lock only long enough to
-        // take the join handle, then drop the lock to
-        // actually `join()` (the watchdog may itself
-        // want the supervisor lock, e.g. through
-        // `read_service_status`).
-        let watchdog_join = self.take_watchdog(app_id, service_name);
         service.generation = service.generation.wrapping_add(1);
         drop(guard);
+        let watchdog_join = self.take_watchdog(app_id, service_name);
         if let Some(handle) = handle.as_mut() {
             handle.cancel();
             // Best-effort drain: the supervisor thread already

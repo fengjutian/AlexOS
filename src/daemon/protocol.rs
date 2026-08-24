@@ -43,6 +43,34 @@ pub enum ControlCommand {
         #[serde(default = "default_log_limit")]
         limit: u32,
     },
+    // -----------------------------------------------------------------
+    // Phase 5 — per-service surface
+    // -----------------------------------------------------------------
+    // Each command targets one `(app_id, service)` pair
+    // and goes through the supervisor's per-service
+    // methods. `ListServices` returns the full
+    // `BTreeMap<String, ServiceSummary>` so the App
+    // Manager UI and the CLI can render the detail view
+    // without a separate manifest read.
+    StartService {
+        app_id: String,
+        service: String,
+    },
+    StopService {
+        app_id: String,
+        service: String,
+    },
+    RestartService {
+        app_id: String,
+        service: String,
+    },
+    ServiceStatus {
+        app_id: String,
+        service: String,
+    },
+    ListServices {
+        app_id: String,
+    },
 }
 
 fn default_log_limit() -> u32 {
@@ -122,5 +150,59 @@ mod tests {
             request.command,
             ControlCommand::Logs { limit: 200, .. }
         ));
+    }
+
+    #[test]
+    fn per_service_commands_round_trip() {
+        // Phase 5 per-service surface — every command
+        // must serialise with the stable `type` / `params`
+        // envelope and re-parse to the exact same struct.
+        for command in [
+            ControlCommand::StartService {
+                app_id: "com.example.api".into(),
+                service: "api".into(),
+            },
+            ControlCommand::StopService {
+                app_id: "com.example.api".into(),
+                service: "api".into(),
+            },
+            ControlCommand::RestartService {
+                app_id: "com.example.api".into(),
+                service: "api".into(),
+            },
+            ControlCommand::ServiceStatus {
+                app_id: "com.example.api".into(),
+                service: "api".into(),
+            },
+            ControlCommand::ListServices {
+                app_id: "com.example.api".into(),
+            },
+        ] {
+            let request = ControlRequest {
+                protocol: PROTOCOL_VERSION,
+                id: "phase5-1".into(),
+                command: command.clone(),
+            };
+            let value = serde_json::to_value(&request).unwrap();
+            let command_value = &value["command"];
+            let kind = command_value["type"].as_str().unwrap();
+            // Stable type names. If a future phase
+            // renames one of these, the App Manager UI
+            // and the CLI both have to follow.
+            assert!(
+                matches!(
+                    kind,
+                    "startService"
+                        | "stopService"
+                        | "restartService"
+                        | "serviceStatus"
+                        | "listServices"
+                ),
+                "unexpected command tag: {kind}"
+            );
+            let parsed: ControlRequest = serde_json::from_value(value).unwrap();
+            assert_eq!(parsed, request);
+            assert_eq!(parsed.command, command);
+        }
     }
 }

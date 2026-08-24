@@ -220,6 +220,40 @@ pub trait AppManager: Send + Sync {
     fn launch(&self, id: &str) -> Result<RuntimeStatus, ManagerError>;
     fn stop(&self, id: &str) -> Result<RuntimeStatus, ManagerError>;
     fn runtime_status(&self, id: &str) -> Result<RuntimeStatus, ManagerError>;
+    /// Phase 5 per-service surface. `start_service` runs
+    /// exactly one service from the manifest without
+    /// touching the app's other services (DAG layering is
+    /// the caller's responsibility — for a "start
+    /// everything" path use [`Self::launch`] which now
+    /// goes through the layered [`crate::runtime::application_supervisor::ApplicationSupervisor`]
+    /// path for v2). The v1 backward-compat callers
+    /// continue to call `start_service("main", ...)`
+    /// through [`Self::launch`] — the trait method is the
+    /// general-purpose one.
+    fn start_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, ManagerError>;
+    fn stop_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, ManagerError>;
+    fn restart_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, ManagerError>;
+    fn service_status(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, ManagerError>;
+    fn list_services(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, ManagerError>;
     fn permissions(&self, id: &str) -> Result<Vec<PermissionState>, ManagerError>;
     fn set_permission(
         &self,
@@ -516,11 +550,20 @@ impl LocalAppManager {
         trust_root: Option<PathBuf>,
     ) -> Result<Self, ManagerError> {
         let registry = AppRegistry::open_or_rebuild(install_root)?;
+        // Phase 5: thread the install root into the
+        // supervisor so the per-service `start_*` paths
+        // can look up `ServiceDescriptor`s from the
+        // on-disk manifest without forcing the IPC
+        // layer to ferry the spec.
+        let supervisor = RuntimeSupervisor {
+            inner: ApplicationSupervisor::default(),
+            install_root: install_root.to_path_buf(),
+        };
         Ok(Self {
             install_root: install_root.to_path_buf(),
             registry,
             permissions_root,
-            runtimes: Arc::new(RuntimeSupervisor::default()),
+            runtimes: Arc::new(supervisor),
             trust_root,
         })
     }
@@ -760,26 +803,31 @@ impl AppManager for LocalAppManager {
     fn launch(&self, id: &str) -> Result<RuntimeStatus, ManagerError> {
         let install_path = self.install_root.join(id);
         let manifest = load_application(&install_path)?;
-        // Phase 1 only knows how to launch v1 single-backend
-        // packages. v2 packages declare a service DAG that the
-        // current `RuntimeSupervisor` cannot honour yet, so the
-        // honest answer is "v2 launch is wired in Phase 2" rather
-        // than silently launching the first service. The list /
-        // install / permission / uninstall paths all understand
-        // v2 today; this is the last big missing piece.
-        let backend = match manifest.as_v1() {
-            Some(manifest) => manifest.backend.as_ref(),
+        let status = match manifest.as_v1() {
+            Some(legacy) => {
+                // v1 single-backend path: project the legacy
+                // `Backend` block onto a "main" service
+                // descriptor and call the v1 shim. This is
+                // the path every pre-Phase-2 app uses.
+                let backend = legacy.backend.as_ref().ok_or_else(|| {
+                    ManagerError::Runtime("application has no backend runtime".into())
+                })?;
+                self.runtimes.launch(id, &install_path, backend)?
+            }
             None => {
-                return Err(ManagerError::Runtime(
-                    "v2 application launch is not supported in Phase 1; \
-                     the multi-service supervisor lands in Phase 2"
-                        .into(),
-                ));
+                // v2 multi-service path. Phase 5 finally
+                // routes `launch` through the layered
+                // `start_application` so the daemon's
+                // "start the app" command respects the
+                // service DAG. v2 launch is a no-op for
+                // manifests that declare zero services
+                // (headless UI-only apps).
+                let _ = self
+                    .runtimes
+                    .launch_v2(id, &install_path, &manifest)?;
+                self.runtimes.status(id)?
             }
         };
-        let backend = backend
-            .ok_or_else(|| ManagerError::Runtime("application has no backend runtime".into()))?;
-        let status = self.runtimes.launch(id, &install_path, backend)?;
         // Update "last launched" after a successful start so the UI
         // can show a recents list. The launch itself has already
         // succeeded — a registry write failure here is a soft error:
@@ -797,6 +845,47 @@ impl AppManager for LocalAppManager {
     fn runtime_status(&self, id: &str) -> Result<RuntimeStatus, ManagerError> {
         Ok(self.runtimes.status(id)?)
     }
+
+    fn start_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, ManagerError> {
+        Ok(self.runtimes.start_one_service(id, service)?)
+    }
+
+    fn stop_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, ManagerError> {
+        Ok(self.runtimes.stop_one_service(id, service)?)
+    }
+
+    fn restart_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, ManagerError> {
+        Ok(self.runtimes.restart_one_service(id, service)?)
+    }
+
+    fn service_status(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, ManagerError> {
+        Ok(self.runtimes.service_status(id, service)?)
+    }
+
+    fn list_services(
+        &self,
+        id: &str,
+    ) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, ManagerError> {
+        self.runtimes
+            .list_services(id)
+            .map_err(|error| ManagerError::Runtime(error.to_string()))
+    }
 }
 
 /// In-memory map of running app backends. Keyed by app id.
@@ -808,9 +897,26 @@ impl AppManager for LocalAppManager {
 /// keep their old signatures and are implemented in terms of the
 /// new supervisor so the existing App Manager / Daemon / shell
 /// callers do not need to change.
-#[derive(Clone, Default)]
 pub struct RuntimeSupervisor {
     inner: ApplicationSupervisor,
+    /// Path under which each app's install directory
+    /// lives. Phase 5 needs this to look up a service's
+    /// `ServiceDescriptor` from the on-disk manifest
+    /// without forcing every per-service IPC call to
+    /// ferry the spec across the wire. `Default::default`
+    /// keeps the existing v1 callers (which only use
+    /// the in-process `ApplicationSupervisor`) working
+    /// — they never trigger a manifest lookup.
+    install_root: PathBuf,
+}
+
+impl Default for RuntimeSupervisor {
+    fn default() -> Self {
+        Self {
+            inner: ApplicationSupervisor::default(),
+            install_root: PathBuf::new(),
+        }
+    }
 }
 
 #[derive(Debug, Error)]
@@ -882,6 +988,163 @@ impl RuntimeSupervisor {
         })
     }
 
+    /// v2 multi-service launch. Goes through the layered
+    /// `start_application` so a v2 manifest's service DAG
+    /// is honoured (topological order, per-layer
+    /// concurrency, rollback on failure). Returns the v1
+    /// compat `RuntimeStatus` for the app's primary
+    /// service so the daemon's `start` / `status` response
+    /// shape is unchanged.
+    pub fn launch_v2(
+        &self,
+        id: &str,
+        install_root: &Path,
+        manifest: &crate::core::application_manifest::ApplicationManifest,
+    ) -> Result<RuntimeStatus, SupervisorError> {
+        self.inner.start_application(id, install_root, manifest)?;
+        Ok(self
+            .inner
+            .runtime_status_compat(id)
+            .unwrap_or(RuntimeStatus {
+                state: RuntimeState::Running,
+                ..Default::default()
+            }))
+    }
+
+    /// Phase 5 per-service surface — start exactly one
+    /// service from the manifest. Looks up the
+    /// `ServiceDescriptor` from the on-disk manifest so we
+    /// do not have to ferry the spec through the IPC layer.
+    /// Returns the v1 `RuntimeStatus` shape so the daemon
+    /// can keep its `Result<RuntimeStatus, _>` contract.
+    pub fn start_one_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, SupervisorError> {
+        let descriptor = self.load_service_descriptor(id, service)?;
+        let install_root = self.install_root_for(id);
+        self.inner
+            .start_service(id, service, &install_root, &descriptor)?;
+        Ok(self
+            .inner
+            .runtime_status_compat(id)
+            .unwrap_or_default())
+    }
+
+    /// Per-service stop. Idempotent: stopping a terminal
+    /// service is a no-op, not an error.
+    pub fn stop_one_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, SupervisorError> {
+        let _ = self.inner.stop_service(id, service);
+        Ok(self
+            .inner
+            .runtime_status_compat(id)
+            .unwrap_or(RuntimeStatus {
+                state: RuntimeState::Stopped,
+                ..Default::default()
+            }))
+    }
+
+    /// Per-service restart (stop + start with the same
+    /// spec).
+    pub fn restart_one_service(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, SupervisorError> {
+        let install_root = self.install_root_for(id);
+        self.inner.restart_service(id, service, &install_root)?;
+        Ok(self
+            .inner
+            .runtime_status_compat(id)
+            .unwrap_or_default())
+    }
+
+    /// Per-service status snapshot. Returns a fabricated
+    /// `Stopped` snapshot if the app or service is not
+    /// currently registered with the supervisor, so the
+    /// daemon can show "service is not running" instead of
+    /// failing the IPC call.
+    pub fn service_status(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<RuntimeStatus, SupervisorError> {
+        match self.inner.service_status(id, service) {
+            Ok(snapshot) => Ok(runtime_status_from_service_snapshot(snapshot)),
+            Err(_) => Ok(RuntimeStatus {
+                state: RuntimeState::Stopped,
+                ..Default::default()
+            }),
+        }
+    }
+
+    /// Per-service summary list. Returns an empty `Vec`
+    /// for an unknown app so the daemon can render an
+    /// empty list rather than 404.
+    pub fn list_services(
+        &self,
+        id: &str,
+    ) -> Result<
+        Vec<crate::runtime::application_supervisor::ServiceSummary>,
+        SupervisorError,
+    > {
+        self.inner
+            .list_services(id)
+            .map_err(|error| SupervisorError::Supervisor(error.to_string()))
+    }
+
+    /// Look up the `ServiceDescriptor` for `(id, service)`
+    /// on disk. Used by every per-service `start_*` path
+    /// so the supervisor's `start_service` does not have
+    /// to take a separate spec parameter through the IPC
+    /// layer. Returns a `SupervisorError::Runtime` if the
+    /// manifest is missing, the service is not declared,
+    /// or the v2 manifest is structurally invalid.
+    fn load_service_descriptor(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<crate::core::application_manifest::ServiceDescriptor, SupervisorError> {
+        let install_path = self.install_root.join(id);
+        let manifest = load_application(&install_path).map_err(|error| {
+            SupervisorError::Supervisor(format!(
+                "failed to load manifest for {id}: {error}"
+            ))
+        })?;
+        // v1 single-backend manifests have a single
+        // implicit "main" service; everything else is a
+        // v2 manifest that must list the service by name.
+        if let Some(legacy) = manifest.as_v1() {
+            if service == "main" {
+                let backend = legacy.backend.as_ref().ok_or_else(|| {
+                    SupervisorError::Supervisor(format!(
+                        "v1 application {id} has no backend runtime"
+                    ))
+                })?;
+                return Ok(service_descriptor_from_backend(backend));
+            }
+            return Err(SupervisorError::Supervisor(format!(
+                "v1 application {id} only exposes the main service; \
+                 requested {service:?}"
+            )));
+        }
+        // v2: walk the `services` map and find the entry.
+        let services = manifest.services();
+        services
+            .into_iter()
+            .find(|svc| svc.name == service)
+            .ok_or_else(|| {
+                SupervisorError::Supervisor(format!(
+                    "service {service:?} is not declared in {id}"
+                ))
+            })
+    }
+
     /// Backward-compatible status. Returns the v1-shaped
     /// `RuntimeStatus` for the app's primary service, or a
     /// fabricated `Stopped` snapshot for an unknown app.
@@ -913,6 +1176,26 @@ impl RuntimeSupervisor {
     /// Idempotent.
     pub fn stop_and_forget(&self, id: &str) {
         self.inner.forget_application(id);
+    }
+
+    /// Resolve the install root for a given app id.
+    /// Returns an owned `PathBuf` because the supervisor
+    /// takes an owned `PathBuf` in
+    /// `ApplicationSupervisor::start_service` and we
+    /// cannot borrow a `Path` that lives inside this
+    /// method. The v1 backward-compat callers (which
+    /// use `Default::default()` for the supervisor and
+    /// therefore have an empty `install_root`) get
+    /// `./<id>` as a fallback so the daemon's
+    /// `start-service <id> <name>` call still works
+    /// during a dev run without an explicit install.
+    fn install_root_for(&self, id: &str) -> PathBuf {
+        let base: PathBuf = if self.install_root.as_os_str().is_empty() {
+            PathBuf::from(".")
+        } else {
+            self.install_root.clone()
+        };
+        base.join(id)
     }
 
     /// Escape hatch into the new multi-service API. Returns
@@ -976,6 +1259,36 @@ fn service_descriptor_from_backend(backend: &crate::manifest::Backend) -> crate:
             policy: restart_policy,
             max_retries,
         },
+    }
+}
+
+/// Map a `ServiceSnapshot` (Phase 2/3 supervisor shape)
+/// onto the v1 `RuntimeStatus` so the daemon can return a
+/// stable response shape. The fields line up 1:1 except
+/// for the per-service `name` (which the daemon does not
+/// surface in the v1 `status` response) and the live log
+/// tail (the daemon answers `logs` separately).
+fn runtime_status_from_service_snapshot(
+    snapshot: crate::runtime::application_supervisor::ServiceSnapshot,
+) -> RuntimeStatus {
+    use crate::runtime::service_supervisor::ServiceStatus as V2;
+    let state = match snapshot.status {
+        V2::Pending
+        | V2::WaitingForDependencies
+        | V2::Stopping
+        | V2::Stopped
+        | V2::Blocked => RuntimeState::Stopped,
+        V2::Starting => RuntimeState::Starting,
+        V2::Healthy | V2::Unhealthy | V2::Restarting => RuntimeState::Running,
+        V2::Crashed => RuntimeState::Crashed,
+    };
+    RuntimeStatus {
+        state,
+        pid: snapshot.pid,
+        port: snapshot.port,
+        restart_count: snapshot.restart_count,
+        last_error: snapshot.last_error,
+        ..Default::default()
     }
 }
 

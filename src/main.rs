@@ -85,6 +85,40 @@ enum Commands {
         #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
         pipe: String,
     },
+    /// Start a single service of an installed application.
+    StartService {
+        id: String,
+        service: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
+    /// Stop a single service of an installed application.
+    StopService {
+        id: String,
+        service: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
+    /// Restart a single service of an installed application.
+    RestartService {
+        id: String,
+        service: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
+    /// Query a single service's live daemon status.
+    ServiceStatus {
+        id: String,
+        service: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
+    /// List every service declared in the application's manifest.
+    ListServices {
+        id: String,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
     /// Gracefully stop application backends and shut down alexd.
     Shutdown {
         #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
@@ -498,6 +532,38 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 service,
                 limit,
             },
+        )?,
+        Commands::StartService { id, service, pipe } => daemon_command(
+            &pipe,
+            alex::daemon::ControlCommand::StartService {
+                app_id: id,
+                service,
+            },
+        )?,
+        Commands::StopService { id, service, pipe } => daemon_command(
+            &pipe,
+            alex::daemon::ControlCommand::StopService {
+                app_id: id,
+                service,
+            },
+        )?,
+        Commands::RestartService { id, service, pipe } => daemon_command(
+            &pipe,
+            alex::daemon::ControlCommand::RestartService {
+                app_id: id,
+                service,
+            },
+        )?,
+        Commands::ServiceStatus { id, service, pipe } => daemon_command(
+            &pipe,
+            alex::daemon::ControlCommand::ServiceStatus {
+                app_id: id,
+                service,
+            },
+        )?,
+        Commands::ListServices { id, pipe } => daemon_command(
+            &pipe,
+            alex::daemon::ControlCommand::ListServices { app_id: id },
         )?,
         Commands::Shutdown { pipe } => {
             daemon_command(&pipe, alex::daemon::ControlCommand::Shutdown)?

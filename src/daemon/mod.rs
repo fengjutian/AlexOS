@@ -13,5 +13,6 @@ pub use protocol::{ControlCommand, ControlRequest, ControlResponse, PROTOCOL_VER
 pub use service::{DaemonService, RecoveryFailure, RecoveryReport};
 pub use state::{
     AppControlState, DaemonState, DaemonStateError, DaemonStateStore, DesiredState, ObservedState,
+    ServiceControlState,
 };
 pub use transport::{DEFAULT_PIPE_NAME, run_server, send_request};

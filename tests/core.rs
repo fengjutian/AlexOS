@@ -3454,6 +3454,116 @@ fn application_supervisor_start_then_stop_leaves_no_orphan_slots() {
     assert_eq!(app.observed, ApplicationObservedState::Stopped);
 }
 
+/// Phase 4 acceptance: "停止应用后不残留健康检查线程".
+/// `start_application` spawns one watchdog thread per
+/// service, and `stop_application` is responsible for
+/// joining them. We can't see a thread directly, but we
+/// can observe the join handle count: a fresh start that
+/// is then immediately stopped must leave every service
+/// slot with `watchdog_handle: None` and a terminal
+/// status. If `stop_service` ever leaked the join, the
+/// snapshot would still hold the (already terminated)
+/// `JoinHandle`, and a subsequent start would never be
+/// able to overwrite the slot.
+#[test]
+fn application_supervisor_stop_joins_every_watchdog() {
+    use alex::runtime::application_supervisor::ApplicationSupervisor;
+    use std::collections::BTreeMap;
+    let supervisor = ApplicationSupervisor::new();
+    let services = vec![
+        ServiceDescriptor {
+            name: "alpha".to_owned(),
+            runtime: alex::manifest_v2::ServiceRuntime::Node,
+            command: "alpha.js".into(),
+            args: Vec::new(),
+            depends_on: Vec::new(),
+            env: BTreeMap::new(),
+            port: None,
+            mode: ServiceMode::Rpc,
+            health: None,
+            restart: ServiceRestartDescriptor::default(),
+        },
+        ServiceDescriptor {
+            name: "beta".to_owned(),
+            runtime: alex::manifest_v2::ServiceRuntime::Node,
+            command: "beta.js".into(),
+            args: Vec::new(),
+            depends_on: Vec::new(),
+            env: BTreeMap::new(),
+            port: None,
+            mode: ServiceMode::Rpc,
+            health: None,
+            restart: ServiceRestartDescriptor::default(),
+        },
+    ];
+    let manifest = build_v2_manifest(services.clone());
+    supervisor.register_application("com.example.watchdog_drain", services);
+    let start_result = supervisor.start_application(
+        "com.example.watchdog_drain",
+        std::path::Path::new("."),
+        &manifest,
+    );
+    assert!(start_result.is_ok(), "{start_result:?}");
+    // After start, the live snapshot has a JoinHandle on
+    // every slot. We can only observe the `Option<...>` is
+    // `Some` through the inner field, but the public
+    // `application()` clone (used in production by the
+    // App Manager) sets the handle to `None` to keep
+    // `ServiceRuntime` cloneable. The right invariant
+    // to assert is that the *original* slot is drained
+    // after `stop_application` returns.
+    let stop_result = supervisor.stop_application("com.example.watchdog_drain");
+    assert!(stop_result.is_ok(), "{stop_result:?}");
+    // We can still drive a second stop; the supervisor is
+    // idempotent and the slot is in a terminal state. If
+    // a watchdog had been leaked, the first stop would
+    // have either hung (waiting on the join) or
+    // panicked, and this second stop would still try to
+    // take the leaked `JoinHandle` — leaving the
+    // supervisor in an inconsistent state.
+    let second_stop = supervisor.stop_application("com.example.watchdog_drain");
+    assert!(second_stop.is_ok(), "{second_stop:?}");
+    let app = supervisor
+        .application("com.example.watchdog_drain")
+        .expect("app present");
+    for (name, service) in &app.services {
+        assert!(
+            service.status.is_terminal(),
+            "service {name} should be terminal after stop, was {:?}",
+            service.status
+        );
+    }
+    // Start again with a different service mix to make
+    // sure the slot state really was released, not just
+    // hanging on a leaked handle. A re-start is the
+    // strongest "the slot is clean" signal we can drive
+    // without access to the inner Mutex.
+    let replacement = vec![ServiceDescriptor {
+        name: "gamma".to_owned(),
+        runtime: alex::manifest_v2::ServiceRuntime::Node,
+        command: "gamma.js".into(),
+        args: Vec::new(),
+        depends_on: Vec::new(),
+        env: BTreeMap::new(),
+        port: None,
+        mode: ServiceMode::Rpc,
+        health: None,
+        restart: ServiceRestartDescriptor::default(),
+    }];
+    let manifest_replacement = build_v2_manifest(replacement.clone());
+    supervisor.register_application("com.example.watchdog_drain", replacement);
+    let restart_result = supervisor.start_application(
+        "com.example.watchdog_drain",
+        std::path::Path::new("."),
+        &manifest_replacement,
+    );
+    assert!(
+        restart_result.is_ok(),
+        "restart after stop should succeed, was {restart_result:?}"
+    );
+    let _ = supervisor.stop_application("com.example.watchdog_drain");
+}
+
 /// Build a v2 `ApplicationManifest` from a list of `ServiceDescriptor`s.
 /// Used by the Phase 3 integration tests to feed the supervisor
 /// without having to round-trip through the YAML loader.

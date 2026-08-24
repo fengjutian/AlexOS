@@ -186,6 +186,71 @@ pub(crate) struct HealthCheckContext {
     pub runtime_state: RuntimeState,
 }
 
+/// Run one health-probe iteration. Pulled out of the
+/// main loop so the watchdog's per-iteration `if`/`match`
+/// blocks are short enough for `cargo fmt` to keep the
+/// indentation readable. The runtime `handle` is *not*
+/// passed in because the supervisor's `probe_health`
+/// already fills `runtime_state` from the same handle
+/// before we are called — re-querying it would race with
+/// a concurrent `stop_service`.
+fn run_watchdog_probe<H: SupervisorHooks>(
+    app_id: &str,
+    service_name: &str,
+    config: &WatchdogConfig,
+    hooks: &Arc<H>,
+    consecutive_failures: &mut u32,
+) {
+    let spec_snapshot = match hooks.read_service_spec(app_id, service_name) {
+        Some(snapshot) => snapshot,
+        None => return,
+    };
+    if spec_snapshot.health.is_none() {
+        return;
+    }
+    // We can only construct an HTTP probe when the
+    // supervisor knows the port. Process probes run
+    // unconditionally.
+    let port_known = hooks
+        .probe_health(app_id, service_name, 0)
+        .map(|ctx| ctx.port)
+        .unwrap_or(0);
+    let Some(ctx) = hooks.probe_health(app_id, service_name, port_known) else {
+        // No health context available; the service is
+        // either no longer registered or has no port.
+        return;
+    };
+    let spec = ctx.spec.clone();
+    let port = ctx.port;
+    let pid = ctx.pid;
+    let runtime_state = ctx.runtime_state;
+    let mut spec_for_checker = crate::runtime::health::HealthCheckSpec::from_descriptor(&spec);
+    spec_for_checker.port = port;
+    let checker = HealthChecker::new(spec_for_checker);
+    let outcome = checker.probe(pid, runtime_state);
+    if outcome == HealthOutcome::Unhealthy {
+        *consecutive_failures = consecutive_failures.saturating_add(1);
+        if *consecutive_failures >= config.failure_threshold {
+            hooks.record_health_outcome(
+                app_id,
+                service_name,
+                HealthUpdate::Unhealthy,
+                config.failure_threshold,
+            );
+        }
+    } else {
+        if *consecutive_failures > 0 {
+            hooks.record_health_outcome(
+                app_id,
+                service_name,
+                HealthUpdate::Healthy,
+                config.failure_threshold,
+            );
+        }
+        *consecutive_failures = 0;
+    }
+}
+
 fn run_watchdog<H: SupervisorHooks>(
     app_id: String,
     service_name: String,
@@ -197,16 +262,6 @@ fn run_watchdog<H: SupervisorHooks>(
     let mut consecutive_failures: u32 = 0;
     let mut last_health = Instant::now() - config.health_interval;
     let loop_start = Instant::now();
-    // The watchdog exits when:
-    //   1. The supervisor signals stop via the
-    //      `stop_signal` atomic — checked at the top
-    //      of every loop iteration.
-    //   2. The service slot is no longer registered
-    //      (`read_service_status` returns `None`).
-    //   3. The service slot reaches a terminal state
-    //      (`Stopped` / `Crashed` / `Blocked`).
-    //   4. The watchdog has applied a final `record_exit`
-    //      and there is nothing left to do.
     // The watchdog exits when:
     //   1. The supervisor signals stop via the
     //      `stop_signal` atomic — checked at the top
@@ -230,74 +285,26 @@ fn run_watchdog<H: SupervisorHooks>(
         // to do; the supervisor or a previous watchdog
         // iteration already finalised it. Break so we do
         // not spin on `handle.status()` after a stop.
-        if let Some(status) = hooks.read_service_status(&app_id, &service_name) {
-            if matches!(
+        if let Some(status) = hooks.read_service_status(&app_id, &service_name)
+            && matches!(
                 status,
                 ServiceStatus::Stopped | ServiceStatus::Crashed | ServiceStatus::Blocked
-            ) {
-                break;
-            }
+            )
+        {
+            break;
         }
         // 1) Health probe at the configured cadence.
         if last_health.elapsed() >= config.health_interval
             && loop_start.elapsed() > Duration::from_millis(50)
         {
             last_health = Instant::now();
-            if let Some(spec_snapshot) = hooks.read_service_spec(&app_id, &service_name) {
-                if spec_snapshot.health.is_some() {
-                    let runtime_state = match handle.status(config.health_timeout) {
-                        Ok(s) => s.state,
-                        Err(_) => RuntimeState::Stopped,
-                    };
-                    // We can only construct an HTTP probe
-                    // when the supervisor knows the port.
-                    // Process probes run unconditionally.
-                    let port_known = hooks
-                        .probe_health(&app_id, &service_name, 0)
-                        .map(|ctx| ctx.port)
-                        .unwrap_or(0);
-                    if let Some(ctx) = hooks.probe_health(&app_id, &service_name, port_known) {
-                        let spec = ctx.spec.clone();
-                        let port = ctx.port;
-                        let pid = ctx.pid;
-                        let runtime_state = ctx.runtime_state;
-                        let mut spec_for_checker =
-                            crate::runtime::health::HealthCheckSpec::from_descriptor(&spec);
-                        spec_for_checker.port = port;
-                        let checker = HealthChecker::new(spec_for_checker);
-                        let outcome = checker.probe(pid, runtime_state);
-                        if outcome == HealthOutcome::Unhealthy {
-                            consecutive_failures = consecutive_failures.saturating_add(1);
-                            if consecutive_failures >= config.failure_threshold {
-                                hooks.record_health_outcome(
-                                    &app_id,
-                                    &service_name,
-                                    HealthUpdate::Unhealthy,
-                                    config.failure_threshold,
-                                );
-                            }
-                        } else {
-                            if consecutive_failures > 0 {
-                                hooks.record_health_outcome(
-                                    &app_id,
-                                    &service_name,
-                                    HealthUpdate::Healthy,
-                                    config.failure_threshold,
-                                );
-                            }
-                            consecutive_failures = 0;
-                        }
-                    } else {
-                        // No health context available; the
-                        // service is either no longer
-                        // registered or has no health
-                        // descriptor. Either way, the
-                        // watchdog has nothing to do for
-                        // this iteration.
-                        let _ = runtime_state;
-                    }
-                }
-            }
+            run_watchdog_probe(
+                &app_id,
+                &service_name,
+                &config,
+                &hooks,
+                &mut consecutive_failures,
+            );
         }
         // 2) Process-exit detection. The runtime status
         // returns `Stopped` / `Crashed` once the child
