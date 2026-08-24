@@ -36,8 +36,13 @@ CLI 已提供 `alex start/stop/restart/status/logs <app-id>` Named Pipe 客户�
 重试、1 MiB 响应限制、请求 ID 校验和 Daemon 错误退出码传播。现有 `alex run <path>` 继续作为
 直接运行开发目录的兼容命令。
 
-Daemon 启动时尚未根据已保存的 desired state 自动恢复进程。Named Pipe 当前按连接顺序处理，
-当前用户 ACL 加固、客户端身份校验、并发连接管理和可控 shutdown 仍待开发。
+Daemon 启动时会读取持久化状态，并尝试恢复所有 `desired=running` 的已安装应用。状态现在同时保存
+`desired`、`observed`、`updatedAtMs` 和 `lastError`；恢复失败时保留 Running 意图、写入
+`observed=crashed`，以便诊断和后续重试。旧版 schemaVersion 1 状态缺少新字段时仍可加载。
+
+由于当前测试主机没有 Node，已验证恢复失败和状态持久化路径，真实 Node backend 的成功恢复仍需在
+具备受支持 Node 的 CI 环境验收。Named Pipe 当前按连接顺序处理，当前用户 ACL 加固、客户端身份
+校验、并发连接管理和可控 shutdown 仍待开发。
 
 当前运行链路为：
 
