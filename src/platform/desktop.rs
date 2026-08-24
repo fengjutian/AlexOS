@@ -56,9 +56,13 @@ pub trait DesktopServices: Send + Sync {
 mod windows;
 #[cfg(target_os = "windows")]
 use windows as implementation;
-#[cfg(not(target_os = "windows"))]
+#[cfg(target_os = "macos")]
+mod macos;
+#[cfg(target_os = "macos")]
+use macos as implementation;
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 mod portable;
-#[cfg(not(target_os = "windows"))]
+#[cfg(not(any(target_os = "windows", target_os = "macos")))]
 use portable as implementation;
 
 #[derive(Debug, Clone, Copy)]
