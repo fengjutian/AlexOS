@@ -1,5 +1,23 @@
 {
   "version": 1,
+  "errors": ["INVALID_PARAMS", "PERMISSION_DENIED", "OPERATION_FAILED", "DEADLINE_EXCEEDED", "HOST_BUSY", "METHOD_NOT_FOUND"],
+  "domains": {
+    "filesystem": { "permission": "filesystem.*", "execution": "blocking" },
+    "storage": { "permission": "storage", "execution": "blocking" },
+    "paths": { "permission": "none", "execution": "inline" },
+    "dialog": { "permission": "dialog.*", "execution": "native" },
+    "clipboard": { "permission": "clipboard.*", "execution": "native" },
+    "system": { "permission": "method-specific", "execution": "blocking" },
+    "window": { "permission": "window.*", "execution": "native" },
+    "menu": { "permission": "menu", "execution": "native" },
+    "tray": { "permission": "tray", "execution": "native" },
+    "shortcuts": { "permission": "shortcuts", "execution": "native" },
+    "notification": { "permission": "notification", "execution": "native" },
+    "runtime": { "permission": "runtime", "execution": "blocking" },
+    "events": { "permission": "none", "execution": "inline" },
+    "process": { "permission": "process.*", "execution": "blocking" },
+    "net": { "permission": "network.fetch", "execution": "blocking" }
+  },
   "capabilities": {
     "always": [
       "filesystem.readText", "filesystem.readBinary", "filesystem.writeText", "filesystem.writeBinary",

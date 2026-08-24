@@ -24,8 +24,8 @@ use std::fmt::Write as _;
 use std::io::{Read, Write};
 use std::net::{Shutdown, TcpListener, TcpStream, ToSocketAddrs};
 use std::sync::{
-    Arc,
-    atomic::{AtomicBool, Ordering},
+    Arc, Mutex,
+    atomic::{AtomicBool, AtomicUsize, Ordering},
 };
 use std::time::Duration;
 
@@ -44,6 +44,7 @@ const MAX_HEADER_BYTES: usize = 64 * 1024;
 
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
 const READ_WRITE_TIMEOUT: Duration = Duration::from_secs(5);
+pub const MAX_WEBSOCKET_CONNECTIONS: usize = 32;
 
 /// Loopback-only capability URL used to tunnel WebSocket handshakes and
 /// frames to a service backend without exposing the backend token to JS.
@@ -51,6 +52,8 @@ pub struct WebSocketTunnel {
     pub base_url: String,
     stop: Arc<AtomicBool>,
     worker: Option<std::thread::JoinHandle<()>>,
+    connections: Arc<Mutex<Vec<std::thread::JoinHandle<()>>>>,
+    active: Arc<AtomicUsize>,
 }
 
 impl WebSocketTunnel {
@@ -68,6 +71,10 @@ impl WebSocketTunnel {
         listener.set_nonblocking(true)?;
         let stop = Arc::new(AtomicBool::new(false));
         let worker_stop = Arc::clone(&stop);
+        let connections = Arc::new(Mutex::new(Vec::<std::thread::JoinHandle<()>>::new()));
+        let worker_connections = Arc::clone(&connections);
+        let active = Arc::new(AtomicUsize::new(0));
+        let worker_active = Arc::clone(&active);
         let worker = std::thread::Builder::new()
             .name("alex-websocket-tunnel".into())
             .spawn(move || {
@@ -80,18 +87,33 @@ impl WebSocketTunnel {
                         }
                         Err(_) => break,
                     };
+                    if worker_active.fetch_add(1, Ordering::AcqRel) >= MAX_WEBSOCKET_CONNECTIONS {
+                        worker_active.fetch_sub(1, Ordering::AcqRel);
+                        let mut client = client;
+                        let _ = client.write_all(b"HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\nConnection: close\r\n\r\n");
+                        continue;
+                    }
                     let endpoint = endpoint.clone();
                     let app_id = app_id.clone();
                     let route_prefix = route_prefix.clone();
-                    std::thread::spawn(move || {
+                    let connection_active = Arc::clone(&worker_active);
+                    let handle = std::thread::spawn(move || {
+                        struct ActiveGuard(Arc<AtomicUsize>);
+                        impl Drop for ActiveGuard { fn drop(&mut self) { self.0.fetch_sub(1, Ordering::AcqRel); } }
+                        let _guard = ActiveGuard(connection_active);
                         let _ = relay_websocket(client, &endpoint, &app_id, &route_prefix);
                     });
+                    let mut handles = worker_connections.lock().expect("websocket connection lock");
+                    handles.retain(|handle| !handle.is_finished());
+                    handles.push(handle);
                 }
             })?;
         Ok(Self {
             base_url,
             stop,
             worker: Some(worker),
+            connections,
+            active,
         })
     }
 
@@ -100,6 +122,15 @@ impl WebSocketTunnel {
         if let Some(worker) = self.worker.take() {
             let _ = worker.join();
         }
+        let handles =
+            std::mem::take(&mut *self.connections.lock().expect("websocket connection lock"));
+        for handle in handles {
+            let _ = handle.join();
+        }
+    }
+
+    pub fn active_connections(&self) -> usize {
+        self.active.load(Ordering::Acquire)
     }
 }
 
@@ -116,6 +147,7 @@ fn relay_websocket(
     route_prefix: &str,
 ) -> std::io::Result<()> {
     let _ = client.set_read_timeout(Some(READ_WRITE_TIMEOUT));
+    let _ = client.set_write_timeout(Some(READ_WRITE_TIMEOUT));
     let mut request = Vec::new();
     let mut chunk = [0u8; 2048];
     while !request.windows(4).any(|w| w == b"\r\n\r\n") && request.len() < 64 * 1024 {
@@ -143,6 +175,8 @@ fn relay_websocket(
     }
     let backend_target = &target[route_prefix.len()..];
     let mut upstream = TcpStream::connect(("127.0.0.1", endpoint.port))?;
+    let _ = upstream.set_read_timeout(Some(READ_WRITE_TIMEOUT));
+    let _ = upstream.set_write_timeout(Some(READ_WRITE_TIMEOUT));
     write!(
         upstream,
         "GET {backend_target} HTTP/1.1\r\nHost: 127.0.0.1:{}\r\nX-Alx-App-Id: {app_id}\r\nX-Alx-Token: {}\r\n",

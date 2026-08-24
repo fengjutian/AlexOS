@@ -208,7 +208,10 @@ export interface SubscribeEnvelope {
   filter?: SubscribeOptions["filter"];
 }
 
+import type { AlexMethodMap, AlexMethodName } from "./schema.generated.js";
+
 export interface AlexTransport {
+  invoke<K extends AlexMethodName>(method: K, params: AlexMethodMap[K]["params"], options?: InvokeOptions): Promise<AlexMethodMap[K]["result"]>;
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
   on?<T = unknown>(event: string, listener: (data: T) => void): () => void;
 }
@@ -313,6 +316,7 @@ export class AlexError extends Error {
 }
 
 export interface AlexClient {
+  invoke<K extends AlexMethodName>(method: K, params: AlexMethodMap[K]["params"], options?: InvokeOptions): Promise<AlexMethodMap[K]["result"]>;
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
   readonly events: {
     on<K extends keyof AlexEventMap>(

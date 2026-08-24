@@ -1,0 +1,87 @@
+# Desktop API reference
+
+Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
+
+| Method | Availability | Permission | Execution |
+|---|---|---|---|
+| `filesystem.readText` | always | filesystem.* | blocking |
+| `filesystem.readBinary` | always | filesystem.* | blocking |
+| `filesystem.writeText` | always | filesystem.* | blocking |
+| `filesystem.writeBinary` | always | filesystem.* | blocking |
+| `filesystem.exists` | always | filesystem.* | blocking |
+| `filesystem.stat` | always | filesystem.* | blocking |
+| `filesystem.readDir` | always | filesystem.* | blocking |
+| `filesystem.createDir` | always | filesystem.* | blocking |
+| `filesystem.remove` | always | filesystem.* | blocking |
+| `filesystem.rename` | always | filesystem.* | blocking |
+| `filesystem.copy` | always | filesystem.* | blocking |
+| `filesystem.watch` | always | filesystem.* | blocking |
+| `filesystem.unwatch` | always | filesystem.* | blocking |
+| `storage.get` | always | storage | blocking |
+| `storage.set` | always | storage | blocking |
+| `storage.delete` | always | storage | blocking |
+| `storage.clear` | always | storage | blocking |
+| `storage.keys` | always | storage | blocking |
+| `paths.dataDir` | always | none | inline |
+| `paths.cacheDir` | always | none | inline |
+| `paths.tempDir` | always | none | inline |
+| `dialog.openFile` | always | dialog.* | native |
+| `dialog.openFiles` | always | dialog.* | native |
+| `dialog.openDirectory` | always | dialog.* | native |
+| `dialog.saveFile` | always | dialog.* | native |
+| `clipboard.readText` | always | clipboard.* | native |
+| `clipboard.writeText` | always | clipboard.* | native |
+| `system.info` | always | method-specific | blocking |
+| `system.capabilities` | always | method-specific | blocking |
+| `system.requestPermission` | always | method-specific | blocking |
+| `system.openExternal` | always | method-specific | blocking |
+| `system.listApps` | always | method-specific | blocking |
+| `system.listExtensions` | always | method-specific | blocking |
+| `system.install` | always | method-specific | blocking |
+| `system.uninstall` | always | method-specific | blocking |
+| `system.updateStart` | always | method-specific | blocking |
+| `system.updateTasks` | always | method-specific | blocking |
+| `system.updateCancel` | always | method-specific | blocking |
+| `system.updateRetry` | always | method-specific | blocking |
+| `system.listPermissions` | always | method-specific | blocking |
+| `system.setPermission` | always | method-specific | blocking |
+| `system.listTrustedPublishers` | always | method-specific | blocking |
+| `system.readAuditLog` | always | method-specific | blocking |
+| `window.setTitle` | always | window.* | native |
+| `window.minimize` | always | window.* | native |
+| `window.maximize` | always | window.* | native |
+| `window.close` | always | window.* | native |
+| `notification.show` | always | notification | native |
+| `runtime.invoke` | always | runtime | blocking |
+| `runtime.status` | always | runtime | blocking |
+| `runtime.restart` | always | runtime | blocking |
+| `runtime.cancel` | always | runtime | blocking |
+| `events.subscribe` | always | none | inline |
+| `events.unsubscribe` | always | none | inline |
+| `system.container.create` | always | method-specific | blocking |
+| `system.container.start` | always | method-specific | blocking |
+| `system.container.stop` | always | method-specific | blocking |
+| `system.container.restart` | always | method-specific | blocking |
+| `system.container.remove` | always | method-specific | blocking |
+| `system.container.inspect` | always | method-specific | blocking |
+| `system.container.list` | always | method-specific | blocking |
+| `system.container.logs` | always | method-specific | blocking |
+| `process.spawn` | always | process.* | blocking |
+| `process.kill` | always | process.* | blocking |
+| `net.fetch` | always | network.fetch | blocking |
+| `window.create` | nativeDesktop | window.* | native |
+| `window.list` | nativeDesktop | window.* | native |
+| `window.getBounds` | nativeDesktop | window.* | native |
+| `window.setBounds` | nativeDesktop | window.* | native |
+| `window.setFullscreen` | nativeDesktop | window.* | native |
+| `window.isFullscreen` | nativeDesktop | window.* | native |
+| `window.destroy` | nativeDesktop | window.* | native |
+| `menu.setApplicationMenu` | nativeDesktop | menu | native |
+| `menu.setContextMenu` | nativeDesktop | menu | native |
+| `tray.create` | nativeDesktop | tray | native |
+| `tray.destroy` | nativeDesktop | tray | native |
+| `shortcuts.register` | nativeDesktop | shortcuts | native |
+| `shortcuts.unregister` | nativeDesktop | shortcuts | native |
+| `shortcuts.list` | nativeDesktop | shortcuts | native |
+
+Common errors: `INVALID_PARAMS`, `PERMISSION_DENIED`, `OPERATION_FAILED`, `DEADLINE_EXCEEDED`, `HOST_BUSY`, `METHOD_NOT_FOUND`.

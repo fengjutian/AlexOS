@@ -61,6 +61,7 @@ struct LiveHandle {
     port: Option<u16>,
     #[allow(dead_code)]
     runtime_handle: usize,
+    isolation: super::isolation::IsolationHandle,
 }
 
 pub trait ContainerService: Send + Sync {
@@ -309,6 +310,7 @@ impl ContainerService for DefaultContainerService {
             log_dir: Some(dirs.logs.as_path()),
             port: None,
             token: None,
+            container: &spec,
         })
         .map_err(|error| ContainerError::Launch {
             step: LaunchStep::SpawnProcess,
@@ -334,6 +336,7 @@ impl ContainerService for DefaultContainerService {
             pid: launched.pid,
             port: launched.endpoint.as_ref().map(|e| e.port),
             runtime_handle: 0,
+            isolation: launched.isolation,
         };
         entry.live = Some(live);
         self.record_event_locked(entry, EventKind::Spawned, format!("pid={}", launched.pid));
@@ -365,7 +368,8 @@ impl ContainerService for DefaultContainerService {
         entry.state.desired = DesiredState::Stopped;
         entry.state.observed = ObservedState::Stopping;
         entry.state.updated_at = iso8601_now();
-        let _ = (live, timeout);
+        terminate_pid(live.pid, timeout);
+        drop(live.isolation);
         let store = ContainerStore::new(entry.instance_dir.clone());
         store.save(entry.state.clone())?;
         entry.state.observed = ObservedState::Stopped;
@@ -464,6 +468,21 @@ impl ContainerService for DefaultContainerService {
 
     fn isolation_available(&self, level: IsolationLevel) -> bool {
         super::isolation::provider_for(level).is_ok()
+    }
+}
+
+fn terminate_pid(pid: u32, _timeout: Duration) {
+    #[cfg(windows)]
+    {
+        let _ = std::process::Command::new("taskkill.exe")
+            .args(["/PID", &pid.to_string(), "/T", "/F"])
+            .output();
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = std::process::Command::new("kill")
+            .args(["-TERM", &pid.to_string()])
+            .output();
     }
 }
 

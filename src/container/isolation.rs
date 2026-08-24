@@ -48,6 +48,8 @@ enum BoundaryKind {
     #[allow(dead_code)]
     Job(Arc<JobHandle>),
     #[allow(dead_code)]
+    RestrictedJob(Arc<JobHandle>),
+    #[allow(dead_code)]
     AppContainer,
     #[allow(dead_code)]
     Wsl,
@@ -221,6 +223,21 @@ impl JobHandle {
 
         Ok(Self { raw: job.0 })
     }
+
+    fn assign(&self, pid: u32) -> Result<(), IsolationError> {
+        use windows::Win32::Foundation::{CloseHandle, HANDLE};
+        use windows::Win32::System::JobObjects::AssignProcessToJobObject;
+        use windows::Win32::System::Threading::{
+            OpenProcess, PROCESS_SET_QUOTA, PROCESS_TERMINATE,
+        };
+        let process = unsafe { OpenProcess(PROCESS_SET_QUOTA | PROCESS_TERMINATE, false, pid) }
+            .map_err(|e| IsolationError::Bind(format!("OpenProcess({pid}): {e}")))?;
+        let result = unsafe { AssignProcessToJobObject(HANDLE(self.raw), process) };
+        unsafe {
+            let _ = CloseHandle(process);
+        }
+        result.map_err(|e| IsolationError::Bind(format!("AssignProcessToJobObject: {e}")))
+    }
 }
 
 #[cfg(windows)]
@@ -368,7 +385,7 @@ pub fn provider_for(level: IsolationLevel) -> Result<Box<dyn IsolationProvider>,
             }
         }
         IsolationLevel::AppContainer => {
-            let provider = RestrictedTokenProvider;
+            let provider = RestrictedJobProvider;
             if provider.is_available() {
                 Ok(Box::new(provider))
             } else {
@@ -390,6 +407,48 @@ pub fn provider_for(level: IsolationLevel) -> Result<Box<dyn IsolationProvider>,
 /// token that has all removable privileges disabled. The existing Job layer
 /// remains available when callers need process-tree resource accounting.
 pub struct RestrictedTokenProvider;
+pub struct RestrictedJobProvider;
+
+#[cfg(windows)]
+impl IsolationProvider for RestrictedJobProvider {
+    fn level(&self) -> IsolationLevel {
+        IsolationLevel::AppContainer
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn spawn(&self, request: &SpawnRequest) -> Result<Spawned, IsolationError> {
+        let spawned = RestrictedTokenProvider.spawn(request)?;
+        let job = Arc::new(JobHandle::new(request.limits)?);
+        job.assign(spawned.pid)?;
+        Ok(Spawned {
+            pid: spawned.pid,
+            isolation: IsolationHandle {
+                boundary: Some(BoundaryKind::RestrictedJob(job)),
+                accounting: None,
+            },
+        })
+    }
+    fn release(&self, _: &IsolationHandle) -> Result<(), IsolationError> {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+impl IsolationProvider for RestrictedJobProvider {
+    fn level(&self) -> IsolationLevel {
+        IsolationLevel::AppContainer
+    }
+    fn is_available(&self) -> bool {
+        false
+    }
+    fn spawn(&self, _: &SpawnRequest) -> Result<Spawned, IsolationError> {
+        Err(IsolationError::Unavailable(self.level()))
+    }
+    fn release(&self, _: &IsolationHandle) -> Result<(), IsolationError> {
+        Ok(())
+    }
+}
 
 #[cfg(windows)]
 impl IsolationProvider for RestrictedTokenProvider {
