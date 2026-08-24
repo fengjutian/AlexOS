@@ -146,8 +146,8 @@ impl ApiRouter {
             .native_host
             .as_ref()
             .is_some_and(|host| host.supports_secondary_windows());
-        let available = super::capabilities::available(native_desktop);
-        let experimental = super::capabilities::experimental();
+        let available = crate::api::capabilities::available(native_desktop);
+        let experimental = crate::api::capabilities::experimental();
         Ok(json!({
             "capabilities": available,
             "experimental": experimental,
