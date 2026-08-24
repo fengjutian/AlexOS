@@ -25,12 +25,13 @@
 //! non-Windows CI. A future slice can swap `curl` for
 //! `ureq` once we have a more stable HTTP client.
 
-use std::{collections::HashSet, process::Command};
+use std::{collections::HashSet, io::Read, time::Duration};
 
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 use url::Url;
+use ureq::ResponseExt;
 
 use crate::api::permission::Permission;
 
@@ -47,14 +48,10 @@ pub enum NetError {
     InsecureScheme(String),
     #[error("body too large: cap is {MAX_BODY_BYTES} bytes")]
     BodyTooLarge,
-    #[error("curl exit {0}: {1}")]
-    Curl(i32, String),
-    #[error("curl not found on PATH")]
-    CurlMissing,
     #[error("io: {0}")]
     Io(String),
-    #[error("network fetch is not supported on this platform")]
-    Unsupported,
+    #[error("network transport: {0}")]
+    Transport(String),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -73,10 +70,19 @@ pub struct FetchSpec {
     pub max_bytes: Option<usize>,
 }
 
+#[derive(Clone, Serialize)]
+#[serde(rename_all = "camelCase")]
 pub struct FetchResult {
     pub status: u16,
     pub final_url: String,
+    pub headers: Vec<FetchHeader>,
     pub body: Vec<u8>,
+}
+
+#[derive(Debug, Clone, Serialize)]
+pub struct FetchHeader {
+    pub name: String,
+    pub value: String,
 }
 
 impl std::fmt::Debug for FetchResult {
@@ -85,6 +91,7 @@ impl std::fmt::Debug for FetchResult {
             .debug_struct("FetchResult")
             .field("status", &self.status)
             .field("final_url", &self.final_url)
+            .field("headers", &self.headers)
             .field("body_len", &self.body.len())
             .finish()
     }
@@ -108,141 +115,68 @@ pub fn fetch(spec: &FetchSpec, permissions: &[Permission]) -> Result<FetchResult
         .unwrap_or_else(|| "GET".into())
         .to_uppercase();
     let max_bytes = spec.max_bytes.unwrap_or(MAX_BODY_BYTES);
-    run_curl(&url, &method, spec, max_bytes)
+    run_fetch(&url, &method, spec, max_bytes)
 }
 
-#[cfg(windows)]
-fn run_curl(
+fn run_fetch(
     url: &Url,
     method: &str,
     spec: &FetchSpec,
     max_bytes: usize,
 ) -> Result<FetchResult, NetError> {
-    use std::process::Stdio;
-
-    let curl_path = locate_curl().ok_or(NetError::CurlMissing)?;
-    let timeout_secs = spec
-        .timeout_ms
-        .map(|value| value.div_ceil(1_000).clamp(1, 120))
-        .unwrap_or(REQUEST_TIMEOUT_SECS);
-    let mut command = Command::new(&curl_path);
-    command
-        .arg("--silent")
-        .arg("--show-error")
-        .arg("--no-progress-meter")
-        .arg("--max-redirs")
-        .arg("0")
-        .arg("--max-filesize")
-        .arg(max_bytes.to_string())
-        .arg("--max-time")
-        .arg(timeout_secs.to_string())
-        .arg("--write-out")
-        .arg("%{http_code}|%{url_effective}")
-        .arg("--request")
-        .arg(method)
-        .arg(url.as_str());
+    let timeout = Duration::from_millis(
+        spec.timeout_ms
+            .unwrap_or(REQUEST_TIMEOUT_SECS * 1_000)
+            .clamp(1, 120_000),
+    );
+    let agent: ureq::Agent = ureq::Agent::config_builder()
+        .https_only(true)
+        .max_redirects(0)
+        .timeout_global(Some(timeout))
+        .build()
+        .into();
+    let method = ureq::http::Method::from_bytes(method.as_bytes())
+        .map_err(|error| NetError::InvalidUrl(error.to_string()))?;
+    let mut request = ureq::http::Request::builder().method(method).uri(url.as_str());
     if let Some(headers_value) = &spec.headers {
         if let Some(map) = headers_value.as_object() {
             for (key, value) in map {
                 if let Some(value_str) = value.as_str() {
-                    command.arg("-H").arg(format!("{key}: {value_str}"));
+                    request = request.header(key, value_str);
                 }
             }
         }
     }
-    if let Some(body) = &spec.body {
-        command.arg("--data-raw").arg(body);
-    }
-    command.stdin(Stdio::null());
-    let output = command
-        .output()
+    let request = request
+        .body(spec.body.clone().unwrap_or_default())
+        .map_err(|error| NetError::InvalidUrl(error.to_string()))?;
+    let mut response = agent
+        .run(request)
+        .map_err(|error| NetError::Transport(error.to_string()))?;
+    let status = response.status().as_u16();
+    let final_url = response.get_uri().to_string();
+    let headers = response
+        .headers()
+        .iter()
+        .filter_map(|(name, value)| value.to_str().ok().map(|value| FetchHeader {
+            name: name.as_str().to_ascii_lowercase(),
+            value: value.to_owned(),
+        }))
+        .collect();
+    let mut body = Vec::new();
+    response
+        .body_mut()
+        .as_reader()
+        .take(max_bytes.saturating_add(1) as u64)
+        .read_to_end(&mut body)
         .map_err(|error| NetError::Io(error.to_string()))?;
-    if !output.status.success()
-        && output.status.code() != Some(63)
-        && output.status.code() != Some(22)
-    {
-        // 63 = "max filesize reached" (curl); 22 =
-        // "HTTP page not retrieved" (curl reports this
-        // when the body is too large). Both map to
-        // BodyTooLarge at the dispatcher.
-        let stderr = String::from_utf8_lossy(&output.stderr).into_owned();
-        return Err(NetError::Curl(output.status.code().unwrap_or(-1), stderr));
-    }
-    let stdout = &output.stdout;
-    // The body comes first; the write-out trailer is
-    // appended after a sentinel. curl emits a single
-    // newline between body and trailer when using
-    // `--write-out` together with stdout. We split on
-    // the last occurrence of `<status>|<url>` to be
-    // robust against bodies that contain `|`.
-    let (body, trailer) = split_body_and_trailer(stdout);
-    let trailer_str = String::from_utf8_lossy(trailer).into_owned();
-    let mut parts = trailer_str.splitn(2, '|');
-    let status: u16 = parts
-        .next()
-        .and_then(|s| s.trim().parse().ok())
-        .unwrap_or(0);
-    let final_url = parts
-        .next()
-        .map(|s| s.trim().to_string())
-        .unwrap_or_else(|| url.as_str().to_string());
-    if body.len() > max_bytes {
-        return Err(NetError::BodyTooLarge);
-    }
+    if body.len() > max_bytes { return Err(NetError::BodyTooLarge); }
     Ok(FetchResult {
         status,
         final_url,
-        body: body.to_vec(),
+        headers,
+        body,
     })
-}
-
-#[cfg(windows)]
-fn locate_curl() -> Option<std::path::PathBuf> {
-    let candidates = [
-        std::path::PathBuf::from(r"C:\Windows\System32\curl.exe"),
-        std::path::PathBuf::from(r"C:\Program Files\Git\mingw64\bin\curl.exe"),
-        std::path::PathBuf::from("curl.exe"),
-    ];
-    for candidate in &candidates {
-        if candidate.is_file() {
-            return Some(candidate.clone());
-        }
-    }
-    None
-}
-
-#[cfg(not(windows))]
-fn run_curl(
-    _url: &Url,
-    _method: &str,
-    _spec: &FetchSpec,
-    _max_bytes: usize,
-) -> Result<FetchResult, NetError> {
-    Err(NetError::Unsupported)
-}
-
-fn split_body_and_trailer(stdout: &[u8]) -> (&[u8], &[u8]) {
-    if let Some(idx) = stdout
-        .windows(2)
-        .rposition(|w| w == b"\r\n" || w == b"\n\n")
-    {
-        // Find the boundary between body and write-out.
-        // The trailer always starts on a new line; we
-        // look for the last `^<digits>|<url>$` line
-        // because curl emits a final newline.
-        let slice = &stdout[..idx];
-        let trailer = &stdout[idx..];
-        // Trim leading whitespace from the trailer
-        // (it may begin with a CR/LF).
-        let trimmed_trailer = trailer
-            .iter()
-            .position(|b| !b.is_ascii_whitespace())
-            .map(|offset| &trailer[offset..])
-            .unwrap_or(b"");
-        (slice, trimmed_trailer)
-    } else {
-        (stdout, &[][..])
-    }
 }
 
 fn origin_allowed(permissions: &[Permission], origin: &str) -> bool {
@@ -261,6 +195,7 @@ pub fn build_envelope(result: &FetchResult) -> Value {
     json!({
         "status": result.status,
         "url": result.final_url,
+        "headers": result.headers,
         "bodyEncoding": "base64",
         "body": base64::Engine::encode(&base64::engine::general_purpose::STANDARD, &result.body),
         "truncated": false,
