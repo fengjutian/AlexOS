@@ -216,7 +216,7 @@ mod windows {
                     };
                     eprintln!("alex dev: ipc {method} -> {outcome}");
                     if let Ok(json) = serde_json::to_string(&response) {
-                        let _ = proxy.send_event(UserEvent::IpcResponse(json));
+                        let _ = proxy.send_event(UserEvent::IpcResponse(None, json));
                     }
                 });
             })
@@ -239,7 +239,7 @@ mod windows {
         event_loop.run(move |event, _, control_flow| {
             *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(50));
             match event {
-                Event::UserEvent(UserEvent::IpcResponse(json)) => {
+                Event::UserEvent(UserEvent::IpcResponse(_, json)) => {
                     let script = format!("window.__alexResolve({json})");
                     let _ = webview.evaluate_script(&script);
                 }

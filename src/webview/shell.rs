@@ -131,7 +131,7 @@ pub mod windows {
 
     #[derive(Debug)]
     pub enum UserEvent {
-        IpcResponse(String),
+        IpcResponse(Option<u64>, String),
         Host(HostCommand),
     }
 
@@ -263,7 +263,7 @@ pub mod windows {
                 std::thread::spawn(move || {
                     let response = router.dispatch_json(&body);
                     if let Ok(json) = serde_json::to_string(&response) {
-                        let _ = proxy.send_event(UserEvent::IpcResponse(json));
+                        let _ = proxy.send_event(UserEvent::IpcResponse(None, json));
                     }
                 });
             })
@@ -298,9 +298,15 @@ pub mod windows {
             *control_flow =
                 ControlFlow::WaitUntil(std::time::Instant::now() + Duration::from_millis(50));
             match event {
-                Event::UserEvent(UserEvent::IpcResponse(json)) => {
+                Event::UserEvent(UserEvent::IpcResponse(target, json)) => {
                     let script = format!("window.__alexResolve({json})");
-                    let _ = webview.evaluate_script(&script);
+                    if let Some(id) = target {
+                        if let Some(child) = child_webviews.get(&id) {
+                            let _ = child.evaluate_script(&script);
+                        }
+                    } else {
+                        let _ = webview.evaluate_script(&script);
+                    }
                 }
                 Event::UserEvent(UserEvent::Host(command)) => match command {
                     HostCommand::SetWindowTitle(title) => window.set_title(&title),
@@ -319,6 +325,7 @@ pub mod windows {
                                 let native_id = child_window.id();
                                 let ipc_router = Arc::clone(&child_router);
                                 let ipc_proxy = child_proxy.clone();
+                                let child_id = info.id.raw();
                                 let asset_root = child_root.clone();
                                 let frontend = child_frontend.clone();
                                 let url = if info.url.starts_with("alex://app/") {
@@ -342,8 +349,10 @@ pub mod windows {
                                         std::thread::spawn(move || {
                                             let response = router.dispatch_json(&body);
                                             if let Ok(json) = serde_json::to_string(&response) {
-                                                let _ =
-                                                    proxy.send_event(UserEvent::IpcResponse(json));
+                                                let _ = proxy.send_event(UserEvent::IpcResponse(
+                                                    Some(child_id),
+                                                    json,
+                                                ));
                                             }
                                         });
                                     })
