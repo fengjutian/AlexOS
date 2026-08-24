@@ -17,6 +17,8 @@
     { "name": "clipboard.write" },
     { "name": "window.manage" },
     { "name": "window.open" },
+    { "name": "menu.manage" },
+    { "name": "shortcut.register" },
     { "name": "notification.show" },
     { "name": "system.openExternal", "origins": ["https://example.com"] }
   ]

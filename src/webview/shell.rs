@@ -293,6 +293,23 @@ pub mod windows {
         let package_id = serde_json::to_string(&manifest.id)?;
         let mut init_script = BRIDGE.replace("__ALEX_PACKAGE_ID__", &package_id)
             + &crate::permission_shim::shim_source(&manifest.permissions);
+        if std::env::var_os("ALEX_GUI_E2E").is_some() {
+            init_script.push_str(r#"
+              window.addEventListener("DOMContentLoaded", async () => {
+                try {
+                  await window.alex.invoke("menu.setApplicationMenu", { items: [{ type: "normal", id: "e2e", label: "E2E" }] });
+                  await window.alex.invoke("shortcuts.register", { accelerator: "Ctrl+Shift+F12" });
+                  const child = await window.alex.invoke("window.create", { url: "index.html", title: "E2E Child", width: 420, height: 320 });
+                  await window.alex.invoke("window.setBounds", { windowId: child.id, x: 80, y: 80, width: 480, height: 360 });
+                  await window.alex.invoke("window.destroy", { windowId: child.id });
+                  await window.alex.invoke("shortcuts.unregister", { accelerator: "Ctrl+Shift+F12" });
+                  await window.alex.invoke("window.setTitle", { title: "Alex GUI E2E PASS" });
+                } catch (error) {
+                  await window.alex.invoke("window.setTitle", { title: "Alex GUI E2E FAIL: " + (error?.message ?? error) });
+                }
+              });
+            "#);
+        }
         let _websocket_tunnel = if let Some(endpoint) = service_endpoint.clone() {
             let tunnel = crate::proxy::WebSocketTunnel::start(endpoint, manifest.id.clone())?;
             let base = serde_json::to_string(&tunnel.base_url)?;

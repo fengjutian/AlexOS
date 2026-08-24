@@ -285,3 +285,34 @@ pub fn retry(
     drop(guard);
     start(args.0, args.1, args.2, args.3, args.4).map(Some)
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn interrupted_tasks_are_recovered_as_retryable_failures() {
+        let install = tempfile::tempdir().unwrap();
+        let trust = tempfile::tempdir().unwrap();
+        let task = UpdateTask {
+            id: "persisted-running".into(),
+            app_id: "com.example.app".into(),
+            manifest_url: "https://example.com/update.json".into(),
+            channel: UpdateChannel::Stable,
+            state: "running".into(),
+            stage: "downloading".into(),
+            progress: 40,
+            error: None,
+        };
+        let path = state_path(install.path());
+        std::fs::create_dir_all(path.parent().unwrap()).unwrap();
+        std::fs::write(&path, serde_json::to_vec(&vec![task]).unwrap()).unwrap();
+        let tasks = list(install.path(), trust.path()).unwrap();
+        assert_eq!(tasks[0].state, "failed");
+        assert_eq!(tasks[0].stage, "interrupted");
+        assert!(tasks[0].error.as_deref().unwrap().contains("retry"));
+        let persisted: Vec<UpdateTask> =
+            serde_json::from_slice(&std::fs::read(path).unwrap()).unwrap();
+        assert_eq!(persisted[0].state, "failed");
+    }
+}

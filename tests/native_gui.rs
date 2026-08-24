@@ -14,16 +14,33 @@ fn production_shell_creates_a_real_top_level_window() {
         Win32::{
             Foundation::{HWND, LPARAM},
             UI::WindowsAndMessaging::{
-                EnumWindows, GetWindowThreadProcessId, IsWindowVisible, PostMessageW, WM_CLOSE,
+                EnumWindows, GetWindowTextW, GetWindowThreadProcessId, IsWindowVisible,
+                PostMessageW, WM_CLOSE,
             },
         },
         core::BOOL,
     };
 
     let package = std::path::Path::new(env!("CARGO_MANIFEST_DIR")).join("examples/desktop-api");
+    let data = tempfile::tempdir().expect("temporary Alex data root");
+    let permissions =
+        alex::authorization::PermissionStore::open_at(data.path(), "com.alex.desktop_api_demo")
+            .unwrap();
+    for name in [
+        "window.manage",
+        "window.open",
+        "menu.manage",
+        "shortcut.register",
+    ] {
+        permissions
+            .set(name, alex::authorization::PermissionDecision::Granted)
+            .unwrap();
+    }
     let mut child = Command::new(env!("CARGO_BIN_EXE_alex"))
         .arg("shell")
         .arg(package)
+        .env("ALEX_DATA_DIR", data.path())
+        .env("ALEX_GUI_E2E", "1")
         .spawn()
         .expect("launch production shell");
     struct Search {
@@ -66,6 +83,21 @@ fn production_shell_creates_a_real_top_level_window() {
         );
         std::thread::sleep(Duration::from_millis(100));
     };
+    let deadline = Instant::now() + Duration::from_secs(15);
+    loop {
+        let mut title = [0u16; 256];
+        let count = unsafe { GetWindowTextW(hwnd, &mut title) } as usize;
+        let title = String::from_utf16_lossy(&title[..count]);
+        assert!(!title.starts_with("Alex GUI E2E FAIL"), "{title}");
+        if title == "Alex GUI E2E PASS" {
+            break;
+        }
+        assert!(
+            Instant::now() < deadline,
+            "GUI workflow did not complete; last title: {title}"
+        );
+        std::thread::sleep(Duration::from_millis(50));
+    }
     let _ = unsafe { PostMessageW(Some(hwnd), WM_CLOSE, Default::default(), Default::default()) };
     let _ = child.wait();
 }

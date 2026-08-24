@@ -557,6 +557,23 @@ mod tests {
         assert!(request.contains("X-Alx-Token: secret-token"));
     }
 
+    #[test]
+    fn websocket_tunnel_shutdown_releases_listener() {
+        let backend = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let tunnel = WebSocketTunnel::start(
+            ServiceEndpoint {
+                port: backend.local_addr().unwrap().port(),
+                token: "token".into(),
+            },
+            "com.alex.test".into(),
+        )
+        .unwrap();
+        let port = url::Url::parse(&tunnel.base_url).unwrap().port().unwrap();
+        assert!(TcpStream::connect(("127.0.0.1", port)).is_ok());
+        drop(tunnel);
+        assert!(TcpStream::connect(("127.0.0.1", port)).is_err());
+    }
+
     /// Spawn a one-shot TCP server: it accepts a single connection,
     /// reads until EOF, writes `reply`, then drops the stream.
     /// Returns the bound port and a shared handle to the captured
