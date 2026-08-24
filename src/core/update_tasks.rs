@@ -175,7 +175,13 @@ pub fn start(
             task.error = Some(error.to_string());
         });
     }
-    Ok(view)
+    Ok(registry()
+        .lock()
+        .expect("update task lock")
+        .entries
+        .get(&id)
+        .map(|entry| entry.view.clone())
+        .unwrap_or(view))
 }
 
 fn mutate(id: &str, f: impl FnOnce(&mut UpdateTask)) {
