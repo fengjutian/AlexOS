@@ -60,6 +60,7 @@ impl SecretStore for NativeSecretStore {
     }
 }
 
+#[cfg(any(target_os = "macos", test))]
 fn validate_key(service: &str, account: &str) -> Result<(), SecretStoreError> {
     let valid = |value: &str| !value.is_empty() && value.len() <= 255 && !value.contains('\0');
     if valid(service) && valid(account) {
