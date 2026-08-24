@@ -1,0 +1,23 @@
+{
+  "schemaVersion": 1,
+  "id": "com.alex.desktop_api_demo",
+  "name": "Desktop API Demo",
+  "version": "0.1.0",
+  "frontend": { "entry": "frontend/index.html" },
+  "permissions": [
+    { "name": "filesystem.read", "paths": ["data"] },
+    { "name": "filesystem.write", "paths": ["data"] },
+    { "name": "filesystem.watch", "paths": ["data"] },
+    { "name": "filesystem.drop" },
+    { "name": "dialog.open" },
+    { "name": "dialog.save" },
+    { "name": "storage" },
+    { "name": "paths" },
+    { "name": "clipboard.read" },
+    { "name": "clipboard.write" },
+    { "name": "window.manage" },
+    { "name": "window.open" },
+    { "name": "notification.show" },
+    { "name": "system.openExternal", "origins": ["https://example.com"] }
+  ]
+}
