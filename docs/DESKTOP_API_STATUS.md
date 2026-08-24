@@ -19,6 +19,7 @@ authoritative source for "can the page call this for real".
 | `filesystem.readText` / `readBinary` / `writeText` / `writeBinary` | `api.rs` → `permission::resolve_scoped_path` → `std::fs` |
 | `filesystem.exists` / `stat` / `readDir` | `api.rs` → `std::fs` (scope-checked) |
 | `filesystem.createDir` / `remove` / `rename` / `copy` | `api.rs` (symlink-aware recursive delete) |
+| `filesystem.watch` / `unwatch` | notify watcher → event bus → WebView `__alexDeliver` |
 | `dialog.openFile` | `native.rs::pick_file` via `rfd` |
 | `clipboard.readText` / `writeText` | `native.rs` via `arboard` |
 | `system.openExternal` | `native.rs::open_external` |
@@ -27,6 +28,7 @@ authoritative source for "can the page call this for real".
 | `window.setTitle` / `minimize` / `maximize` / `close` | `shell.rs::HostCommand` |
 | `notification.show` | `native.rs::show_notification` via WinRT toast |
 | `runtime.invoke` / `status` / `restart` / `cancel` | `runtime.rs` `RuntimeHandle` + per-request cancellation |
+| `events.subscribe` / `unsubscribe` | app-scoped event bus delivered through the WebView bridge |
 | `media.camera` / `microphone` / `geolocation` | prompt only; `getUserMedia` / geolocation are browser APIs gated by `system.requestPermission` |
 
 ## In registry / dispatcher but **not wired to a real native side**
@@ -38,7 +40,6 @@ avoid relying on them until each is wired.
 
 | API | Status | Required native work |
 | --- | --- | --- |
-| `filesystem.watch` / `unwatch` | registry + notify-based watcher pump exists; shell does not yet forward bus events back to the page | shell layer needs to call `bus.deliver` and route to `WebView.evaluate_script(__alexDeliver)` |
 | `filesystem.drop` | declared permission only | shell needs to convert OS-level drop events into a `fileDrop` bus event with token-bearing payloads |
 | `storage.*` | atomic on-disk store at `%LOCALAPPDATA%\AlexOS\apps\<id>\storage\store.json` works; lives in `storage.rs` | — (actually fully working; review moved to wired in a follow-up) |
 | `paths.dataDir` / `cacheDir` / `tempDir` | host-computed paths returned | — (actually fully working) |
@@ -49,7 +50,6 @@ avoid relying on them until each is wired.
 | `shortcuts.register` / `unregister` / `list` | `MenuStore` holds normalized accelerator → app mapping | host needs `RegisterHotKey` and a thread that pumps WM_HOTKEY → `shortcut.triggered` events |
 | `process.spawn` / `kill` | permission + allow-list checked; `spawn` returns a fake `pid`; `kill` is a no-op | host needs a Windows Job Object + `Command::spawn` that records the child PID and tears the job down on `kill` |
 | `net.fetch` | origin allow-list checked; no real HTTP | host needs an `ureq`/`reqwest` client with HTTPS-only, DNS-rebinding guard, redirect origin re-check, and a streaming body |
-| `events.subscribe` / `unsubscribe` | bus is wired into `watcher`; `__alexDeliver` shim exists in the page bridge | shell needs to drive `bus.deliver(...)` from the tao event loop on every relevant transition |
 
 ## Tests
 

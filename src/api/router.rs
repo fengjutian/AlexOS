@@ -1151,6 +1151,8 @@ impl ApiRouter {
             "filesystem.rename",
             "filesystem.copy",
             "filesystem.delete",
+            "filesystem.watch",
+            "filesystem.unwatch",
             "dialog.open",
             "clipboard.read",
             "clipboard.write",
@@ -1163,6 +1165,8 @@ impl ApiRouter {
             "runtime.invoke",
             "runtime.manage",
             "runtime.cancel",
+            "events.subscribe",
+            "events.unsubscribe",
             // Process spawn is real: Command::spawn on
             // Unix, taskkill /T /F on Windows. The
             // registry tracks pids and reaps on exit.
@@ -1170,12 +1174,6 @@ impl ApiRouter {
             "process.kill",
         ];
         let experimental: &[&str] = &[
-            // Watchers exist (notify-based registry) but
-            // the shell does not yet forward bus events
-            // back to the page; subscriptions will not
-            // deliver payloads.
-            "filesystem.watch",
-            "filesystem.unwatch",
             "filesystem.drop",
             "storage",
             "paths",
@@ -1189,8 +1187,6 @@ impl ApiRouter {
             "tray.manage",
             "shortcut.register",
             "network.fetch",
-            "events.subscribe",
-            "events.unsubscribe",
         ];
         Ok(json!({
             "capabilities": available,
