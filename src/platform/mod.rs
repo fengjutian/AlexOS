@@ -5,6 +5,7 @@
 
 use std::path::Path;
 pub mod desktop;
+pub mod secret;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestrictedPathAccess {

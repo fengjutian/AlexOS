@@ -47,6 +47,7 @@ windows = { version = "0.61.3", features = [
 arboard = "3.6.1"
 open = "5.3.6"
 rfd = { version = "0.16.0", default-features = false }
+security-framework = "3.5.1"
 
 [dependencies.base64]
 version = "0.22.1"

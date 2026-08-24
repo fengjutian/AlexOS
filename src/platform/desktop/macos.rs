@@ -117,7 +117,8 @@ fn apple_script_string(value: &str) -> String {
         value
             .replace('\\', "\\\\")
             .replace('"', "\\\"")
-            .replace(['\r', '\n'], " ")
+            .replace('\r', " ")
+            .replace('\n', " ")
     )
 }
 
