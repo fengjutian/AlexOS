@@ -173,6 +173,15 @@ enum Commands {
     },
     /// Diagnose host prerequisites (WebView2 runtime, Node, etc.).
     Doctor,
+    /// Run the long-lived Alex Runtime control daemon.
+    Daemon {
+        /// Durable desired-state file.
+        #[arg(long, default_value = "./target/alexd/state.json")]
+        state: PathBuf,
+        /// Windows named-pipe endpoint.
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
 }
 
 #[derive(Debug, Subcommand)]
@@ -332,6 +341,10 @@ fn require_webview2() -> Result<(), Box<dyn std::error::Error>> {
 fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
+        Commands::Daemon { state, pipe } => {
+            eprintln!("alexd: listening on {pipe}");
+            alex::daemon::run_server(&state, &pipe)?;
+        }
         Commands::Create { path, id, template } => {
             let parsed = package::Template::parse(&template);
             package::create_project_with_template(&path, &id, parsed)?;

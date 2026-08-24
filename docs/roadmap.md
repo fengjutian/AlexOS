@@ -14,9 +14,12 @@ nav_order: 4
 
 ### 0.1 Runtime Daemon 与控制面
 
-- 常驻 `alexd`；
-- Windows Named Pipe 本地认证协议；
-- 应用 desired state、服务状态和恢复信息持久化；
+- [进行中] `alex daemon` 常驻服务入口；
+- [进行中] Windows Named Pipe 版本化控制协议；
+- [进行中] 应用 desired state 原子持久化；
+- 当前用户 ACL、客户端身份校验和并发连接管理；
+- 将现有 `RuntimeSupervisor` 迁入 Daemon，使 desired state 驱动真实进程；
+- 服务 observed state 和恢复信息持久化；
 - `alex start/stop/restart/status/logs`；
 - CLI、Shell 和 Manager 共享同一个 Runtime 状态；
 - Daemon 重启恢复与孤儿进程处理。

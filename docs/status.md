@@ -21,6 +21,17 @@ nav_order: 3
 
 ## 1. 当前系统边界
 
+### 1.1 Alex Runtime Daemon 控制面（迁移中）
+
+已新增 `alex daemon` Windows Named Pipe 服务端，默认端点为
+`\\.\pipe\alex-runtime-v1`。控制协议使用版本化 JSON Lines envelope，当前接受
+`ping/list/start/stop/restart/status/logs` 命令；请求大小上限为 1 MiB。
+
+`start/stop/restart` 当前只通过原子状态文件持久化应用的 desired state，Daemon 重启后能够读取；
+现有 `RuntimeSupervisor` 尚未迁入 Daemon，所以这些命令还不会启动或停止真实 backend。`logs` 会明确
+返回未接线错误，不会虚假成功。Named Pipe 当前按连接顺序处理，专用客户端 CLI、并发连接管理和
+当前用户 ACL 加固仍待开发。
+
 当前运行链路为：
 
 ```text

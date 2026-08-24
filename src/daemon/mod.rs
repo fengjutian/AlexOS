@@ -5,7 +5,11 @@
 //! not depend on WebView or the native shell.
 
 mod protocol;
+mod service;
 mod state;
+mod transport;
 
 pub use protocol::{ControlCommand, ControlRequest, ControlResponse, PROTOCOL_VERSION};
+pub use service::DaemonService;
 pub use state::{AppControlState, DaemonState, DaemonStateError, DaemonStateStore, DesiredState};
+pub use transport::{DEFAULT_PIPE_NAME, run_server};
