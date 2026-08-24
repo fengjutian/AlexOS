@@ -31,7 +31,6 @@ tao = "0.35.3"
 wry = "0.55.1"
 muda = { version = "0.19.3", default-features = false }
 tray-icon = { version = "0.24.1", default-features = false }
-global-hotkey = { version = "0.8.0", default-features = false }
 windows = { version = "0.61.3", features = [
     "Data_Xml_Dom",
     "UI_Notifications",
