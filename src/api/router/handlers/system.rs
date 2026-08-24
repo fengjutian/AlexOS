@@ -190,7 +190,8 @@ impl ApiRouter {
                 "system.openExternal was revoked".into(),
             ));
         }
-        native::open_external(parsed.as_str())
+        crate::platform::desktop::native()
+            .open_external(parsed.as_str())
             .map(|_| json!({ "opened": true }))
             .map_err(|error| ("NATIVE_ERROR", error.to_string()))
     }

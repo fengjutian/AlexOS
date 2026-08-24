@@ -10,6 +10,7 @@ use serde::Deserialize;
 use serde_json::{Value, json};
 
 use crate::container::{ContainerContext, DefaultContainerService};
+use crate::platform::desktop::{DesktopServices, DialogFilter, OpenDialogSpec, SaveDialogSpec};
 use crate::{
     authorization::{AuditEntry as AuthorizationAuditEntry, PermissionDecision, PermissionStore},
     event_bus::{EventBus, SubscriptionFilter},
@@ -17,7 +18,7 @@ use crate::{
     ipc::{PROTOCOL_VERSION, Request, Response, SubscribeRequest, UnsubscribeRequest},
     manifest::AppManifest,
     menu_tray::{MenuStore, MenuTemplate, TraySpec},
-    native::{self, DialogFilter, HostCommand, NativeHost, OpenDialogSpec, SaveDialogSpec},
+    native::{HostCommand, NativeHost},
     permission::Permission,
     process::{ProcessRegistry, ProcessSpec},
     runtime::{RuntimeError, RuntimeHandle},
@@ -459,8 +460,9 @@ impl ApiRouter {
                         format_permission_decision("prompt", name, &self.manifest.name)
                     );
                 }
-                let granted =
-                    native::confirm_permission(&self.manifest.name, name).unwrap_or(false);
+                let granted = crate::platform::desktop::native()
+                    .confirm_permission(&self.manifest.name, name)
+                    .unwrap_or(false);
                 let decision = if granted {
                     PermissionDecision::Granted
                 } else {

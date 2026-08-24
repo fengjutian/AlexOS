@@ -36,8 +36,9 @@ impl ApiRouter {
             multiple,
             directory,
         };
-        let paths =
-            native::pick_paths(spec).map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        let paths = crate::platform::desktop::native()
+            .pick_paths(spec)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         if directory {
             // Directory pick returns paths with full access
             // (read + write). The page can use these to call
@@ -102,8 +103,9 @@ impl ApiRouter {
             filters,
             suggested_name: params.suggested_name.clone(),
         };
-        let chosen =
-            native::pick_save_path(spec).map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        let chosen = crate::platform::desktop::native()
+            .pick_save_path(spec)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         let Some(path) = chosen else {
             return Ok(json!({ "path": Value::Null, "token": Value::Null }));
         };

@@ -4,6 +4,7 @@
 //! code consume these contracts instead of importing Win32/AppKit directly.
 
 use std::path::Path;
+pub mod desktop;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum RestrictedPathAccess {
