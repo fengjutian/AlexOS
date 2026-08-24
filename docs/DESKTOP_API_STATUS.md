@@ -27,6 +27,7 @@ authoritative source for "can the page call this for real".
 | `system.info` / `system.capabilities` | `api.rs` |
 | `system.listApps` / `listExtensions` / `install` / `uninstall` | plugin-only, routed through `package::*` |
 | `window.setTitle` / `minimize` / `maximize` / `close` | `shell.rs::HostCommand` |
+| `window.create` / `list` / `getBounds` / `setBounds` / `setFullscreen` / `isFullscreen` / `destroy` | Tao child windows with independent WebViews and correctly routed IPC responses |
 | `notification.show` | `native.rs::show_notification` via WinRT toast |
 | `runtime.invoke` / `status` / `restart` / `cancel` | `runtime.rs` `RuntimeHandle` + per-request cancellation |
 | `events.subscribe` / `unsubscribe` | app-scoped event bus delivered through the WebView bridge |
@@ -44,7 +45,6 @@ avoid relying on them until each is wired.
 | --- | --- | --- |
 | `storage.*` | atomic on-disk store at `%LOCALAPPDATA%\AlexOS\apps\<id>\storage\store.json` works; lives in `storage.rs` | — (actually fully working; review moved to wired in a follow-up) |
 | `paths.dataDir` / `cacheDir` / `tempDir` | host-computed paths returned | — (actually fully working) |
-| `window.create` / `list` / `getBounds` / `setBounds` / `setFullscreen` / `isFullscreen` / `destroy` | metadata-only registry in `windows.rs`; no actual `tao::Window` is created | `shell.rs` needs a `WindowRegistry` ↔ `tao::Window` adapter; each new window opens a separate `WebView` |
 | `menu.setApplicationMenu` / `setContextMenu` | `MenuStore` holds the template | host needs to render the template via `tao::menu` or Win32 `HMENU` |
 | `tray.create` / `destroy` | `MenuStore` holds `TrayInfo`; tray icon is symlink/canonical-path checked | host needs to register a `Shell_NotifyIcon` icon and click handler that emits `tray.clicked` events |
 | `shortcuts.register` / `unregister` / `list` | `MenuStore` holds normalized accelerator → app mapping | host needs `RegisterHotKey` and a thread that pumps WM_HOTKEY → `shortcut.triggered` events |
