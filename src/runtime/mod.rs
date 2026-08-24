@@ -4,6 +4,7 @@ pub mod application_supervisor;
 pub mod backend;
 pub mod event_bus;
 pub mod health;
+pub mod log_file;
 pub mod menu_tray;
 pub mod net;
 pub mod process;

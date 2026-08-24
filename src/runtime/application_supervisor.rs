@@ -771,6 +771,7 @@ impl ApplicationSupervisor {
             app_id: app_id.to_owned(),
             package_root: install_root.to_path_buf(),
             backend,
+            service_name: service_name.to_owned(),
             data_dir: None,
             cache_dir: None,
         };

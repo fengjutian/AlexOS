@@ -471,6 +471,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 backend: backend.clone(),
                 data_dir: None,
                 cache_dir: None,
+                service_name: "main".to_owned(),
             };
             let auto_dirs = compute_app_dirs(&app.id).ok();
             let (data_dir, cache_dir, log_dir) = match &auto_dirs {

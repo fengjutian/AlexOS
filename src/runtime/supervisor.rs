@@ -232,6 +232,20 @@ pub struct RuntimeSpec {
     pub backend: Backend,
     pub data_dir: Option<PathBuf>,
     pub cache_dir: Option<PathBuf>,
+    /// Phase 4 "independent logs": the service name
+    /// used as the log-file prefix
+    /// (`<log_dir>/<service_name>.stdout.log` and
+    /// `<service_name>.stderr.log`). Defaults to
+    /// `"main"` for v1 callers that ignore the
+    /// multi-service supervisor; the v2
+    /// `ApplicationSupervisor` fills the real name
+    /// from the `ServiceDescriptor` so each service
+    /// gets its own file.
+    pub service_name: String,
+}
+
+fn default_service_name() -> String {
+    "main".to_owned()
 }
 
 /// Per-app directories under the host's local data root. The host
@@ -394,6 +408,7 @@ impl RuntimeHandle {
             app_id: "<unknown>".into(),
             package_root: package_root.canonicalize()?,
             backend: backend.clone(),
+            service_name: default_service_name(),
             data_dir: None,
             cache_dir: None,
         })
@@ -749,6 +764,7 @@ impl RuntimeProcess {
             app_id: "<unknown>".into(),
             package_root: package_root.canonicalize()?,
             backend: backend.clone(),
+            service_name: default_service_name(),
             data_dir: None,
             cache_dir: None,
         };
@@ -770,6 +786,24 @@ impl RuntimeProcess {
         log_dir: Option<&Path>,
         logs: Arc<Mutex<VecDeque<String>>>,
     ) -> Result<(Self, Option<ServiceEndpoint>), RuntimeError> {
+        // Phase 4 independent logs: build a per-service
+        // log file sink before spawning. The sink is
+        // best-effort — a `None` result (empty
+        // `log_dir`) silently disables file persistence
+        // so the v1 `alex run --no-data-root` path keeps
+        // working. The sink's own `open` call returns
+        // `Err` only on `create_dir_all` failure, which
+        // we surface as `RuntimeError::Io` so a
+        // misconfigured install does not silently drop
+        // every log line.
+        let log_sink = match log_dir {
+            Some(dir) => crate::runtime::log_file::ServiceLogSink::open(
+                dir,
+                &spec.service_name,
+            )
+            .map_err(RuntimeError::Io)?,
+            None => None,
+        };
         // Dispatch on the declared runtime. `Node` keeps the
         // historical `node <entry> <args...>` shape; `Python` is
         // reserved for Phase 7's managed provider (the supervisor
@@ -893,8 +927,9 @@ impl RuntimeProcess {
         let flag_for_thread = ready_flag.as_ref().map(Arc::clone);
 
         let logs_for_thread = Arc::clone(&logs);
+        let sink_for_stderr = log_sink.clone();
         thread::spawn(move || {
-            stderr_pump(stderr, logs_for_thread, ready_tx, flag_for_thread);
+            stderr_pump(stderr, logs_for_thread, ready_tx, flag_for_thread, sink_for_stderr);
         });
         // Service mode also gets a stdout drain. RPC mode keeps
         // stdout in `Self::stdout` for the JSON Lines read loop.
@@ -902,8 +937,9 @@ impl RuntimeProcess {
             && let Some(stdout_pipe) = child.stdout.take()
         {
             let logs_for_stdout = Arc::clone(&logs);
+            let sink_for_stdout = log_sink.clone();
             thread::spawn(move || {
-                stdout_pump(stdout_pipe, logs_for_stdout);
+                stdout_pump(stdout_pipe, logs_for_stdout, sink_for_stdout);
             });
         }
 
@@ -1128,11 +1164,16 @@ impl Drop for RuntimeProcess {
 /// `"type"` field equals `"alex.ready"` also flips `ready_flag` and
 /// unblocks the start path. EOF drops the sender so the start path
 /// `recv_timeout` returns `Disconnected` and the process is killed.
+///
+/// `log_sink` is `None` for the v1 `alex run` path that runs without
+/// a managed log root. When present, every line is also written
+/// (after secret redaction) to the per-service `stderr.log` file.
 fn stderr_pump(
     stderr: std::process::ChildStderr,
     logs: Arc<Mutex<VecDeque<String>>>,
     ready_tx: Option<mpsc::SyncSender<u16>>,
     ready_flag: Option<Arc<AtomicBool>>,
+    log_sink: Option<crate::runtime::log_file::ServiceLogSink>,
 ) {
     let mut reader = BufReader::new(stderr);
     let mut line = String::new();
@@ -1158,6 +1199,9 @@ fn stderr_pump(
                     }
                     buffer.push_back(format!("[stderr] {trimmed}"));
                 }
+                if let Some(sink) = &log_sink {
+                    sink.write_stderr(trimmed);
+                }
             }
             Err(_) => break,
         }
@@ -1174,7 +1218,13 @@ fn stderr_pump(
 /// Each line is tagged `[stdout]` so the App Manager can show the
 /// stream a log line came from. EOF (or any read error) terminates
 /// the pump and the child holds onto the other end until it exits.
-fn stdout_pump(stdout: std::process::ChildStdout, logs: Arc<Mutex<VecDeque<String>>>) {
+/// When `log_sink` is present, every line is also written (after
+/// secret redaction) to the per-service `stdout.log` file.
+fn stdout_pump(
+    stdout: std::process::ChildStdout,
+    logs: Arc<Mutex<VecDeque<String>>>,
+    log_sink: Option<crate::runtime::log_file::ServiceLogSink>,
+) {
     let mut reader = BufReader::new(stdout);
     let mut line = String::new();
     loop {
@@ -1188,6 +1238,9 @@ fn stdout_pump(stdout: std::process::ChildStdout, logs: Arc<Mutex<VecDeque<Strin
                         buffer.pop_front();
                     }
                     buffer.push_back(format!("[stdout] {trimmed}"));
+                }
+                if let Some(sink) = &log_sink {
+                    sink.write_stdout(trimmed);
                 }
             }
         }
@@ -1477,6 +1530,7 @@ mod lifecycle_tests {
         let spec = RuntimeSpec {
             app_id: "com.example".into(),
             package_root: PathBuf::from("."),
+            service_name: default_service_name(),
             backend: Backend {
                 runtime: RuntimeKind::Node,
                 entry: "index.js".into(),
@@ -1767,6 +1821,7 @@ mod service_runtime_tests {
                 logs_for_thread,
                 Some(ready_tx_for_thread),
                 Some(flag_for_thread),
+                None,
             );
         });
         let received = ready_rx
@@ -1809,6 +1864,7 @@ mod service_runtime_tests {
             app_id: manifest.id.clone(),
             package_root: package_root.clone(),
             backend: backend.clone(),
+            service_name: default_service_name(),
             data_dir: None,
             cache_dir: None,
         };
@@ -1946,6 +2002,7 @@ mod service_runtime_tests {
             app_id: manifest.id.clone(),
             package_root: package_root.clone(),
             backend: backend.clone(),
+            service_name: default_service_name(),
             data_dir: Some(data_dir.clone()),
             cache_dir: None,
         };
