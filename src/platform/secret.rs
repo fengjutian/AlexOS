@@ -49,18 +49,31 @@ impl SecretStore for NativeSecretStore {
 
 #[cfg(not(target_os = "macos"))]
 impl SecretStore for NativeSecretStore {
-    fn set(&self, _: &str, _: &str, _: &[u8]) -> Result<(), SecretStoreError> { Err(SecretStoreError::Unsupported) }
-    fn get(&self, _: &str, _: &str) -> Result<Option<Vec<u8>>, SecretStoreError> { Err(SecretStoreError::Unsupported) }
-    fn delete(&self, _: &str, _: &str) -> Result<bool, SecretStoreError> { Err(SecretStoreError::Unsupported) }
+    fn set(&self, _: &str, _: &str, _: &[u8]) -> Result<(), SecretStoreError> {
+        Err(SecretStoreError::Unsupported)
+    }
+    fn get(&self, _: &str, _: &str) -> Result<Option<Vec<u8>>, SecretStoreError> {
+        Err(SecretStoreError::Unsupported)
+    }
+    fn delete(&self, _: &str, _: &str) -> Result<bool, SecretStoreError> {
+        Err(SecretStoreError::Unsupported)
+    }
 }
 
 fn validate_key(service: &str, account: &str) -> Result<(), SecretStoreError> {
     let valid = |value: &str| !value.is_empty() && value.len() <= 255 && !value.contains('\0');
-    if valid(service) && valid(account) { Ok(()) }
-    else { Err(SecretStoreError::Failed("invalid service or account name".into())) }
+    if valid(service) && valid(account) {
+        Ok(())
+    } else {
+        Err(SecretStoreError::Failed(
+            "invalid service or account name".into(),
+        ))
+    }
 }
 
-pub fn native() -> NativeSecretStore { NativeSecretStore }
+pub fn native() -> NativeSecretStore {
+    NativeSecretStore
+}
 
 #[cfg(test)]
 mod tests {
