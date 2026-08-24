@@ -3230,6 +3230,7 @@ fn application_supervisor_stop_on_idempotent_state_returns_ok() {
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(result.unwrap(), terminal);
     }
+}
 
 #[test]
 fn dag_linear_chain_yields_three_layers() {
@@ -3348,7 +3349,7 @@ fn dag_cycle_is_rejected_before_any_service_starts() {
     let app = supervisor
         .application("com.example.cycle")
         .expect("app present");
-    for (_, service) in &app.services {
+    for service in app.services.values() {
         assert_eq!(service.status, ServiceStatus::Pending);
     }
 }
@@ -3424,17 +3425,20 @@ fn application_supervisor_start_then_stop_leaves_no_orphan_slots() {
     ];
     let manifest = build_v2_manifest(services.clone());
     supervisor.register_application("com.example.cycle2", services);
-    // Mark both as Healthy so the synchronous `start_application`
-    // path believes the layer converged.
-    assert!(supervisor.set_service_status("com.example.cycle2", "alpha", ServiceStatus::Healthy));
-    assert!(supervisor.set_service_status("com.example.cycle2", "beta", ServiceStatus::Healthy));
+    // Start the app: `start_application` walks the DAG layer
+    // by layer, so `alpha` (layer 0) starts before `beta`
+    // (layer 1). The synchronous `start_service` returns Ok
+    // as soon as the node process is up, so both slots land
+    // in `Healthy` even without a real `node` binary on the
+    // test host.
     let start_result = supervisor.start_application(
         "com.example.cycle2",
         std::path::Path::new("."),
         &manifest,
     );
     assert!(start_result.is_ok(), "{start_result:?}");
-    // Now stop. Every service must reach a terminal state.
+    // Now stop. Every service must reach a terminal state,
+    // and the app must roll up to `Stopped`.
     let stop_result = supervisor.stop_application("com.example.cycle2");
     assert!(stop_result.is_ok(), "{stop_result:?}");
     let app = supervisor
@@ -3460,7 +3464,7 @@ fn build_v2_manifest(
     use alex::manifest_v2::{
         ApplicationManifestV2 as V2, RuntimeRequirements, ServicePort, ServiceSpec,
     };
-    let mut map = BTreeMap::new();
+    let mut map = std::collections::BTreeMap::new();
     for svc in &services {
         map.insert(
             svc.name.clone(),
@@ -3491,5 +3495,4 @@ fn build_v2_manifest(
         permissions: Default::default(),
     };
     ApplicationManifest::V2(v2)
-}
 }

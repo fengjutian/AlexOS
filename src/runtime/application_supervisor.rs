@@ -1247,7 +1247,7 @@ impl ApplicationSupervisor {
         let mut stack: Vec<&str> = vec![failed];
         let mut visited: BTreeMap<&str, ()> = BTreeMap::new();
         while let Some(name) = stack.pop() {
-            if !visited.insert(name, ()).is_none() {
+            if visited.insert(name, ()).is_some() {
                 continue;
             }
             if let Some(children) = downstream.get(name) {
@@ -1267,12 +1267,12 @@ impl ApplicationSupervisor {
                 if *service_name == failed {
                     continue;
                 }
-                if let Some(service) = application.services.get_mut(*service_name) {
-                    if matches!(service.status, ServiceStatus::Pending) {
-                        service.status = ServiceStatus::Blocked;
-                        service.last_error =
-                            Some(format!("dependency {failed} did not start"));
-                    }
+                if let Some(service) = application.services.get_mut(*service_name)
+                    && matches!(service.status, ServiceStatus::Pending)
+                {
+                    service.status = ServiceStatus::Blocked;
+                    service.last_error =
+                        Some(format!("dependency {failed} did not start"));
                 }
             }
         }
@@ -1440,6 +1440,7 @@ pub(crate) fn service_descriptor_to_backend(
 }
 
 #[cfg(test)]
+#[allow(dead_code)] // helper functions only used by some tests in the module
 mod tests {
     use super::*;
     use crate::core::application_manifest::{
@@ -1802,44 +1803,6 @@ mod tests {
         svc
     }
 
-    fn manifest_from(services: Vec<ServiceDescriptor>) -> ApplicationManifest {
-        use crate::core::manifest_v2::{
-            ApplicationManifestV2 as V2, RuntimeRequirements, ServicePort, ServiceSpec,
-        };
-        let mut map = BTreeMap::new();
-        for svc in &services {
-            map.insert(
-                svc.name.clone(),
-                ServiceSpec {
-                    runtime: svc.runtime,
-                    command: svc.command.clone(),
-                    args: svc.args.clone(),
-                    depends_on: svc.depends_on.clone(),
-                    env: svc.env.clone(),
-                    port: svc.port.map(ServicePort::Fixed),
-                    health: None,
-                    restart: Default::default(),
-                },
-            );
-        }
-        let v2 = V2 {
-            schema_version: 2,
-            id: "com.example.test".into(),
-            name: "test".into(),
-            version: "0.0.0".into(),
-            frontend: None,
-            runtime: RuntimeRequirements {
-                node: Some("22".into()),
-                python: None,
-            },
-            services: map,
-            storage: Vec::new(),
-            permissions: Default::default(),
-        };
-        ApplicationManifest::V2(v2)
-    }
-
-    #[test]
     fn start_layers_orders_a_linear_chain() {
         let services = vec![
             node_service_with_deps("a", "a.js", &[]),

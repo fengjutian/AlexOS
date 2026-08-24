@@ -224,4 +224,5 @@ cargo clippy --offline --all-targets -- -D warnings
 node --test packages/sdk/test/sdk.test.mjs
 ```
 
-当前基线为 20 个 Rust 测试和 4 个 SDK 测试。测试数量会随功能变化，CI 尚未建立。
+当前基线为 20 个 Rust 测试和 4 个 SDK 测试。测试数量会随功能变化。CI 配置见
+`.github/workflows/ci.yml`（Linux 跑 fmt/clippy/test/SDK，Windows 跑 build/test/SDK 并上传 `alex.exe` 产物）。
