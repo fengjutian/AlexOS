@@ -1,6 +1,9 @@
 //! Small bounded worker pool for blocking host work.
 
-use std::sync::{Arc, Mutex, OnceLock, mpsc::{SyncSender, TrySendError, sync_channel}};
+use std::sync::{
+    Arc, Mutex, OnceLock,
+    mpsc::{SyncSender, TrySendError, sync_channel},
+};
 
 type Job = Box<dyn FnOnce() + Send + 'static>;
 
@@ -13,7 +16,9 @@ pub enum SubmitError {
 }
 
 #[derive(Clone)]
-pub struct TaskExecutor { sender: SyncSender<Job> }
+pub struct TaskExecutor {
+    sender: SyncSender<Job>,
+}
 
 impl TaskExecutor {
     pub fn new(name: &str, workers: usize, queue_capacity: usize) -> Self {
@@ -22,19 +27,29 @@ impl TaskExecutor {
         let receiver = Arc::new(Mutex::new(receiver));
         for index in 0..workers {
             let receiver = Arc::clone(&receiver);
-            std::thread::Builder::new().name(format!("{name}-{index}")).spawn(move || loop {
-                let job = receiver.lock().expect("executor receiver lock").recv();
-                match job { Ok(job) => job(), Err(_) => break }
-            }).expect("spawn task executor worker");
+            std::thread::Builder::new()
+                .name(format!("{name}-{index}"))
+                .spawn(move || {
+                    loop {
+                        let job = receiver.lock().expect("executor receiver lock").recv();
+                        match job {
+                            Ok(job) => job(),
+                            Err(_) => break,
+                        }
+                    }
+                })
+                .expect("spawn task executor worker");
         }
         Self { sender }
     }
 
     pub fn submit(&self, job: impl FnOnce() + Send + 'static) -> Result<(), SubmitError> {
-        self.sender.try_send(Box::new(job)).map_err(|error| match error {
-            TrySendError::Full(_) => SubmitError::Full,
-            TrySendError::Disconnected(_) => SubmitError::Closed,
-        })
+        self.sender
+            .try_send(Box::new(job))
+            .map_err(|error| match error {
+                TrySendError::Full(_) => SubmitError::Full,
+                TrySendError::Disconnected(_) => SubmitError::Closed,
+            })
     }
 }
 
@@ -65,7 +80,11 @@ mod tests {
     fn executor_rejects_work_when_queue_is_saturated() {
         let executor = TaskExecutor::new("test-bounded", 1, 1);
         let (release_tx, release_rx) = channel::<()>();
-        executor.submit(move || { let _ = release_rx.recv(); }).unwrap();
+        executor
+            .submit(move || {
+                let _ = release_rx.recv();
+            })
+            .unwrap();
         std::thread::sleep(std::time::Duration::from_millis(20));
         executor.submit(|| {}).unwrap();
         assert!(matches!(executor.submit(|| {}), Err(SubmitError::Full)));

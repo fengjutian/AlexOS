@@ -196,33 +196,42 @@ mod windows {
                 let proxy = proxy.clone();
                 let body = request.body().clone();
                 let fallback_proxy = proxy.clone();
-                if crate::runtime::task_executor::ipc_executor().submit(move || {
-                    // IPC Inspector: log each round-trip to stderr
-                    // so the dev can tail the dev shell to see
-                    // exactly which calls the page is making and
-                    // which permission path each one took. Kept
-                    // short (truncated params) to keep the
-                    // terminal readable while a page is polling.
-                    let method = serde_json::from_str::<crate::ipc::Request>(&body)
-                        .ok()
-                        .map(|req| {
-                            let params = truncate_params(&req.params, 160);
-                            format!("{}.{} params={params}", req.source, req.method)
-                        })
-                        .unwrap_or_else(|| "(unparseable)".to_string());
-                    let response = router.dispatch_json(&body);
-                    let outcome = if response.error.is_some() {
-                        "err"
-                    } else {
-                        "ok"
-                    };
-                    eprintln!("alex dev: ipc {method} -> {outcome}");
+                if crate::runtime::task_executor::ipc_executor()
+                    .submit(move || {
+                        // IPC Inspector: log each round-trip to stderr
+                        // so the dev can tail the dev shell to see
+                        // exactly which calls the page is making and
+                        // which permission path each one took. Kept
+                        // short (truncated params) to keep the
+                        // terminal readable while a page is polling.
+                        let method = serde_json::from_str::<crate::ipc::Request>(&body)
+                            .ok()
+                            .map(|req| {
+                                let params = truncate_params(&req.params, 160);
+                                format!("{}.{} params={params}", req.source, req.method)
+                            })
+                            .unwrap_or_else(|| "(unparseable)".to_string());
+                        let response = router.dispatch_json(&body);
+                        let outcome = if response.error.is_some() {
+                            "err"
+                        } else {
+                            "ok"
+                        };
+                        eprintln!("alex dev: ipc {method} -> {outcome}");
+                        if let Ok(json) = serde_json::to_string(&response) {
+                            let _ = proxy.send_event(UserEvent::IpcResponse(None, json));
+                        }
+                    })
+                    .is_err()
+                {
+                    let response = crate::ipc::Response::error(
+                        "unknown",
+                        "HOST_BUSY",
+                        "host IPC queue is full",
+                    );
                     if let Ok(json) = serde_json::to_string(&response) {
-                        let _ = proxy.send_event(UserEvent::IpcResponse(None, json));
+                        let _ = fallback_proxy.send_event(UserEvent::IpcResponse(None, json));
                     }
-                }).is_err() {
-                    let response = crate::ipc::Response::error("unknown", "HOST_BUSY", "host IPC queue is full");
-                    if let Ok(json) = serde_json::to_string(&response) { let _ = fallback_proxy.send_event(UserEvent::IpcResponse(None, json)); }
                 }
             })
             .with_custom_protocol("alex".into(), move |_id, request| {

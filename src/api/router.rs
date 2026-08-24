@@ -1533,37 +1533,37 @@ impl ApiRouter {
                 ));
             }
         };
-        serde_json::to_value(crate::core::update_tasks::start(
-            id.into(),
-            url.into(),
-            channel,
-            install,
-            trust,
-        ))
-        .map_err(|e| ("OPERATION_FAILED", e.to_string()))
+        let task = crate::core::update_tasks::start(id.into(), url.into(), channel, install, trust)
+            .map_err(|e| ("OPERATION_FAILED", e.to_string()))?;
+        serde_json::to_value(task).map_err(|e| ("OPERATION_FAILED", e.to_string()))
     }
 
     fn system_update_tasks(&self) -> ApiResult {
-        let _ = self.require_update_roots()?;
-        Ok(json!({ "tasks": crate::core::update_tasks::list() }))
+        let (install, trust) = self.require_update_roots()?;
+        let tasks = crate::core::update_tasks::list(&install, &trust)
+            .map_err(|e| ("OPERATION_FAILED", e.to_string()))?;
+        Ok(json!({ "tasks": tasks }))
     }
 
     fn system_update_cancel(&self, params: &Value) -> ApiResult {
-        let _ = self.require_update_roots()?;
+        let (install, trust) = self.require_update_roots()?;
         let task_id = params
             .get("taskId")
             .and_then(Value::as_str)
             .ok_or(("INVALID_PARAMS", "missing `taskId`".into()))?;
-        Ok(json!({ "cancelled": crate::core::update_tasks::cancel(task_id) }))
+        let cancelled = crate::core::update_tasks::cancel(&install, &trust, task_id)
+            .map_err(|e| ("OPERATION_FAILED", e.to_string()))?;
+        Ok(json!({ "cancelled": cancelled }))
     }
 
     fn system_update_retry(&self, params: &Value) -> ApiResult {
-        let _ = self.require_update_roots()?;
+        let (install, trust) = self.require_update_roots()?;
         let task_id = params
             .get("taskId")
             .and_then(Value::as_str)
             .ok_or(("INVALID_PARAMS", "missing `taskId`".into()))?;
-        let task = crate::core::update_tasks::retry(task_id)
+        let task = crate::core::update_tasks::retry(&install, &trust, task_id)
+            .map_err(|e| ("OPERATION_FAILED", e.to_string()))?
             .ok_or(("INVALID_STATE", "task is not failed or cancelled".into()))?;
         serde_json::to_value(task).map_err(|e| ("OPERATION_FAILED", e.to_string()))
     }
