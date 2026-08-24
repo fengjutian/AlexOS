@@ -166,10 +166,10 @@ impl DefaultContainerService {
     }
 
     fn validate_level(&self, level: IsolationLevel) -> Result<(), ContainerError> {
-        if !level.available_on_windows() {
+        if super::isolation::provider_for(level).is_err() {
             return Err(ContainerError::IsolationUnavailable {
                 requested: level.to_string(),
-                reason: "this level will land in a later Alex OS release".into(),
+                reason: "the required host isolation provider is unavailable".into(),
             });
         }
         Ok(())
@@ -463,7 +463,7 @@ impl ContainerService for DefaultContainerService {
     }
 
     fn isolation_available(&self, level: IsolationLevel) -> bool {
-        level.available_on_windows()
+        super::isolation::provider_for(level).is_ok()
     }
 }
 

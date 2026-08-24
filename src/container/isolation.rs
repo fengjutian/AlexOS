@@ -97,6 +97,18 @@ pub trait IsolationProvider: Send + Sync {
 
 pub struct ProcessIsolationProvider;
 
+fn configure_command(command: &mut std::process::Command, request: &SpawnRequest<'_>) {
+    use std::process::Stdio;
+    command
+        .args(&request.args)
+        .current_dir(&request.cwd)
+        .env_clear()
+        .envs(request.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
+        .stdin(Stdio::null())
+        .stdout(Stdio::null())
+        .stderr(Stdio::null());
+}
+
 impl IsolationProvider for ProcessIsolationProvider {
     fn level(&self) -> IsolationLevel {
         IsolationLevel::Process
@@ -107,16 +119,9 @@ impl IsolationProvider for ProcessIsolationProvider {
     }
 
     fn spawn(&self, request: &SpawnRequest) -> Result<Spawned, IsolationError> {
-        use std::process::{Command, Stdio};
+        use std::process::Command;
         let mut command = Command::new(&request.executable);
-        command
-            .args(&request.args)
-            .current_dir(&request.cwd)
-            .env_clear()
-            .envs(request.env.iter().map(|(k, v)| (k.as_str(), v.as_str())))
-            .stdin(Stdio::null())
-            .stdout(Stdio::null())
-            .stderr(Stdio::null());
+        configure_command(&mut command, request);
         let child = command.spawn().map_err(|source| {
             IsolationError::Bind(format!("spawn {}: {source}", request.executable.display()))
         })?;
@@ -362,7 +367,212 @@ pub fn provider_for(level: IsolationLevel) -> Result<Box<dyn IsolationProvider>,
                 Err(IsolationError::Unavailable(level))
             }
         }
-        other => Err(IsolationError::Unavailable(other)),
+        IsolationLevel::AppContainer => {
+            let provider = RestrictedTokenProvider;
+            if provider.is_available() {
+                Ok(Box::new(provider))
+            } else {
+                Err(IsolationError::Unavailable(level))
+            }
+        }
+        IsolationLevel::WslOci => {
+            let provider = WslOciProvider;
+            if provider.is_available() {
+                Ok(Box::new(provider))
+            } else {
+                Err(IsolationError::Unavailable(level))
+            }
+        }
+    }
+}
+
+/// Windows L2 provider. It launches the backend with a primary restricted
+/// token that has all removable privileges disabled. The existing Job layer
+/// remains available when callers need process-tree resource accounting.
+pub struct RestrictedTokenProvider;
+
+#[cfg(windows)]
+impl IsolationProvider for RestrictedTokenProvider {
+    fn level(&self) -> IsolationLevel {
+        IsolationLevel::AppContainer
+    }
+    fn is_available(&self) -> bool {
+        true
+    }
+    fn spawn(&self, request: &SpawnRequest) -> Result<Spawned, IsolationError> {
+        use std::os::windows::ffi::OsStrExt;
+        use windows::Win32::{
+            Foundation::{CloseHandle, HANDLE},
+            Security::{
+                CreateRestrictedToken, DISABLE_MAX_PRIVILEGE, TOKEN_ASSIGN_PRIMARY,
+                TOKEN_DUPLICATE, TOKEN_QUERY,
+            },
+            System::Threading::{
+                CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+                GetCurrentProcess, OpenProcessToken, PROCESS_INFORMATION, STARTUPINFOW,
+            },
+        };
+        use windows::core::{PCWSTR, PWSTR};
+        let mut current = HANDLE::default();
+        unsafe {
+            OpenProcessToken(
+                GetCurrentProcess(),
+                TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY,
+                &mut current,
+            )
+        }
+        .map_err(|e| IsolationError::Bind(format!("OpenProcessToken: {e}")))?;
+        let mut restricted = HANDLE::default();
+        let restricted_result = unsafe {
+            CreateRestrictedToken(
+                current,
+                DISABLE_MAX_PRIVILEGE,
+                None,
+                None,
+                None,
+                &mut restricted,
+            )
+        };
+        unsafe {
+            let _ = CloseHandle(current);
+        }
+        restricted_result
+            .map_err(|e| IsolationError::Bind(format!("CreateRestrictedToken: {e}")))?;
+        let quote = |value: &str| format!("\"{}\"", value.replace('"', "\\\""));
+        let mut command_line = quote(&request.executable.to_string_lossy());
+        for arg in &request.args {
+            command_line.push(' ');
+            command_line.push_str(&quote(arg));
+        }
+        let mut command_wide: Vec<u16> = std::ffi::OsStr::new(&command_line)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let app_wide: Vec<u16> = request
+            .executable
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let cwd_wide: Vec<u16> = request
+            .cwd
+            .as_os_str()
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let mut environment = Vec::<u16>::new();
+        for (name, value) in &request.env {
+            environment.extend(std::ffi::OsStr::new(&format!("{name}={value}")).encode_wide());
+            environment.push(0);
+        }
+        environment.push(0);
+        let startup = STARTUPINFOW {
+            cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+            ..Default::default()
+        };
+        let mut process = PROCESS_INFORMATION::default();
+        let created = unsafe {
+            CreateProcessAsUserW(
+                Some(restricted),
+                PCWSTR(app_wide.as_ptr()),
+                Some(PWSTR(command_wide.as_mut_ptr())),
+                None,
+                None,
+                false,
+                CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+                Some(environment.as_ptr().cast()),
+                PCWSTR(cwd_wide.as_ptr()),
+                &startup,
+                &mut process,
+            )
+        };
+        unsafe {
+            let _ = CloseHandle(restricted);
+        }
+        created.map_err(|e| IsolationError::Bind(format!("CreateProcessAsUserW: {e}")))?;
+        unsafe {
+            let _ = CloseHandle(process.hThread);
+            let _ = CloseHandle(process.hProcess);
+        }
+        Ok(Spawned {
+            pid: process.dwProcessId,
+            isolation: IsolationHandle {
+                boundary: Some(BoundaryKind::AppContainer),
+                accounting: None,
+            },
+        })
+    }
+    fn release(&self, _handle: &IsolationHandle) -> Result<(), IsolationError> {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+impl IsolationProvider for RestrictedTokenProvider {
+    fn level(&self) -> IsolationLevel {
+        IsolationLevel::AppContainer
+    }
+    fn is_available(&self) -> bool {
+        false
+    }
+    fn spawn(&self, _: &SpawnRequest) -> Result<Spawned, IsolationError> {
+        Err(IsolationError::Unavailable(self.level()))
+    }
+    fn release(&self, _: &IsolationHandle) -> Result<(), IsolationError> {
+        Ok(())
+    }
+}
+
+pub struct WslOciProvider;
+
+#[cfg(windows)]
+impl IsolationProvider for WslOciProvider {
+    fn level(&self) -> IsolationLevel {
+        IsolationLevel::WslOci
+    }
+    fn is_available(&self) -> bool {
+        std::process::Command::new("wsl.exe")
+            .arg("--status")
+            .output()
+            .is_ok_and(|o| o.status.success())
+    }
+    fn spawn(&self, request: &SpawnRequest) -> Result<Spawned, IsolationError> {
+        let mut command = std::process::Command::new("wsl.exe");
+        command
+            .arg("--cd")
+            .arg(&request.cwd)
+            .arg("--exec")
+            .arg(&request.executable);
+        configure_command(&mut command, request);
+        let child = command.spawn()?;
+        let pid = child.id();
+        std::mem::forget(child);
+        Ok(Spawned {
+            pid,
+            isolation: IsolationHandle {
+                boundary: Some(BoundaryKind::Wsl),
+                accounting: None,
+            },
+        })
+    }
+    fn release(&self, _: &IsolationHandle) -> Result<(), IsolationError> {
+        Ok(())
+    }
+}
+
+#[cfg(not(windows))]
+impl IsolationProvider for WslOciProvider {
+    fn level(&self) -> IsolationLevel {
+        IsolationLevel::WslOci
+    }
+    fn is_available(&self) -> bool {
+        false
+    }
+    fn spawn(&self, _: &SpawnRequest) -> Result<Spawned, IsolationError> {
+        Err(IsolationError::Unavailable(self.level()))
+    }
+    fn release(&self, _: &IsolationHandle) -> Result<(), IsolationError> {
+        Ok(())
     }
 }
 
@@ -390,13 +600,12 @@ mod tests {
     }
 
     #[test]
-    fn provider_for_unimplemented_levels_returns_unavailable() {
-        for level in [IsolationLevel::AppContainer, IsolationLevel::WslOci] {
-            assert!(matches!(
-                provider_for(level),
-                Err(IsolationError::Unavailable(_))
-            ));
-        }
+    fn advanced_providers_report_their_declared_levels() {
+        assert_eq!(
+            RestrictedTokenProvider.level(),
+            IsolationLevel::AppContainer
+        );
+        assert_eq!(WslOciProvider.level(), IsolationLevel::WslOci);
     }
 
     #[test]

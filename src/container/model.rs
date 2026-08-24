@@ -46,7 +46,11 @@ impl IsolationLevel {
     /// the requirement or refuses to start the container — silent
     /// downgrade is forbidden by the design contract.
     pub fn available_on_windows(self) -> bool {
-        matches!(self, Self::Process | Self::Job)
+        if cfg!(windows) {
+            matches!(self, Self::Process | Self::Job | Self::AppContainer)
+        } else {
+            matches!(self, Self::Process)
+        }
     }
 
     /// Manifest defaults per the design: production deployments must
