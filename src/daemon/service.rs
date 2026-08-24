@@ -59,6 +59,7 @@ impl DaemonService {
                 "daemon": "alexd",
                 "protocol": PROTOCOL_VERSION
             })),
+            ControlCommand::Shutdown => self.shutdown(),
             ControlCommand::List => self.list(),
             ControlCommand::Start { app_id } => self.start(&app_id),
             ControlCommand::Stop { app_id } => self.stop(&app_id),
@@ -155,6 +156,25 @@ impl DaemonService {
                 })
             })
             .map_err(|error| error.to_string())
+    }
+
+    fn shutdown(&self) -> Result<serde_json::Value, String> {
+        let Some(manager) = &self.manager else {
+            return Ok(json!({ "stopped": [], "errors": [] }));
+        };
+        let applications = manager.list_apps().map_err(|error| error.to_string())?;
+        let mut stopped = Vec::new();
+        let mut errors = Vec::new();
+        for app in applications.into_iter().filter(|app| app.runtime.is_some()) {
+            match manager.stop(&app.id) {
+                Ok(_) => stopped.push(app.id),
+                Err(error) => errors.push(json!({
+                    "appId": app.id,
+                    "error": error.to_string()
+                })),
+            }
+        }
+        Ok(json!({ "stopped": stopped, "errors": errors }))
     }
 
     fn start(&self, app_id: &str) -> Result<serde_json::Value, String> {

@@ -2,6 +2,10 @@ use std::{
     fs::{File, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
     os::windows::{ffi::OsStrExt, io::FromRawHandle},
+    sync::{
+        Arc,
+        atomic::{AtomicBool, AtomicUsize, Ordering},
+    },
     time::{Duration, Instant},
 };
 
@@ -19,15 +23,38 @@ use crate::daemon::{ControlRequest, ControlResponse, DaemonService};
 
 const MAX_CONTROL_LINE_BYTES: usize = 1024 * 1024;
 const CONNECT_TIMEOUT: Duration = Duration::from_secs(3);
+const MAX_CONCURRENT_CLIENTS: usize = 32;
 
 pub fn run_server(service: DaemonService, pipe_name: &str) -> std::io::Result<()> {
     validate_pipe_name(pipe_name)?;
-    loop {
+    let shutdown = Arc::new(AtomicBool::new(false));
+    let active = Arc::new(AtomicUsize::new(0));
+    while !shutdown.load(Ordering::Acquire) {
         let file = create_connected_pipe(pipe_name)?;
-        if let Err(error) = serve_connection(&service, file) {
-            eprintln!("alexd: client connection failed: {error}");
+        if shutdown.load(Ordering::Acquire) {
+            break;
         }
+        if active.fetch_add(1, Ordering::AcqRel) >= MAX_CONCURRENT_CLIENTS {
+            active.fetch_sub(1, Ordering::AcqRel);
+            reject_busy(file);
+            continue;
+        }
+        let service = service.clone();
+        let shutdown = Arc::clone(&shutdown);
+        let active = Arc::clone(&active);
+        let pipe_name = pipe_name.to_owned();
+        std::thread::spawn(move || {
+            let result = serve_connection(&service, file, &shutdown);
+            active.fetch_sub(1, Ordering::AcqRel);
+            if let Err(error) = result {
+                eprintln!("alexd: client connection failed: {error}");
+            }
+            if shutdown.load(Ordering::Acquire) {
+                let _ = connect_client(&pipe_name);
+            }
+        });
     }
+    Ok(())
 }
 
 pub fn send_request(pipe_name: &str, request: &ControlRequest) -> std::io::Result<ControlResponse> {
@@ -119,7 +146,11 @@ fn create_connected_pipe(pipe_name: &str) -> std::io::Result<File> {
     Ok(unsafe { File::from_raw_handle(handle.0) })
 }
 
-fn serve_connection(service: &DaemonService, file: File) -> std::io::Result<()> {
+fn serve_connection(
+    service: &DaemonService,
+    file: File,
+    shutdown: &AtomicBool,
+) -> std::io::Result<()> {
     let mut reader = BufReader::new(file);
     loop {
         let mut line = String::new();
@@ -130,23 +161,43 @@ fn serve_connection(service: &DaemonService, file: File) -> std::io::Result<()> 
         if read == 0 {
             return Ok(());
         }
-        let response = if read > MAX_CONTROL_LINE_BYTES || !line.ends_with('\n') {
-            ControlResponse::failure("unknown", "control request exceeds 1 MiB")
-        } else {
-            match serde_json::from_str::<ControlRequest>(line.trim_end()) {
-                Ok(request) => service.handle(request),
-                Err(error) => {
-                    ControlResponse::failure("unknown", format!("invalid request: {error}"))
+        let (response, requests_shutdown) =
+            if read > MAX_CONTROL_LINE_BYTES || !line.ends_with('\n') {
+                (
+                    ControlResponse::failure("unknown", "control request exceeds 1 MiB"),
+                    false,
+                )
+            } else {
+                match serde_json::from_str::<ControlRequest>(line.trim_end()) {
+                    Ok(request) => {
+                        let requests_shutdown =
+                            matches!(request.command, crate::daemon::ControlCommand::Shutdown);
+                        (service.handle(request), requests_shutdown)
+                    }
+                    Err(error) => (
+                        ControlResponse::failure("unknown", format!("invalid request: {error}")),
+                        false,
+                    ),
                 }
-            }
-        };
+            };
         serde_json::to_writer(&mut reader.get_mut(), &response)?;
         reader.get_mut().write_all(b"\n")?;
         reader.get_mut().flush()?;
+        if requests_shutdown && response.ok {
+            shutdown.store(true, Ordering::Release);
+            return Ok(());
+        }
         if read > MAX_CONTROL_LINE_BYTES || !line.ends_with('\n') {
             return Ok(());
         }
     }
+}
+
+fn reject_busy(mut file: File) {
+    let response = ControlResponse::failure("unknown", "alexd has too many concurrent clients");
+    let _ = serde_json::to_writer(&mut file, &response);
+    let _ = file.write_all(b"\n");
+    let _ = file.flush();
 }
 
 fn validate_pipe_name(pipe_name: &str) -> std::io::Result<()> {

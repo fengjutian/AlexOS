@@ -22,6 +22,7 @@ pub struct ControlRequest {
 )]
 pub enum ControlCommand {
     Ping,
+    Shutdown,
     List,
     Start {
         app_id: String,

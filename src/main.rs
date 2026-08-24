@@ -85,6 +85,11 @@ enum Commands {
         #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
         pipe: String,
     },
+    /// Gracefully stop application backends and shut down alexd.
+    Shutdown {
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
     /// Open the application frontend in the native WebView shell.
     Shell { path: PathBuf },
     /// Run the application in development mode with file watching and hot reload.
@@ -494,6 +499,9 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 limit,
             },
         )?,
+        Commands::Shutdown { pipe } => {
+            daemon_command(&pipe, alex::daemon::ControlCommand::Shutdown)?
+        }
         Commands::Shell { path } => {
             require_webview2()?;
             let app = load_app(&path)?;
