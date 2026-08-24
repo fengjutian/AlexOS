@@ -10,14 +10,28 @@ use std::{
 };
 
 use windows::Win32::{
-    Foundation::{ERROR_PIPE_CONNECTED, GetLastError, INVALID_HANDLE_VALUE},
+    Foundation::{
+        CloseHandle, ERROR_PIPE_CONNECTED, GetLastError, HANDLE, HLOCAL, INVALID_HANDLE_VALUE,
+        LocalFree,
+    },
+    Security::{
+        Authorization::{
+            ConvertSidToStringSidW, ConvertStringSecurityDescriptorToSecurityDescriptorW,
+            SDDL_REVISION_1,
+        },
+        GetTokenInformation, PSECURITY_DESCRIPTOR, SECURITY_ATTRIBUTES, TOKEN_QUERY, TOKEN_USER,
+        TokenUser,
+    },
     Storage::FileSystem::PIPE_ACCESS_DUPLEX,
     System::Pipes::{
-        ConnectNamedPipe, CreateNamedPipeW, PIPE_READMODE_BYTE, PIPE_TYPE_BYTE,
-        PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+        ConnectNamedPipe, CreateNamedPipeW, GetNamedPipeClientProcessId, PIPE_READMODE_BYTE,
+        PIPE_TYPE_BYTE, PIPE_UNLIMITED_INSTANCES, PIPE_WAIT,
+    },
+    System::Threading::{
+        GetCurrentProcess, OpenProcess, OpenProcessToken, PROCESS_QUERY_LIMITED_INFORMATION,
     },
 };
-use windows::core::PCWSTR;
+use windows::core::{PCWSTR, PWSTR};
 
 use crate::daemon::{ControlRequest, ControlResponse, DaemonService};
 
@@ -120,6 +134,8 @@ fn create_connected_pipe(pipe_name: &str) -> std::io::Result<File> {
         .encode_wide()
         .chain(Some(0))
         .collect();
+    let security = PipeSecurity::for_current_user()?;
+    let attributes = security.attributes();
     let handle = unsafe {
         CreateNamedPipeW(
             PCWSTR(name.as_ptr()),
@@ -129,7 +145,7 @@ fn create_connected_pipe(pipe_name: &str) -> std::io::Result<File> {
             64 * 1024,
             64 * 1024,
             0,
-            None,
+            Some(&attributes),
         )
     };
     if handle == INVALID_HANDLE_VALUE {
@@ -139,11 +155,132 @@ fn create_connected_pipe(pipe_name: &str) -> std::io::Result<File> {
         && unsafe { GetLastError() } != ERROR_PIPE_CONNECTED
     {
         unsafe {
-            let _ = windows::Win32::Foundation::CloseHandle(handle);
+            let _ = CloseHandle(handle);
         }
         return Err(std::io::Error::other(error.to_string()));
     }
+    if let Err(error) = verify_same_user_client(handle) {
+        unsafe {
+            let _ = CloseHandle(handle);
+        }
+        return Err(error);
+    }
     Ok(unsafe { File::from_raw_handle(handle.0) })
+}
+
+struct PipeSecurity {
+    descriptor: PSECURITY_DESCRIPTOR,
+}
+
+impl PipeSecurity {
+    fn for_current_user() -> std::io::Result<Self> {
+        let sid = current_user_sid_string()?;
+        // Protected DACL: only LocalSystem and the daemon's current user get
+        // generic-all access. No inherited or broad Authenticated Users ACE.
+        let sddl = format!("D:P(A;;GA;;;SY)(A;;GA;;;{sid})");
+        let wide: Vec<u16> = std::ffi::OsStr::new(&sddl)
+            .encode_wide()
+            .chain(Some(0))
+            .collect();
+        let mut descriptor = PSECURITY_DESCRIPTOR::default();
+        unsafe {
+            ConvertStringSecurityDescriptorToSecurityDescriptorW(
+                PCWSTR(wide.as_ptr()),
+                SDDL_REVISION_1,
+                &mut descriptor,
+                None,
+            )
+        }
+        .map_err(win32_io)?;
+        Ok(Self { descriptor })
+    }
+
+    fn attributes(&self) -> SECURITY_ATTRIBUTES {
+        SECURITY_ATTRIBUTES {
+            nLength: std::mem::size_of::<SECURITY_ATTRIBUTES>() as u32,
+            lpSecurityDescriptor: self.descriptor.0,
+            bInheritHandle: false.into(),
+        }
+    }
+}
+
+impl Drop for PipeSecurity {
+    fn drop(&mut self) {
+        unsafe {
+            let _ = LocalFree(Some(HLOCAL(self.descriptor.0)));
+        }
+    }
+}
+
+fn current_user_sid_string() -> std::io::Result<String> {
+    let mut token = HANDLE::default();
+    unsafe { OpenProcessToken(GetCurrentProcess(), TOKEN_QUERY, &mut token) }.map_err(win32_io)?;
+    let result = token_user_sid_string(token);
+    unsafe {
+        let _ = CloseHandle(token);
+    }
+    result
+}
+
+fn verify_same_user_client(pipe: HANDLE) -> std::io::Result<()> {
+    let mut pid = 0;
+    unsafe { GetNamedPipeClientProcessId(pipe, &mut pid) }.map_err(win32_io)?;
+    let process =
+        unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) }.map_err(win32_io)?;
+    let mut token = HANDLE::default();
+    let token_result = unsafe { OpenProcessToken(process, TOKEN_QUERY, &mut token) };
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+    token_result.map_err(win32_io)?;
+    let client_sid = token_user_sid_string(token);
+    unsafe {
+        let _ = CloseHandle(token);
+    }
+    if client_sid? == current_user_sid_string()? {
+        Ok(())
+    } else {
+        Err(std::io::Error::new(
+            std::io::ErrorKind::PermissionDenied,
+            "alexd rejected a named-pipe client owned by another user",
+        ))
+    }
+}
+
+fn token_user_sid_string(token: HANDLE) -> std::io::Result<String> {
+    let mut required = 0;
+    let _ = unsafe { GetTokenInformation(token, TokenUser, None, 0, &mut required) };
+    if required == 0 {
+        return Err(std::io::Error::last_os_error());
+    }
+    let mut buffer = vec![0u8; required as usize];
+    unsafe {
+        GetTokenInformation(
+            token,
+            TokenUser,
+            Some(buffer.as_mut_ptr().cast()),
+            required,
+            &mut required,
+        )
+    }
+    .map_err(win32_io)?;
+    let user = unsafe { &*(buffer.as_ptr().cast::<TOKEN_USER>()) };
+    let mut sid_string = PWSTR::null();
+    unsafe { ConvertSidToStringSidW(user.User.Sid, &mut sid_string) }.map_err(win32_io)?;
+    let result = unsafe { sid_string.to_string() }.map_err(|error| {
+        std::io::Error::new(
+            std::io::ErrorKind::InvalidData,
+            format!("Windows SID is not valid UTF-16: {error}"),
+        )
+    });
+    unsafe {
+        let _ = LocalFree(Some(HLOCAL(sid_string.0.cast())));
+    }
+    result
+}
+
+fn win32_io(error: windows::core::Error) -> std::io::Error {
+    std::io::Error::other(error.to_string())
 }
 
 fn serve_connection(
