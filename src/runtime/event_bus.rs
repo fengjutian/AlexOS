@@ -68,9 +68,8 @@ struct Subscription {
     event: String,
     sequence: u64,
     /// Optional payload filter the host applies before forwarding.
-    /// Today we only support an exact `path` match for filesystem
-    /// events; the type is structured so we can extend it without
-    /// breaking older messages.
+    /// Filesystem path filters match the selected file or any path
+    /// below a selected directory.
     filter: Option<SubscriptionFilter>,
 }
 
@@ -232,7 +231,7 @@ fn filter_matches(filter: Option<&SubscriptionFilter>, payload: &Value) -> bool 
         SubscriptionFilter::Path { value } => payload
             .get("path")
             .and_then(|v| v.as_str())
-            .is_some_and(|p| p == value),
+            .is_some_and(|p| std::path::Path::new(p).starts_with(std::path::Path::new(value))),
     }
 }
 
@@ -374,11 +373,13 @@ mod tests {
         // Path does not start with `data/` — no delivery.
         let outside = bus.deliver("filesystem.changed", &serde_json::json!({"path": "other/"}));
         assert!(outside.is_empty());
-        // Exact path match: current filter semantics are equality,
-        // not prefix. The watcher will emit fully canonicalized
-        // paths so this is enough.
         let inside = bus.deliver("filesystem.changed", &serde_json::json!({"path": "data/"}));
         assert_eq!(inside.len(), 1);
+        let child = bus.deliver(
+            "filesystem.changed",
+            &serde_json::json!({"path": "data/child.txt"}),
+        );
+        assert_eq!(child.len(), 1);
     }
 
     #[test]

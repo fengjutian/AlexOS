@@ -21,7 +21,7 @@ use crate::{
     process::{ProcessRegistry, ProcessSpec},
     runtime::{RuntimeError, RuntimeHandle},
     storage::AppStorage,
-    watcher::WatcherRegistry,
+    watcher::{WatchHandle, WatcherRegistry},
     windows::{CreateWindowSpec, WindowBounds, WindowId, WindowRegistry},
 };
 
@@ -47,6 +47,7 @@ pub struct ApiRouter {
     file_tokens: Arc<FileTokenStore>,
     storage: Option<AppStorage>,
     watcher_registry: Option<Arc<WatcherRegistry>>,
+    watch_handles: Mutex<HashMap<String, WatchHandle>>,
     windows: Arc<WindowRegistry>,
     menu_store: Arc<MenuStore>,
     process_registry: Arc<ProcessRegistry>,
@@ -114,6 +115,7 @@ impl ApiRouter {
             file_tokens: tokens,
             storage,
             watcher_registry: Some(watcher_registry),
+            watch_handles: Mutex::new(HashMap::new()),
             windows,
             menu_store,
             process_registry,
@@ -175,6 +177,10 @@ impl ApiRouter {
     /// this when the window is destroyed or the host kills
     /// the app session.
     pub fn shutdown(&self) {
+        self.watch_handles
+            .lock()
+            .expect("watch handles lock poisoned")
+            .clear();
         self.event_bus.clear();
         self.file_tokens.revoke_all(&self.manifest.id);
         self.windows.drop_app(&self.manifest.id);
@@ -702,26 +708,28 @@ impl ApiRouter {
                 }),
             )
             .map_err(|error| ("SUBSCRIBE_FAILED", error.to_string()))?;
-        // The watcher is owned by the router's bus; the
-        // shell layer reads bus deliveries and forwards them
-        // to the WebView. The actual OS watcher is spawned
-        // lazily by the shell when it sees the first event
-        // for a given path — keeps the host idle when no
-        // app is watching anything.
         if let Some(registry) = &self.watcher_registry {
-            // Hold the watch handle for the lifetime of the
-            // subscription. The bus tracks the subscription
-            // id; the handle lives next to the router so
-            // `shutdown` can drop it.
-            let _ = registry
-                .watch(&self.manifest.id, &subscription_id, &resolved)
-                .map_err(|error| ("WATCH_ERROR", error.to_string()))?;
+            let handle = match registry.watch(&self.manifest.id, &subscription_id, &resolved) {
+                Ok(handle) => handle,
+                Err(error) => {
+                    let _ = self.event_bus.unsubscribe(&subscription_id);
+                    return Err(("WATCH_ERROR", error.to_string()));
+                }
+            };
+            self.watch_handles
+                .lock()
+                .expect("watch handles lock poisoned")
+                .insert(subscription_id.clone(), handle);
         }
         Ok(json!({ "subscriptionId": subscription_id, "path": resolved }))
     }
 
     fn fs_unwatch(&self, params: &Value) -> ApiResult {
         let params: UnsubscribeRequest = parse_params(params)?;
+        self.watch_handles
+            .lock()
+            .expect("watch handles lock poisoned")
+            .remove(&params.subscription_id);
         let removed = self
             .event_bus
             .unsubscribe(&params.subscription_id)
@@ -1535,7 +1543,10 @@ impl ApiRouter {
                 })
             })
             .collect();
-        eprintln!("[alex] system_list_trusted_publishers: returning {} entries", entries.len());
+        eprintln!(
+            "[alex] system_list_trusted_publishers: returning {} entries",
+            entries.len()
+        );
         Ok(json!({ "publishers": entries }))
     }
 
@@ -1579,8 +1590,7 @@ impl ApiRouter {
             None => match std::env::var_os("ALEX_DATA_DIR")
                 .map(PathBuf::from)
                 .or_else(|| {
-                    std::env::var_os("LOCALAPPDATA")
-                        .map(|path| PathBuf::from(path).join("AlexOS"))
+                    std::env::var_os("LOCALAPPDATA").map(|path| PathBuf::from(path).join("AlexOS"))
                 }) {
                 Some(root) => root.join("permissions"),
                 None => {
@@ -1623,9 +1633,7 @@ impl ApiRouter {
                 if trimmed.is_empty() {
                     continue;
                 }
-                if let Ok(record) =
-                    serde_json::from_str::<AuthorizationAuditEntry>(trimmed)
-                {
+                if let Ok(record) = serde_json::from_str::<AuthorizationAuditEntry>(trimmed) {
                     entries.push(record);
                 }
             }
@@ -1653,7 +1661,10 @@ impl ApiRouter {
                 })
             })
             .collect();
-        eprintln!("[alex] system_read_audit_log: returning {} entries", values.len());
+        eprintln!(
+            "[alex] system_read_audit_log: returning {} entries",
+            values.len()
+        );
         Ok(json!({ "entries": values }))
     }
 

@@ -72,16 +72,8 @@ pub mod windows {
             try { listener(data); } catch (error) { queueMicrotask(() => { throw error; }); }
           }
         };
-        // Subscriptions have their own listener bucket so
-        // the page can subscribe to a streamed event without
-        // re-registering a listener every time the host
-        // delivers one.
-        const subscriptionListeners = new Map();
         window.__alexDeliver = (envelope) => {
-          const set = subscriptionListeners.get(envelope.event) ?? new Set();
-          for (const listener of set) {
-            try { listener(envelope); } catch (error) { queueMicrotask(() => { throw error; }); }
-          }
+          window.__alexEmit(envelope.event, envelope);
         };
         window.alex = Object.freeze({
           invoke(method, params = {}, options = {}) {
@@ -221,7 +213,7 @@ pub mod windows {
                         "service backend {} failed to reach Ready within handshake window: {:?}",
                         manifest.id, status.last_error
                     )
-                    .into());
+                        .into());
                     }
                     router = router.with_runtime(handle);
                     match (status.port, status.token) {
@@ -285,7 +277,8 @@ pub mod windows {
             .build(&window)?;
 
         event_loop.run(move |event, _, control_flow| {
-            *control_flow = ControlFlow::Wait;
+            *control_flow =
+                ControlFlow::WaitUntil(std::time::Instant::now() + Duration::from_millis(50));
             match event {
                 Event::UserEvent(UserEvent::IpcResponse(json)) => {
                     let script = format!("window.__alexResolve({json})");
@@ -317,6 +310,15 @@ pub mod windows {
                     _ => {}
                 },
                 _ => {}
+            }
+            for (event, delivered) in router.event_bus().drain_pending() {
+                emit_subscribed(
+                    &webview,
+                    &event,
+                    &delivered.subscription_id,
+                    delivered.sequence,
+                    &delivered.payload,
+                );
             }
         })
     }
@@ -359,9 +361,7 @@ pub mod windows {
         if !candidate.exists() {
             return response(404, "text/plain", b"Not found".to_vec());
         }
-        let canonical_root = root
-            .canonicalize()
-            .unwrap_or_else(|_| root.to_path_buf());
+        let canonical_root = root.canonicalize().unwrap_or_else(|_| root.to_path_buf());
         let Some(path) = candidate.canonicalize().ok() else {
             return response(404, "text/plain", b"Not found".to_vec());
         };
@@ -399,9 +399,7 @@ pub mod windows {
     pub fn content_type(path: &Path) -> &'static str {
         match path.extension().and_then(|value| value.to_str()) {
             Some("html") => "text/html; charset=utf-8",
-            Some("js" | "mjs" | "ts" | "tsx" | "jsx") => {
-                "text/javascript; charset=utf-8"
-            }
+            Some("js" | "mjs" | "ts" | "tsx" | "jsx") => "text/javascript; charset=utf-8",
             Some("css") => "text/css; charset=utf-8",
             Some("json" | "map") => "application/json; charset=utf-8",
             Some("svg") => "image/svg+xml",

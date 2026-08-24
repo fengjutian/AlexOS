@@ -230,7 +230,7 @@ mod windows {
 
         let mut last_poll = Instant::now();
         event_loop.run(move |event, _, control_flow| {
-            *control_flow = ControlFlow::Wait;
+            *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(50));
             match event {
                 Event::UserEvent(UserEvent::IpcResponse(json)) => {
                     let script = format!("window.__alexResolve({json})");
@@ -262,6 +262,16 @@ mod windows {
                     _ => {}
                 },
                 _ => {}
+            }
+
+            for (event, delivered) in router.event_bus().drain_pending() {
+                crate::shell::windows::emit_subscribed(
+                    &webview,
+                    &event,
+                    &delivered.subscription_id,
+                    delivered.sequence,
+                    &delivered.payload,
+                );
             }
 
             // 100 ms tick: drain dev commands while the event loop is otherwise idle.
