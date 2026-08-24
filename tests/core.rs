@@ -2693,3 +2693,57 @@ fn api_net_fetch_blocks_undeclared_origin() {
         "unexpected code: {err:?}"
     );
 }
+
+#[test]
+fn manifest_v2_package_round_trip_and_uninstall() {
+    let source = tempfile::tempdir().unwrap();
+    fs::create_dir_all(source.path().join("services")).unwrap();
+    fs::write(source.path().join("services/api.js"), "console.log('api')").unwrap();
+    fs::write(
+        source.path().join("app.yaml"),
+        r#"schemaVersion: 2
+id: com.example.v2_package
+name: V2 Package
+version: 2.0.0
+runtime:
+  node: "22"
+services:
+  api:
+    runtime: node
+    command: services/api.js
+"#,
+    )
+    .unwrap();
+
+    let output_dir = tempfile::tempdir().unwrap();
+    let archive = output_dir.path().join("v2.alex");
+    package::pack(source.path(), &archive).expect("pack v2 application");
+
+    let install_root = tempfile::tempdir().unwrap();
+    let installed = package::install(&archive, install_root.path()).expect("install v2 package");
+    assert!(installed.join("app.yaml").is_file());
+    assert_eq!(installed.file_name().unwrap(), "com.example.v2_package");
+
+    let listed = package::list_installed(install_root.path()).unwrap();
+    assert_eq!(listed.len(), 1);
+    assert_eq!(listed[0].id, "com.example.v2_package");
+    assert_eq!(listed[0].version, "2.0.0");
+
+    let removed = package::uninstall("com.example.v2_package", install_root.path()).unwrap();
+    assert_eq!(removed, installed);
+    assert!(!installed.exists());
+}
+
+#[test]
+fn package_rejects_ambiguous_v1_and_v2_manifests() {
+    let source = tempfile::tempdir().unwrap();
+    fs::write(source.path().join("manifest.json"), "{}").unwrap();
+    fs::write(source.path().join("app.yaml"), "schemaVersion: 2").unwrap();
+    let output_dir = tempfile::tempdir().unwrap();
+    let error = package::pack(source.path(), &output_dir.path().join("bad.alex")).unwrap_err();
+    assert!(
+        error
+            .to_string()
+            .contains("both manifest.json and app.yaml")
+    );
+}

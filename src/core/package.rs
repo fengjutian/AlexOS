@@ -15,7 +15,11 @@ use tempfile::Builder as TempDirBuilder;
 use thiserror::Error;
 use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 
-use crate::{AlexError, load_app, manifest::AppManifest};
+use crate::{
+    AlexError, load_app,
+    manifest::{AppManifest, UpdateSource},
+    manifest_v2::{self, ManifestV2Error},
+};
 
 const INTEGRITY_PATH: &str = ".alex/integrity.json";
 const SIGNATURE_PATH: &str = ".alex/signature.json";
@@ -27,6 +31,8 @@ const MAX_TOTAL_BYTES: u64 = 1024 * 1024 * 1024;
 pub enum PackageError {
     #[error(transparent)]
     Alex(#[from] AlexError),
+    #[error(transparent)]
+    ManifestV2(#[from] ManifestV2Error),
     #[error("package I/O failed: {0}")]
     Io(#[from] io::Error),
     #[error("invalid .alex archive: {0}")]
@@ -85,6 +91,45 @@ pub struct InstalledApp {
     pub version: String,
     pub path: PathBuf,
     pub update: Option<crate::manifest::UpdateSource>,
+}
+
+#[derive(Debug)]
+struct PackageMetadata {
+    id: String,
+    name: String,
+    version: String,
+    update: Option<UpdateSource>,
+}
+
+fn package_metadata(root: &Path) -> Result<PackageMetadata, PackageError> {
+    let has_v1 = root.join("manifest.json").is_file();
+    let has_v2 = root.join("app.yaml").is_file();
+    match (has_v1, has_v2) {
+        (true, true) => Err(PackageError::Integrity(
+            "package contains both manifest.json and app.yaml".into(),
+        )),
+        (true, false) => {
+            let manifest = load_app(root)?;
+            Ok(PackageMetadata {
+                id: manifest.id,
+                name: manifest.name,
+                version: manifest.version,
+                update: manifest.update,
+            })
+        }
+        (false, true) => {
+            let manifest = manifest_v2::load(root)?;
+            Ok(PackageMetadata {
+                id: manifest.id,
+                name: manifest.name,
+                version: manifest.version,
+                update: None,
+            })
+        }
+        (false, false) => Err(PackageError::Integrity(
+            "package has neither manifest.json nor app.yaml".into(),
+        )),
+    }
 }
 
 #[derive(Debug)]
@@ -529,7 +574,7 @@ fn pack_internal(
     output: &Path,
     signing: Option<&SigningKey>,
 ) -> Result<(), PackageError> {
-    load_app(source)?;
+    package_metadata(source)?;
     if output.exists() {
         return Err(PackageError::AlreadyInstalled(output.to_path_buf()));
     }
@@ -698,7 +743,7 @@ pub fn install_verified(
             "integrity manifest references missing files".into(),
         ));
     }
-    let manifest = load_app(temporary.path())?;
+    let manifest = package_metadata(temporary.path())?;
     let destination = install_root.join(&manifest.id);
     if destination.exists() {
         return Err(PackageError::AlreadyInstalled(destination));
@@ -803,7 +848,7 @@ pub fn list_installed(install_root: &Path) -> Result<Vec<InstalledApp>, PackageE
         {
             continue;
         }
-        if let Ok(manifest) = load_app(&path) {
+        if let Ok(manifest) = package_metadata(&path) {
             applications.push(InstalledApp {
                 id: manifest.id,
                 name: manifest.name,
@@ -831,7 +876,7 @@ pub fn uninstall(package_id: &str, install_root: &Path) -> Result<PathBuf, Packa
     if destination.parent() != Some(root.as_path()) {
         return Err(PackageError::UnsafeEntry(destination.display().to_string()));
     }
-    let manifest = load_app(&destination)?;
+    let manifest = package_metadata(&destination)?;
     if manifest.id != package_id {
         return Err(PackageError::InvalidPackageId(format!(
             "directory contains {}, not {package_id}",
