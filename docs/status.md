@@ -41,8 +41,11 @@ Daemon 启动时会读取持久化状态，并尝试恢复所有 `desired=runnin
 `observed=crashed`，以便诊断和后续重试。旧版 schemaVersion 1 状态缺少新字段时仍可加载。
 
 由于当前测试主机没有 Node，已验证恢复失败和状态持久化路径，真实 Node backend 的成功恢复仍需在
-具备受支持 Node 的 CI 环境验收。Named Pipe 当前按连接顺序处理，当前用户 ACL 加固、客户端身份
-校验、并发连接管理和可控 shutdown 仍待开发。
+具备受支持 Node 的 CI 环境验收。
+
+Named Pipe 服务端现在为每个连接启动独立 worker，并将并发客户端限制为 32；超限连接会得到明确
+错误。`alex shutdown` 会先停止当前 Supervisor 管理的 backend（不改变 desired state），返回逐应用
+错误后唤醒 accept 循环并让 Daemon 自行退出。当前用户 ACL 加固和客户端身份校验仍待开发。
 
 当前运行链路为：
 

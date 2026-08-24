@@ -24,7 +24,37 @@ OCI 容器。它管理这些现有 Runtime 和应用服务。
 产品飞轮是：
 
 ```text
-AI Application → Package → Runtime → Registry → Install → Update
+    Developer
+       │
+       ▼
+ alex create
+       │
+       ▼
+AI Application
+       │
+       ▼
+  alex build
+       │
+       ▼
+     .alx
+       │
+       ▼
+ Alex Registry
+       │
+       ▼
+     User
+       │
+       ▼
+    Install
+       │
+       ▼
+┌──────────────┐
+│ Alex Runtime │
+└──────────────┘
+       │
+┌──────┼──────┐
+▼      ▼      ▼
+Model  MCP   Agent
 ```
 
 ## 2. 产品职责
