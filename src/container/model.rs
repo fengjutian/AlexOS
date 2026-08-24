@@ -406,6 +406,10 @@ pub struct ContainerState {
     pub desired: DesiredState,
     pub observed: ObservedState,
     pub isolation_effective: IsolationLevel,
+    /// Immutable launch contract captured at create time. Older state files
+    /// omit this field and are migrated from the legacy identity fields.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub spec: Option<ContainerSpec>,
     /// `Some(reason)` when the host could not honour the requested
     /// isolation. By contract the host must refuse the launch in that
     /// case rather than silently downgrade; this field is for

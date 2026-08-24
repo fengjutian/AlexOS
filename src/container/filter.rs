@@ -112,6 +112,7 @@ mod tests {
             desired: DesiredState::Created,
             observed,
             isolation_effective: IsolationLevel::Job,
+            spec: None,
             degraded_reason: None,
             pid: None,
             exit_code: None,

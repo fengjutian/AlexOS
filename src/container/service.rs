@@ -220,6 +220,7 @@ impl ContainerService for DefaultContainerService {
             desired: DesiredState::Created,
             observed: ObservedState::Created,
             isolation_effective: spec.isolation,
+            spec: Some(spec.clone()),
             degraded_reason: None,
             pid: None,
             exit_code: None,
@@ -487,6 +488,9 @@ fn terminate_pid(pid: u32, _timeout: Duration) {
 }
 
 fn build_spec_from_state(state: &ContainerState) -> ContainerSpec {
+    if let Some(spec) = &state.spec {
+        return spec.clone();
+    }
     ContainerSpec {
         instance_id: state.instance_id.clone(),
         app_id: state.app_id.clone(),
