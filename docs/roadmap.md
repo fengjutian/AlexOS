@@ -18,7 +18,9 @@ nav_order: 4
 - [进行中] Windows Named Pipe 版本化控制协议；
 - [进行中] 应用 desired state 原子持久化；
 - 当前用户 ACL、客户端身份校验和并发连接管理；
-- 将现有 `RuntimeSupervisor` 迁入 Daemon，使 desired state 驱动真实进程；
+- [已接线] Daemon 持有共享 `LocalAppManager/RuntimeSupervisor`，生命周期命令驱动真实进程；
+- Daemon 启动时按 desired state 恢复应用；
+- CLI Named Pipe 客户端与 `alex start/stop/restart/status/logs`；
 - 服务 observed state 和恢复信息持久化；
 - `alex start/stop/restart/status/logs`；
 - CLI、Shell 和 Manager 共享同一个 Runtime 状态；

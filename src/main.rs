@@ -181,6 +181,12 @@ enum Commands {
         /// Windows named-pipe endpoint.
         #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
         pipe: String,
+        /// Installed application root controlled by this daemon.
+        #[arg(long, default_value = "./target/apps")]
+        install_root: PathBuf,
+        /// Permission and audit state root.
+        #[arg(long, default_value = "./target/alexd/permissions")]
+        permissions_root: PathBuf,
     },
 }
 
@@ -341,9 +347,15 @@ fn require_webview2() -> Result<(), Box<dyn std::error::Error>> {
 fn execute() -> Result<(), Box<dyn std::error::Error>> {
     let cli = Cli::parse();
     match cli.command {
-        Commands::Daemon { state, pipe } => {
+        Commands::Daemon {
+            state,
+            pipe,
+            install_root,
+            permissions_root,
+        } => {
             eprintln!("alexd: listening on {pipe}");
-            alex::daemon::run_server(&state, &pipe)?;
+            let manager = Arc::new(LocalAppManager::open_with(&install_root, permissions_root)?);
+            alex::daemon::run_server(&state, &pipe, manager)?;
         }
         Commands::Create { path, id, template } => {
             let parsed = package::Template::parse(&template);

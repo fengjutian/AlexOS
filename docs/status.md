@@ -27,10 +27,14 @@ nav_order: 3
 `\\.\pipe\alex-runtime-v1`。控制协议使用版本化 JSON Lines envelope，当前接受
 `ping/list/start/stop/restart/status/logs` 命令；请求大小上限为 1 MiB。
 
-`start/stop/restart` 当前只通过原子状态文件持久化应用的 desired state，Daemon 重启后能够读取；
-现有 `RuntimeSupervisor` 尚未迁入 Daemon，所以这些命令还不会启动或停止真实 backend。`logs` 会明确
-返回未接线错误，不会虚假成功。Named Pipe 当前按连接顺序处理，专用客户端 CLI、并发连接管理和
-当前用户 ACL 加固仍待开发。
+Daemon 现在持有一个共享的 `LocalAppManager/RuntimeSupervisor`。`start/stop/restart/status` 会先
+验证应用已经安装，再操作真实 backend，并在成功后原子持久化 desired state；`list` 返回安装应用和
+实时 runtime snapshot，`logs` 返回 backend 日志尾部（最多 10,000 行）。没有 backend、应用未安装
+或启动失败时会明确报错，不会虚假成功。
+
+Daemon 启动时尚未根据已保存的 desired state 自动恢复进程，CLI 也尚未提供这些命令的 Named Pipe
+客户端。Named Pipe 当前按连接顺序处理，当前用户 ACL 加固、客户端身份校验、并发连接管理和可控
+shutdown 仍待开发。
 
 当前运行链路为：
 
