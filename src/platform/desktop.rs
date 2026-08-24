@@ -1,13 +1,45 @@
 //! Desktop interaction boundary used by the API layer.
-//!
-//! `LegacyDesktopPlatform` currently adapts the established Wry/Windows
-//! implementation. macOS can implement this contract without changing the
-//! router or Desktop API handlers.
 
 use std::path::PathBuf;
+use thiserror::Error;
 
-use crate::webview::native::NativeError;
-pub use crate::webview::native::{AppPaths, DialogFilter, OpenDialogSpec, SaveDialogSpec};
+#[derive(Debug, Error)]
+pub enum NativeError {
+    #[error("native capability failed: {0}")]
+    Failed(String),
+    #[error("native capability is unavailable on this platform")]
+    Unsupported,
+}
+
+#[derive(Debug, Clone)]
+pub struct AppPaths {
+    pub data_dir: PathBuf,
+    pub cache_dir: PathBuf,
+    pub temp_dir: PathBuf,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct DialogFilter {
+    pub name: String,
+    pub extensions: Vec<String>,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct OpenDialogSpec {
+    pub title: Option<String>,
+    pub default_path: Option<PathBuf>,
+    pub filters: Vec<DialogFilter>,
+    pub multiple: bool,
+    pub directory: bool,
+}
+
+#[derive(Debug, Clone, Default)]
+pub struct SaveDialogSpec {
+    pub title: Option<String>,
+    pub default_path: Option<PathBuf>,
+    pub filters: Vec<DialogFilter>,
+    pub suggested_name: Option<String>,
+}
 
 pub trait DesktopServices: Send + Sync {
     fn confirm_permission(&self, app_name: &str, permission: &str) -> Result<bool, NativeError>;
@@ -20,33 +52,42 @@ pub trait DesktopServices: Send + Sync {
     fn show_notification(&self, title: &str, body: &str) -> Result<(), NativeError>;
 }
 
+#[cfg(target_os = "windows")]
+mod windows;
+#[cfg(target_os = "windows")]
+use windows as implementation;
+#[cfg(not(target_os = "windows"))]
+mod portable;
+#[cfg(not(target_os = "windows"))]
+use portable as implementation;
+
 #[derive(Debug, Clone, Copy)]
 pub struct NativeDesktopPlatform;
 
 impl DesktopServices for NativeDesktopPlatform {
     fn confirm_permission(&self, app_name: &str, permission: &str) -> Result<bool, NativeError> {
-        crate::webview::native::confirm_permission(app_name, permission)
+        implementation::confirm_permission(app_name, permission)
     }
     fn clipboard_read_text(&self) -> Result<String, NativeError> {
-        crate::webview::native::clipboard_read_text()
+        implementation::clipboard_read_text()
     }
     fn clipboard_write_text(&self, text: String) -> Result<(), NativeError> {
-        crate::webview::native::clipboard_write_text(text)
+        implementation::clipboard_write_text(text)
     }
     fn app_paths(&self, app_id: &str) -> Result<AppPaths, NativeError> {
-        crate::webview::native::app_paths(app_id)
+        implementation::app_paths(app_id)
     }
     fn pick_paths(&self, spec: OpenDialogSpec) -> Result<Vec<PathBuf>, NativeError> {
-        crate::webview::native::pick_paths(spec)
+        implementation::pick_paths(spec)
     }
     fn pick_save_path(&self, spec: SaveDialogSpec) -> Result<Option<PathBuf>, NativeError> {
-        crate::webview::native::pick_save_path(spec)
+        implementation::pick_save_path(spec)
     }
     fn open_external(&self, url: &str) -> Result<(), NativeError> {
-        crate::webview::native::open_external(url)
+        implementation::open_external(url)
     }
     fn show_notification(&self, title: &str, body: &str) -> Result<(), NativeError> {
-        crate::webview::native::show_notification(title, body)
+        implementation::show_notification(title, body)
     }
 }
 
