@@ -33,12 +33,14 @@ pub fn run(
 #[cfg(windows)]
 pub mod windows {
     use std::{
+        collections::HashMap,
         path::{Path, PathBuf},
         sync::Arc,
         time::Duration,
     };
 
     use tao::{
+        dpi::{PhysicalPosition, PhysicalSize},
         event::{Event, WindowEvent},
         event_loop::{ControlFlow, EventLoopBuilder},
         window::WindowBuilder,
@@ -241,7 +243,7 @@ pub mod windows {
         let drop_router = Arc::clone(&router);
 
         let webview = WebViewBuilder::new()
-            .with_initialization_script(init_script)
+            .with_initialization_script(&init_script)
             .with_devtools(cfg!(debug_assertions) && std::env::var_os("ALEX_DEVTOOLS").is_some())
             .with_incognito(true)
             .with_clipboard(false)
@@ -283,7 +285,16 @@ pub mod windows {
             .with_url("alex://app/")
             .build(&window)?;
 
-        event_loop.run(move |event, _, control_flow| {
+        let child_proxy = event_loop.create_proxy();
+        let child_root = package_root.to_path_buf();
+        let child_frontend = manifest.frontend.entry.clone();
+        let child_init_script = init_script.clone();
+        let child_router = Arc::clone(&router);
+        let mut child_windows: HashMap<u64, tao::window::Window> = HashMap::new();
+        let mut child_webviews: HashMap<u64, wry::WebView> = HashMap::new();
+        let mut native_child_ids: HashMap<tao::window::WindowId, u64> = HashMap::new();
+
+        event_loop.run(move |event, event_loop_target, control_flow| {
             *control_flow =
                 ControlFlow::WaitUntil(std::time::Instant::now() + Duration::from_millis(50));
             match event {
@@ -296,9 +307,102 @@ pub mod windows {
                     HostCommand::MinimizeWindow => window.set_minimized(true),
                     HostCommand::MaximizeWindow => window.set_maximized(true),
                     HostCommand::CloseWindow => *control_flow = ControlFlow::Exit,
+                    HostCommand::CreateWindow(info) => {
+                        let mut builder = WindowBuilder::new()
+                            .with_title(&info.title)
+                            .with_inner_size(PhysicalSize::new(info.width, info.height));
+                        if let (Some(x), Some(y)) = (info.x, info.y) {
+                            builder = builder.with_position(PhysicalPosition::new(x, y));
+                        }
+                        match builder.build(event_loop_target) {
+                            Ok(child_window) => {
+                                let native_id = child_window.id();
+                                let ipc_router = Arc::clone(&child_router);
+                                let ipc_proxy = child_proxy.clone();
+                                let asset_root = child_root.clone();
+                                let frontend = child_frontend.clone();
+                                let url = if info.url.starts_with("alex://app/") {
+                                    info.url.clone()
+                                } else {
+                                    format!("alex://app/{}", info.url.trim_start_matches('/'))
+                                };
+                                let built = WebViewBuilder::new()
+                                    .with_initialization_script(child_init_script.clone())
+                                    .with_incognito(true)
+                                    .with_clipboard(false)
+                                    .with_navigation_handler(|url| {
+                                        crate::is_internal_webview_url(&url, "app")
+                                    })
+                                    .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+                                    .with_download_started_handler(|_, _| false)
+                                    .with_ipc_handler(move |request| {
+                                        let router = Arc::clone(&ipc_router);
+                                        let proxy = ipc_proxy.clone();
+                                        let body = request.body().clone();
+                                        std::thread::spawn(move || {
+                                            let response = router.dispatch_json(&body);
+                                            if let Ok(json) = serde_json::to_string(&response) {
+                                                let _ =
+                                                    proxy.send_event(UserEvent::IpcResponse(json));
+                                            }
+                                        });
+                                    })
+                                    .with_custom_protocol("alex".into(), move |_id, request| {
+                                        asset_response(&asset_root, &frontend, request.uri().path())
+                                    })
+                                    .with_url(&url)
+                                    .build(&child_window);
+                                match built {
+                                    Ok(child_webview) => {
+                                        native_child_ids.insert(native_id, info.id.raw());
+                                        child_windows.insert(info.id.raw(), child_window);
+                                        child_webviews.insert(info.id.raw(), child_webview);
+                                    }
+                                    Err(error) => {
+                                        eprintln!("alex window: failed to create webview: {error}")
+                                    }
+                                }
+                            }
+                            Err(error) => {
+                                eprintln!("alex window: failed to create window: {error}")
+                            }
+                        }
+                    }
+                    HostCommand::SetWindowBounds(id, bounds) => {
+                        if let Some(child) = child_windows.get(&id) {
+                            if let (Some(x), Some(y)) = (bounds.x, bounds.y) {
+                                child.set_outer_position(PhysicalPosition::new(x, y));
+                            }
+                            if let (Some(width), Some(height)) = (bounds.width, bounds.height) {
+                                child.set_inner_size(PhysicalSize::new(width, height));
+                            }
+                        }
+                    }
+                    HostCommand::SetWindowFullscreen(id, fullscreen) => {
+                        if let Some(child) = child_windows.get(&id) {
+                            child.set_fullscreen(
+                                fullscreen.then(|| tao::window::Fullscreen::Borderless(None)),
+                            );
+                        }
+                    }
+                    HostCommand::DestroyWindow(id) => {
+                        child_webviews.remove(&id);
+                        if let Some(child) = child_windows.remove(&id) {
+                            native_child_ids.remove(&child.id());
+                        }
+                    }
                 },
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                Event::WindowEvent {
+                    window_id, event, ..
+                } => match event {
+                    WindowEvent::CloseRequested => {
+                        if window_id == window.id() {
+                            *control_flow = ControlFlow::Exit;
+                        } else if let Some(id) = native_child_ids.remove(&window_id) {
+                            child_webviews.remove(&id);
+                            child_windows.remove(&id);
+                        }
+                    }
                     WindowEvent::Focused(focused) => emit_event(
                         &webview,
                         "window.focusChanged",

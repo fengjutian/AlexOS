@@ -1,5 +1,7 @@
 use std::path::PathBuf;
 
+use crate::windows::{WindowBounds, WindowInfo};
+
 use thiserror::Error;
 
 #[derive(Debug, Clone)]
@@ -8,6 +10,10 @@ pub enum HostCommand {
     MinimizeWindow,
     MaximizeWindow,
     CloseWindow,
+    CreateWindow(WindowInfo),
+    SetWindowBounds(u64, WindowBounds),
+    SetWindowFullscreen(u64, bool),
+    DestroyWindow(u64),
 }
 
 pub trait NativeHost: Send + Sync {

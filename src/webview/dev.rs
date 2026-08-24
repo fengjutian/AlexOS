@@ -248,6 +248,12 @@ mod windows {
                     HostCommand::MinimizeWindow => window.set_minimized(true),
                     HostCommand::MaximizeWindow => window.set_maximized(true),
                     HostCommand::CloseWindow => *control_flow = ControlFlow::Exit,
+                    HostCommand::CreateWindow(_)
+                    | HostCommand::SetWindowBounds(_, _)
+                    | HostCommand::SetWindowFullscreen(_, _)
+                    | HostCommand::DestroyWindow(_) => {
+                        eprintln!("alex dev: secondary-window command is only available in the production shell");
+                    }
                 },
                 Event::WindowEvent { event, .. } => match event {
                     WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,

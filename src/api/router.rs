@@ -1837,6 +1837,10 @@ impl ApiRouter {
             |permission| matches!(permission, Permission::WindowManage),
             "window.manage",
         )?;
+        self.execute_host(command)
+    }
+
+    fn execute_host(&self, command: HostCommand) -> ApiResult {
         self.native_host
             .as_ref()
             .ok_or(("NATIVE_UNAVAILABLE", "window host is unavailable".into()))?
@@ -1851,10 +1855,15 @@ impl ApiRouter {
             "window.open",
         )?;
         let spec: CreateWindowSpec = parse_params(params)?;
-        self.windows
+        let info = self
+            .windows
             .create(&self.manifest.id, spec)
-            .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
-            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
+        if let Err(error) = self.execute_host(HostCommand::CreateWindow(info.clone())) {
+            let _ = self.windows.destroy(&self.manifest.id, info.id);
+            return Err(error);
+        }
+        Ok(serde_json::to_value(info).unwrap_or(Value::Null))
     }
 
     fn window_list(&self) -> ApiResult {
@@ -1907,10 +1916,20 @@ impl ApiRouter {
             object.remove("windowId");
         }
         let bounds: WindowBounds = parse_params(&filtered)?;
-        self.windows
+        let info = self
+            .windows
             .set_bounds(&self.manifest.id, id, bounds)
-            .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
-            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
+        self.execute_host(HostCommand::SetWindowBounds(
+            id.raw(),
+            WindowBounds {
+                x: info.x,
+                y: info.y,
+                width: Some(info.width),
+                height: Some(info.height),
+            },
+        ))?;
+        Ok(serde_json::to_value(info).unwrap_or(Value::Null))
     }
 
     fn window_set_fullscreen(&self, params: &Value) -> ApiResult {
@@ -1923,10 +1942,12 @@ impl ApiRouter {
             .get("fullscreen")
             .and_then(|v| v.as_bool())
             .ok_or_else(|| ("INVALID_PARAMS", "missing `fullscreen`".to_owned()))?;
-        self.windows
+        let info = self
+            .windows
             .set_fullscreen(&self.manifest.id, id, value)
-            .map(|info| serde_json::to_value(info).unwrap_or(Value::Null))
-            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
+        self.execute_host(HostCommand::SetWindowFullscreen(id.raw(), value))?;
+        Ok(serde_json::to_value(info).unwrap_or(Value::Null))
     }
 
     fn window_is_fullscreen(&self, params: &Value) -> ApiResult {
@@ -1949,8 +1970,9 @@ impl ApiRouter {
         let id = self.parse_window_id(params)?;
         self.windows
             .destroy(&self.manifest.id, id)
-            .map(|_| json!({ "destroyed": true }))
-            .map_err(|error| ("WINDOW_ERROR", error.to_string()))
+            .map_err(|error| ("WINDOW_ERROR", error.to_string()))?;
+        self.execute_host(HostCommand::DestroyWindow(id.raw()))?;
+        Ok(json!({ "destroyed": true }))
     }
 
     fn menu_set_application_menu(&self, params: &Value) -> ApiResult {
