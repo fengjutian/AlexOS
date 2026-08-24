@@ -150,8 +150,8 @@ export function createAlexClient(transport = browserTransport()) {
       async openFiles(options = {}) {
         const { filters, defaultPath, title, timeoutMs, signal } = options;
         const result = await invoke(
-          "dialog.openFile",
-          { filters, defaultPath, title, multiple: true },
+          "dialog.openFiles",
+          { filters, defaultPath, title },
           { timeoutMs, signal },
         );
         return result.paths ?? [];
@@ -302,6 +302,34 @@ export function createAlexClient(transport = browserTransport()) {
       async uninstall({ id }, options) {
         return invoke("system.uninstall", { id }, options);
       },
+      container: Object.freeze({
+        create(spec, options) {
+          return invoke("system.container.create", spec, options);
+        },
+        start(instanceId, options) {
+          return invoke("system.container.start", { instanceId }, options);
+        },
+        stop(instanceId, stopOptions = {}, options) {
+          return invoke("system.container.stop", { instanceId, ...stopOptions }, options);
+        },
+        restart(instanceId, options) {
+          return invoke("system.container.restart", { instanceId }, options);
+        },
+        remove(instanceId, removeOptions = {}, options) {
+          return invoke("system.container.remove", { instanceId, ...removeOptions }, options);
+        },
+        inspect(instanceId, options) {
+          return invoke("system.container.inspect", { instanceId }, options);
+        },
+        async list(filter = {}, options) {
+          const result = await invoke("system.container.list", filter, options);
+          return result.containers ?? [];
+        },
+        async logs(instanceId, tail = 200, options) {
+          const result = await invoke("system.container.logs", { instanceId, tail }, options);
+          return result.entries ?? [];
+        },
+      }),
     }),
   });
 }

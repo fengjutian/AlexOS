@@ -197,6 +197,34 @@ export interface AlexEventMap {
     kind: "create" | "modify" | "remove" | "rename" | "other";
     path: string;
   };
+  fileDrop: {
+    files: FileTokenGrant[];
+    position: { x: number; y: number };
+  };
+}
+
+export interface ContainerCreateInput {
+  appId: string;
+  appVersion: string;
+  instanceId?: string;
+  isolation?: "process" | "job" | "appcontainer" | "wsl-oci";
+}
+
+export interface ContainerView {
+  instanceId: string;
+  appId: string;
+  appVersion: string;
+  desired: "created" | "running" | "stopped" | "removed";
+  observed: string;
+  isolationRequested: string;
+  isolationEffective: string;
+  pid?: number;
+  port?: number;
+  restartCount: number;
+  generation: number;
+  createdAt: string;
+  updatedAt: string;
+  instanceDir: string;
 }
 
 export interface InstalledAppSummary {
@@ -375,6 +403,24 @@ export interface AlexClient {
      * that was removed.
      */
     uninstall(options: UninstallOptions): Promise<{ removed: string }>;
+    readonly container: {
+      create(spec: ContainerCreateInput, options?: InvokeOptions): Promise<ContainerView>;
+      start(instanceId: string, options?: InvokeOptions): Promise<ContainerView>;
+      stop(
+        instanceId: string,
+        stopOptions?: { timeoutMs?: number },
+        options?: InvokeOptions,
+      ): Promise<ContainerView>;
+      restart(instanceId: string, options?: InvokeOptions): Promise<ContainerView>;
+      remove(
+        instanceId: string,
+        removeOptions?: { deleteData?: boolean },
+        options?: InvokeOptions,
+      ): Promise<{ removed: boolean }>;
+      inspect(instanceId: string, options?: InvokeOptions): Promise<ContainerView>;
+      list(filter?: Record<string, unknown>, options?: InvokeOptions): Promise<ContainerView[]>;
+      logs(instanceId: string, tail?: number, options?: InvokeOptions): Promise<unknown[]>;
+    };
   };
 }
 

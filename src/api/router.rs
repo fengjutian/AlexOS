@@ -9,6 +9,9 @@ use base64::Engine as _;
 use serde::Deserialize;
 use serde_json::{Value, json};
 
+use crate::container::{
+    ContainerContext, ContainerFilter, ContainerService, CreateRequest, DefaultContainerService,
+};
 use crate::{
     authorization::{AuditEntry as AuthorizationAuditEntry, PermissionDecision, PermissionStore},
     event_bus::{EventBus, SubscriptionFilter},
@@ -43,6 +46,7 @@ pub struct ApiRouter {
     native_host: Option<Arc<dyn NativeHost>>,
     system_install_root: Option<PathBuf>,
     system_trust_root: Option<PathBuf>,
+    container_service: Option<Arc<DefaultContainerService>>,
     event_bus: Arc<EventBus>,
     file_tokens: Arc<FileTokenStore>,
     storage: Option<AppStorage>,
@@ -111,6 +115,7 @@ impl ApiRouter {
             native_host: None,
             system_install_root: None,
             system_trust_root: None,
+            container_service: None,
             event_bus: bus,
             file_tokens: tokens,
             storage,
@@ -153,6 +158,10 @@ impl ApiRouter {
     /// (which require `kind: "plugin"`). Apps that don't call into
     /// `system.*` never see this.
     pub fn with_system_install_root(mut self, root: PathBuf) -> Self {
+        self.container_service = ContainerContext::with_default_data_root(root.clone())
+            .and_then(DefaultContainerService::new)
+            .map(Arc::new)
+            .ok();
         self.system_install_root = Some(root);
         self
     }
@@ -171,6 +180,37 @@ impl ApiRouter {
     /// every new dependency into a builder method.
     pub fn event_bus(&self) -> Arc<EventBus> {
         Arc::clone(&self.event_bus)
+    }
+
+    /// Convert an OS file-drop into app-scoped, short-lived grants and
+    /// enqueue it for WebView delivery. Returns false when the package did
+    /// not declare (or the user revoked) `filesystem.drop`.
+    pub fn deliver_file_drop(&self, paths: Vec<PathBuf>, x: i32, y: i32) -> bool {
+        let declared = self
+            .manifest
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, Permission::FilesystemDrop));
+        if !declared || !self.permission_granted("filesystem.drop") {
+            return false;
+        }
+        let files: Vec<Value> = paths
+            .iter()
+            .filter_map(|path| {
+                self.file_tokens
+                    .issue(&self.manifest.id, path, &[FileOp::Read])
+                    .ok()
+                    .and_then(|grant| serde_json::to_value(grant).ok())
+            })
+            .collect();
+        if files.is_empty() {
+            return false;
+        }
+        self.event_bus.deliver(
+            "fileDrop",
+            &json!({ "files": files, "position": { "x": x, "y": y } }),
+        );
+        true
     }
 
     /// Drop every resource this router owns. The shell calls
@@ -298,6 +338,14 @@ impl ApiRouter {
             "system.setPermission" => self.system_set_permission(&request.params),
             "system.listTrustedPublishers" => self.system_list_trusted_publishers(),
             "system.readAuditLog" => self.system_read_audit_log(&request.params),
+            "system.container.create" => self.system_container_create(&request.params),
+            "system.container.start" => self.system_container_start(&request.params),
+            "system.container.stop" => self.system_container_stop(&request.params),
+            "system.container.restart" => self.system_container_restart(&request.params),
+            "system.container.remove" => self.system_container_remove(&request.params),
+            "system.container.inspect" => self.system_container_inspect(&request.params),
+            "system.container.list" => self.system_container_list(&request.params),
+            "system.container.logs" => self.system_container_logs(&request.params),
             // ---- window ----------------------------------------------------
             "window.setTitle" => self.window_set_title(&request.params),
             "window.minimize" => self.window_command(HostCommand::MinimizeWindow),
@@ -1153,6 +1201,7 @@ impl ApiRouter {
             "filesystem.delete",
             "filesystem.watch",
             "filesystem.unwatch",
+            "filesystem.drop",
             "dialog.open",
             "clipboard.read",
             "clipboard.write",
@@ -1167,6 +1216,7 @@ impl ApiRouter {
             "runtime.cancel",
             "events.subscribe",
             "events.unsubscribe",
+            "system.container",
             // Process spawn is real: Command::spawn on
             // Unix, taskkill /T /F on Windows. The
             // registry tracks pids and reaps on exit.
@@ -1174,7 +1224,6 @@ impl ApiRouter {
             "process.kill",
         ];
         let experimental: &[&str] = &[
-            "filesystem.drop",
             "storage",
             "paths",
             "dialog.save",
@@ -1662,6 +1711,110 @@ impl ApiRouter {
             values.len()
         );
         Ok(json!({ "entries": values }))
+    }
+
+    fn container_service(&self) -> Result<&DefaultContainerService, (&'static str, String)> {
+        self.require_plugin()?;
+        self.require_permission(
+            |permission| matches!(permission, Permission::SystemManageApps),
+            "system.manageApps",
+        )?;
+        self.container_service.as_deref().ok_or((
+            "CONTAINER_UNAVAILABLE",
+            "container service requires a configured system install root".into(),
+        ))
+    }
+
+    fn container_instance_id<'a>(
+        &self,
+        params: &'a Value,
+    ) -> Result<&'a str, (&'static str, String)> {
+        params
+            .get("instanceId")
+            .and_then(Value::as_str)
+            .filter(|value| !value.is_empty())
+            .ok_or(("INVALID_PARAMS", "missing `instanceId`".into()))
+    }
+
+    fn container_result<T: serde::Serialize>(
+        result: Result<T, crate::container::ContainerError>,
+    ) -> ApiResult {
+        result
+            .and_then(|value| {
+                serde_json::to_value(value)
+                    .map_err(|error| crate::container::ContainerError::Backend(error.to_string()))
+            })
+            .map_err(|error| ("CONTAINER_ERROR", error.to_string()))
+    }
+
+    fn system_container_create(&self, params: &Value) -> ApiResult {
+        let service = self.container_service()?;
+        let request: CreateRequest = parse_params(params)?;
+        Self::container_result(service.create(request.into_spec()))
+    }
+
+    fn system_container_start(&self, params: &Value) -> ApiResult {
+        let service = self.container_service()?;
+        Self::container_result(service.start(self.container_instance_id(params)?))
+    }
+
+    fn system_container_stop(&self, params: &Value) -> ApiResult {
+        let service = self.container_service()?;
+        let timeout_ms = params
+            .get("timeoutMs")
+            .and_then(Value::as_u64)
+            .unwrap_or(5_000)
+            .clamp(100, 60_000);
+        Self::container_result(service.stop(
+            self.container_instance_id(params)?,
+            Duration::from_millis(timeout_ms),
+        ))
+    }
+
+    fn system_container_restart(&self, params: &Value) -> ApiResult {
+        let service = self.container_service()?;
+        Self::container_result(service.restart(self.container_instance_id(params)?))
+    }
+
+    fn system_container_remove(&self, params: &Value) -> ApiResult {
+        let service = self.container_service()?;
+        service
+            .remove(
+                self.container_instance_id(params)?,
+                params
+                    .get("deleteData")
+                    .and_then(Value::as_bool)
+                    .unwrap_or(false),
+            )
+            .map(|_| json!({ "removed": true }))
+            .map_err(|error| ("CONTAINER_ERROR", error.to_string()))
+    }
+
+    fn system_container_inspect(&self, params: &Value) -> ApiResult {
+        let service = self.container_service()?;
+        Self::container_result(service.inspect(self.container_instance_id(params)?))
+    }
+
+    fn system_container_list(&self, params: &Value) -> ApiResult {
+        let service = self.container_service()?;
+        let filter: ContainerFilter = parse_params(params)?;
+        service
+            .list(&filter)
+            .map(|containers| json!({ "containers": containers }))
+            .map_err(|error| ("CONTAINER_ERROR", error.to_string()))
+    }
+
+    fn system_container_logs(&self, params: &Value) -> ApiResult {
+        let service = self.container_service()?;
+        let tail = params
+            .get("tail")
+            .and_then(Value::as_u64)
+            .unwrap_or(200)
+            .clamp(1, 5_000) as usize;
+        service
+            .logs(self.container_instance_id(params)?, tail)
+            .map(|entries| json!({ "entries": entries }))
+            .map_err(|error| ("CONTAINER_ERROR", error.to_string()))
     }
 
     // ------------------------------------------------------------------

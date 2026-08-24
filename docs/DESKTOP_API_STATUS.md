@@ -20,7 +20,8 @@ authoritative source for "can the page call this for real".
 | `filesystem.exists` / `stat` / `readDir` | `api.rs` → `std::fs` (scope-checked) |
 | `filesystem.createDir` / `remove` / `rename` / `copy` | `api.rs` (symlink-aware recursive delete) |
 | `filesystem.watch` / `unwatch` | notify watcher → event bus → WebView `__alexDeliver` |
-| `dialog.openFile` | `native.rs::pick_file` via `rfd` |
+| `filesystem.drop` | Wry drag/drop → short-lived read grants → `fileDrop` event |
+| `dialog.openFile` / `openFiles` / `openDirectory` / `saveFile` | `native.rs::pick_paths` / `pick_save_path` via `rfd`, with file-token grants |
 | `clipboard.readText` / `writeText` | `native.rs` via `arboard` |
 | `system.openExternal` | `native.rs::open_external` |
 | `system.info` / `system.capabilities` | `api.rs` |
@@ -29,6 +30,7 @@ authoritative source for "can the page call this for real".
 | `notification.show` | `native.rs::show_notification` via WinRT toast |
 | `runtime.invoke` / `status` / `restart` / `cancel` | `runtime.rs` `RuntimeHandle` + per-request cancellation |
 | `events.subscribe` / `unsubscribe` | app-scoped event bus delivered through the WebView bridge |
+| `system.container.create/start/stop/restart/remove/inspect/list/logs` | plugin-only facade over `DefaultContainerService` |
 | `media.camera` / `microphone` / `geolocation` | prompt only; `getUserMedia` / geolocation are browser APIs gated by `system.requestPermission` |
 
 ## In registry / dispatcher but **not wired to a real native side**
@@ -40,10 +42,8 @@ avoid relying on them until each is wired.
 
 | API | Status | Required native work |
 | --- | --- | --- |
-| `filesystem.drop` | declared permission only | shell needs to convert OS-level drop events into a `fileDrop` bus event with token-bearing payloads |
 | `storage.*` | atomic on-disk store at `%LOCALAPPDATA%\AlexOS\apps\<id>\storage\store.json` works; lives in `storage.rs` | — (actually fully working; review moved to wired in a follow-up) |
 | `paths.dataDir` / `cacheDir` / `tempDir` | host-computed paths returned | — (actually fully working) |
-| `dialog.openFiles` / `openDirectory` / `saveFile` | `rfd` calls exist; tested via token-mint logic | shell needs to wire `pick_paths` for `multiple`/`directory` shapes and `pick_save_path` for `saveFile` |
 | `window.create` / `list` / `getBounds` / `setBounds` / `setFullscreen` / `isFullscreen` / `destroy` | metadata-only registry in `windows.rs`; no actual `tao::Window` is created | `shell.rs` needs a `WindowRegistry` ↔ `tao::Window` adapter; each new window opens a separate `WebView` |
 | `menu.setApplicationMenu` / `setContextMenu` | `MenuStore` holds the template | host needs to render the template via `tao::menu` or Win32 `HMENU` |
 | `tray.create` / `destroy` | `MenuStore` holds `TrayInfo`; tray icon is symlink/canonical-path checked | host needs to register a `Shell_NotifyIcon` icon and click handler that emits `tray.clicked` events |

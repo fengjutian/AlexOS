@@ -168,6 +168,7 @@ mod windows {
         let package_id = serde_json::to_string(&manifest.id)?;
         let init_script = BRIDGE.replace("__ALEX_PACKAGE_ID__", &package_id)
             + &crate::permission_shim::shim_source(&manifest.permissions);
+        let drop_router = Arc::clone(&router);
 
         let webview = WebViewBuilder::new()
             .with_initialization_script(init_script)
@@ -183,6 +184,12 @@ mod windows {
             .with_navigation_handler(|url| crate::is_internal_webview_url(&url, "app"))
             .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
             .with_download_started_handler(|_, _| false)
+            .with_drag_drop_handler(move |event| match event {
+                wry::DragDropEvent::Drop { paths, position } => {
+                    drop_router.deliver_file_drop(paths, position.0, position.1)
+                }
+                _ => false,
+            })
             .with_ipc_handler(move |request| {
                 let router = Arc::clone(&ipc_router);
                 let proxy = proxy.clone();
