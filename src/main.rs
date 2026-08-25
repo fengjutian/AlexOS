@@ -462,8 +462,13 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             println!("built frontend at {}", path.display());
         }
         Commands::Validate { path } => {
-            let app = load_app(&path)?;
-            println!("valid: {} {} ({})", app.name, app.version, app.id);
+            let app = load_application(&path)?;
+            println!(
+                "valid: {} {} ({})",
+                app.name(),
+                app.version(),
+                app.id()
+            );
         }
         Commands::Inspect { path } => {
             let app = load_app(&path)?;
