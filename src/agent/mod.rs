@@ -18,6 +18,8 @@ use serde_json::{Value, json};
 use thiserror::Error;
 
 const SCHEMA_VERSION: u32 = 1;
+const MAX_STATE_BYTES: usize = 8 * 1024 * 1024;
+const MAX_EVENT_BYTES: usize = 1024 * 1024;
 
 #[derive(Debug, Error)]
 pub enum AgentError {
@@ -125,6 +127,8 @@ pub struct PendingToolCall {
     pub idempotency_key: String,
     pub idempotent: bool,
     pub approved: bool,
+    #[serde(default)]
+    pub attempted: bool,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -213,6 +217,9 @@ impl AgentManager {
         validate_spec(&spec)?;
         if initial_messages.len() > 256 {
             return Err(AgentError::Invalid("too many initial messages".into()));
+        }
+        if serde_json::to_vec(&initial_messages).is_ok_and(|value| value.len() > MAX_EVENT_BYTES) {
+            return Err(AgentError::Invalid("initial messages exceed 1 MiB".into()));
         }
         let id = new_id()?;
         let now = now_ms();
@@ -312,6 +319,24 @@ impl AgentManager {
             .lock()
             .ok()
             .and_then(|mut values| values.remove(run_id));
+        if let Err(error) = &result
+            && let Ok(mut run) = self.status(application, run_id)
+            && !matches!(
+                run.state,
+                AgentState::Paused | AgentState::Cancelled | AgentState::WaitingApproval
+            )
+        {
+            run.state = AgentState::Failed;
+            run.last_error = Some(error.to_string());
+            run.updated_at_ms = now_ms();
+            let _ = self.save(&run);
+            let event = AgentEvent::Error {
+                code: agent_error_code(error).into(),
+                message: error.to_string(),
+            };
+            let _ = self.append_event(&run, &event);
+            let _ = emit(event);
+        }
         result
     }
 
@@ -338,19 +363,34 @@ impl AgentManager {
         self.checkpoint(&mut run, emit)?;
         loop {
             if cancellation.load(Ordering::Acquire) {
+                let current = self.load(&run.id)?;
+                if matches!(current.state, AgentState::Paused | AgentState::Cancelled) {
+                    return Ok(current);
+                }
                 return self.finish(run, AgentState::Cancelled, None, emit);
             }
             self.check_budget(&run)?;
-            if let Some(call) = run.pending_tool.take() {
+            if let Some(mut call) = run.pending_tool.take() {
+                if call.attempted && !call.idempotent {
+                    call.approved = false;
+                }
                 if !call.approved && (call.require_approval() || !call.idempotent) {
                     run.pending_tool = Some(call);
                     run.state = AgentState::WaitingApproval;
                     self.checkpoint(&mut run, emit)?;
                     return Ok(run);
                 }
+                call.attempted = true;
                 run.state = AgentState::WaitingTool;
                 run.pending_tool = Some(call.clone());
                 self.checkpoint(&mut run, emit)?;
+                if cancellation.load(Ordering::Acquire)
+                    || self.load(&run.id)?.generation != run.generation
+                {
+                    return Err(AgentError::Conflict(
+                        "agent run was superseded before tool execution".into(),
+                    ));
+                }
                 let result = self
                     .mcp
                     .get(application, &call.binding)
@@ -433,10 +473,18 @@ impl AgentManager {
                     idempotency_key: format!("{}:{}:{}", run.id, run.generation, run.step),
                     idempotent: spec.idempotent,
                     approved: !spec.require_approval && spec.idempotent,
+                    attempted: false,
                 };
-                emit(AgentEvent::ToolIntent { call: call.clone() })?;
-                run.pending_tool = Some(call);
+                let requires_approval = !call.approved;
+                run.pending_tool = Some(call.clone());
+                if requires_approval {
+                    run.state = AgentState::WaitingApproval;
+                }
                 self.checkpoint(&mut run, emit)?;
+                emit(AgentEvent::ToolIntent { call })?;
+                if requires_approval {
+                    return Ok(run);
+                }
                 continue;
             }
             if saw_finish {
@@ -493,6 +541,11 @@ impl AgentManager {
         Ok(run)
     }
     pub fn pause(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
+        if let Ok(values) = self.cancellations.lock()
+            && let Some(token) = values.get(run_id)
+        {
+            token.store(true, Ordering::Release);
+        }
         self.set_terminalish(application, run_id, AgentState::Paused)
     }
     pub fn cancel(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
@@ -558,6 +611,14 @@ impl AgentManager {
         run: &mut AgentRun,
         emit: &mut dyn FnMut(AgentEvent) -> Result<(), AgentError>,
     ) -> Result<(), AgentError> {
+        if self.run_dir(&run.id).join("state.json").is_file() {
+            let current = self.load(&run.id)?;
+            if current.generation != run.generation {
+                return Err(AgentError::Conflict(
+                    "agent run generation was superseded".into(),
+                ));
+            }
+        }
         run.updated_at_ms = now_ms();
         self.save(run)?;
         let state = AgentEvent::State {
@@ -625,16 +686,23 @@ impl AgentManager {
         fs::create_dir_all(&dir)?;
         atomic_json(&dir.join("state.json"), run)?;
         atomic_json(
-            &dir.join("checkpoints")
-                .join(format!("{:08}.json", run.step)),
+            &dir.join("checkpoints").join(format!(
+                "{:08}-{}.json",
+                run.step,
+                agent_state_name(run.state)
+            )),
             run,
         )
     }
     fn append_event(&self, run: &AgentRun, event: &AgentEvent) -> Result<(), AgentError> {
         let path = self.run_dir(&run.id).join("events.jsonl");
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        serde_json::to_writer(&mut file, event)
-            .map_err(|error| AgentError::Invalid(error.to_string()))?;
+        let encoded =
+            serde_json::to_vec(event).map_err(|error| AgentError::Invalid(error.to_string()))?;
+        if encoded.len() > MAX_EVENT_BYTES {
+            return Err(AgentError::Invalid("agent event exceeds 1 MiB".into()));
+        }
+        file.write_all(&encoded)?;
         file.write_all(b"\n")?;
         file.flush()?;
         Ok(())
@@ -666,6 +734,13 @@ pub fn validate_spec(spec: &AgentSpec) -> Result<(), AgentError> {
     if spec.tools.len() > 128 {
         return Err(AgentError::Invalid("too many tools".into()));
     }
+    if spec
+        .system_prompt
+        .as_ref()
+        .is_some_and(|value| value.len() > 64 * 1024)
+    {
+        return Err(AgentError::Invalid("system prompt exceeds 64 KiB".into()));
+    }
     if spec.budget.max_steps == 0
         || spec.budget.max_steps > 1000
         || spec.budget.max_tokens == 0
@@ -674,9 +749,16 @@ pub fn validate_spec(spec: &AgentSpec) -> Result<(), AgentError> {
     {
         return Err(AgentError::Invalid("invalid agent budget".into()));
     }
+    let mut names = std::collections::BTreeSet::new();
     for tool in &spec.tools {
         validate_identity(&tool.binding)?;
         validate_identity(&tool.name)?;
+        if !names.insert(tool.name.clone()) {
+            return Err(AgentError::Invalid(format!(
+                "duplicate agent tool name {:?}",
+                tool.name
+            )));
+        }
     }
     Ok(())
 }
@@ -721,12 +803,41 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), AgentError> {
         path.parent()
             .ok_or_else(|| AgentError::Invalid("state path has no parent".into()))?,
     )?;
-    serde_json::to_writer_pretty(&mut temp, value)
-        .map_err(|error| AgentError::Invalid(error.to_string()))?;
+    let encoded =
+        serde_json::to_vec_pretty(value).map_err(|error| AgentError::Invalid(error.to_string()))?;
+    if encoded.len() > MAX_STATE_BYTES {
+        return Err(AgentError::Invalid("agent state exceeds 8 MiB".into()));
+    }
+    temp.write_all(&encoded)?;
     temp.as_file().sync_all()?;
     crate::platform::native()
         .atomic_replace(temp.path(), path)
         .map_err(AgentError::Io)
+}
+
+fn agent_state_name(state: AgentState) -> &'static str {
+    match state {
+        AgentState::Queued => "queued",
+        AgentState::Running => "running",
+        AgentState::WaitingApproval => "waiting-approval",
+        AgentState::WaitingTool => "waiting-tool",
+        AgentState::Paused => "paused",
+        AgentState::Completed => "completed",
+        AgentState::Failed => "failed",
+        AgentState::Cancelled => "cancelled",
+    }
+}
+
+fn agent_error_code(error: &AgentError) -> &'static str {
+    match error {
+        AgentError::NotFound(_) => "AGENT_NOT_FOUND",
+        AgentError::Invalid(_) => "AGENT_INVALID",
+        AgentError::Conflict(_) => "AGENT_CONFLICT",
+        AgentError::Budget(_) => "AGENT_BUDGET_EXCEEDED",
+        AgentError::Io(_) => "AGENT_PERSISTENCE_FAILED",
+        AgentError::Model(_) => "AGENT_MODEL_FAILED",
+        AgentError::Tool(_) => "AGENT_TOOL_FAILED",
+    }
 }
 
 #[cfg(test)]
@@ -908,5 +1019,77 @@ mod tests {
             reopened.status("com.example.app", &run.id).unwrap().state,
             AgentState::Queued
         );
+    }
+
+    #[test]
+    fn budget_failure_is_persisted_with_a_stable_event_code() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = runtime(&temp);
+        let run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: vec![],
+                    budget: AgentBudget {
+                        max_steps: 1,
+                        max_tokens: 1,
+                        max_tool_calls: 0,
+                        max_wall_time_ms: 1_000,
+                    },
+                },
+                vec![],
+            )
+            .unwrap();
+        assert!(matches!(
+            manager.execute("com.example.app", &run.id, &mut |_| Ok(())),
+            Err(AgentError::Budget(_))
+        ));
+        assert_eq!(
+            manager.status("com.example.app", &run.id).unwrap().state,
+            AgentState::Failed
+        );
+        assert!(manager.history("com.example.app", &run.id, 100).unwrap().iter().any(|event| matches!(event, AgentEvent::Error { code, .. } if code == "AGENT_BUDGET_EXCEEDED")));
+    }
+
+    #[test]
+    fn interrupted_non_idempotent_tool_requires_fresh_approval() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = runtime(&temp);
+        let run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: vec![AgentToolSpec {
+                        binding: "tools".into(),
+                        name: "write".into(),
+                        idempotent: false,
+                        require_approval: true,
+                    }],
+                    budget: AgentBudget::default(),
+                },
+                vec![],
+            )
+            .unwrap();
+        let mut interrupted = run.clone();
+        interrupted.state = AgentState::WaitingTool;
+        interrupted.pending_tool = Some(PendingToolCall {
+            binding: "tools".into(),
+            name: "write".into(),
+            arguments: json!({}),
+            idempotency_key: "intent-1".into(),
+            idempotent: false,
+            approved: true,
+            attempted: true,
+        });
+        manager.save(&interrupted).unwrap();
+        let recovered = manager
+            .execute("com.example.app", &run.id, &mut |_| Ok(()))
+            .unwrap();
+        assert_eq!(recovered.state, AgentState::WaitingApproval);
+        assert!(!recovered.pending_tool.unwrap().approved);
     }
 }

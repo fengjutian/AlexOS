@@ -116,6 +116,36 @@ test("MCP subscription and MRTR APIs decode stream events and route responses", 
   assert.deepEqual(calls.map(({ method }) => method), ["mcp.listen", "mcp.callToolInteractive", "mcp.respondInput"]);
 });
 
+test("Agent Runtime SDK creates, streams, controls, and reads persistent runs", async () => {
+  const calls = [];
+  const client = createAlexClient({
+    async invoke(method, params) {
+      calls.push({ method, params });
+      if (method === "agent.list") return { runs: [{ id: "run-1" }] };
+      if (method === "agent.history") return { events: [{ type: "checkpoint", step: 1 }] };
+      return { id: params.runId ?? "run-1", state: "queued" };
+    },
+    async *stream(method, params) {
+      calls.push({ method, params });
+      yield new TextEncoder().encode(JSON.stringify({ type: "state", state: "running", generation: 1 }));
+      yield new TextEncoder().encode(JSON.stringify({ type: "state", state: "completed", generation: 1 }));
+    },
+  });
+  const run = await client.agent.create({ model: "local/test@1" }, [{ role: "user", content: "hi" }]);
+  const events = [];
+  for await (const event of client.agent.start(run.id)) events.push(event);
+  await client.agent.pause(run.id);
+  await client.agent.resume(run.id);
+  await client.agent.approve(run.id);
+  await client.agent.deny(run.id);
+  await client.agent.cancel(run.id);
+  await client.agent.status(run.id);
+  assert.equal((await client.agent.list())[0].id, "run-1");
+  assert.equal((await client.agent.history(run.id))[0].type, "checkpoint");
+  assert.equal(events.at(-1).state, "completed");
+  assert.deepEqual(calls.map(({ method }) => method), ["agent.create", "agent.start", "agent.pause", "agent.resume", "agent.approve", "agent.deny", "agent.cancel", "agent.status", "agent.list", "agent.history"]);
+});
+
 test("app instance namespace uses the product-facing API", async () => {
   const calls = [];
   const client = createAlexClient({
