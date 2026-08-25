@@ -896,6 +896,7 @@ mod tests {
         ServiceStatus(String, String),
         ListServices(String),
         InvokeService(String, String, String, String, serde_json::Value, u64),
+        ServiceEndpoint(String, String),
     }
 
     struct StubManager {
@@ -1050,6 +1051,20 @@ mod tests {
             ));
             Ok(json!({ "echo": params }))
         }
+        fn service_endpoint(
+            &self,
+            id: &str,
+            service: &str,
+        ) -> Result<crate::runtime::ServiceEndpoint, ManagerError> {
+            self.calls
+                .lock()
+                .unwrap()
+                .push(StubCall::ServiceEndpoint(id.into(), service.into()));
+            Ok(crate::runtime::ServiceEndpoint {
+                port: 1,
+                token: "private-runtime-token".into(),
+            })
+        }
         fn permissions(&self, _id: &str) -> Result<Vec<PermissionState>, ManagerError> {
             Ok(Vec::new())
         }
@@ -1180,6 +1195,27 @@ mod tests {
         assert!(!response.ok);
         assert!(response.error.unwrap().contains("timeoutMs"));
         assert!(stub.snapshot().is_empty());
+    }
+
+    #[test]
+    fn websocket_tunnel_returns_capability_url_without_runtime_token() {
+        let (_temp, service, stub) = service_with_stub();
+        let response = service.handle(request(ControlCommand::OpenServiceWebSocket {
+            app_id: "com.example.api".into(),
+            service: "events".into(),
+        }));
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.unwrap();
+        let base_url = result["baseUrl"].as_str().unwrap();
+        assert!(base_url.starts_with("ws://127.0.0.1:"));
+        assert!(!result.to_string().contains("private-runtime-token"));
+        assert_eq!(
+            stub.snapshot(),
+            vec![StubCall::ServiceEndpoint(
+                "com.example.api".into(),
+                "events".into()
+            )]
+        );
     }
 
     #[test]

@@ -253,4 +253,22 @@ mod tests {
             } if service == "main"
         ));
     }
+
+    #[test]
+    fn websocket_tunnel_defaults_to_main_service() {
+        let request: ControlRequest = serde_json::from_value(serde_json::json!({
+            "protocol": 1,
+            "id": "ws-1",
+            "command": {
+                "type": "openServiceWebSocket",
+                "params": { "appId": "com.example.agent" }
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            request.command,
+            ControlCommand::OpenServiceWebSocket { app_id, service }
+                if app_id == "com.example.agent" && service == "main"
+        ));
+    }
 }
