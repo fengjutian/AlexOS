@@ -631,12 +631,79 @@ fn now_ms() -> Option<u64> {
 mod tests {
     use super::*;
 
+    fn persisted_service(name: &str, desired: DesiredState) -> crate::daemon::ServiceControlState {
+        crate::daemon::ServiceControlState {
+            service: name.into(),
+            desired,
+            updated_at_ms: 0,
+            observed: ObservedState::Stopped,
+            last_error: None,
+        }
+    }
+
+    fn declared_service(name: &str, depends_on: &[&str]) -> ServiceSummary {
+        ServiceSummary {
+            name: name.into(),
+            depends_on: depends_on.iter().map(|value| (*value).into()).collect(),
+            status: crate::runtime::service_supervisor::ServiceStatus::Pending,
+            restart_count: 0,
+            last_error: None,
+        }
+    }
+
     fn request(command: ControlCommand) -> ControlRequest {
         ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: "test-1".into(),
             command,
         }
+    }
+
+    #[test]
+    fn service_recovery_order_respects_dependencies() {
+        let declared = vec![
+            declared_service("api", &["worker"]),
+            declared_service("worker", &["database"]),
+            declared_service("database", &[]),
+        ];
+        let persisted = std::collections::BTreeMap::from([
+            (
+                "api".into(),
+                persisted_service("api", DesiredState::Running),
+            ),
+            (
+                "worker".into(),
+                persisted_service("worker", DesiredState::Running),
+            ),
+            (
+                "database".into(),
+                persisted_service("database", DesiredState::Running),
+            ),
+        ]);
+        assert_eq!(
+            recovery_service_order(&declared, &persisted).unwrap(),
+            ["database", "worker", "api"]
+        );
+    }
+
+    #[test]
+    fn service_recovery_rejects_a_stopped_dependency() {
+        let declared = vec![
+            declared_service("api", &["database"]),
+            declared_service("database", &[]),
+        ];
+        let persisted = std::collections::BTreeMap::from([
+            (
+                "api".into(),
+                persisted_service("api", DesiredState::Running),
+            ),
+            (
+                "database".into(),
+                persisted_service("database", DesiredState::Stopped),
+            ),
+        ]);
+        let error = recovery_service_order(&declared, &persisted).unwrap_err();
+        assert!(error.contains("dependency \"database\" is not desired=running"));
     }
 
     #[test]
