@@ -366,9 +366,22 @@ export interface McpAuditEntry {
   binding: string;
   tool: string;
   phase: "started" | "finished";
+  argumentHash?: string;
+  previousHash?: string;
+  recordHash?: string;
   outcome?: "success" | "failure";
   durationMs?: number;
   errorKind?: string;
+}
+
+export interface McpAuditReport {
+  entries: McpAuditEntry[];
+  integrity: {
+    valid: boolean;
+    checkedRecords: number;
+    damagedLine?: number;
+    reason?: string;
+  };
 }
 
 export interface McpDiscoverResult {
@@ -535,6 +548,7 @@ export interface AlexClient {
     oauthAuthorize(binding: string, clientId: string, scopes?: string[], options?: InvokeOptions): Promise<McpOAuthAuthorization & { redirectUri: string }>;
     oauthComplete(state: string, code: string, issuer: string, options?: InvokeOptions): Promise<{ application: string; binding: string; authorized: boolean }>;
     audit(limit?: number, options?: InvokeOptions): Promise<McpAuditEntry[]>;
+    auditReport(limit?: number, options?: InvokeOptions): Promise<McpAuditReport>;
     listResources(binding: string, cursor?: string, options?: InvokeOptions): Promise<{ resources: unknown[]; nextCursor?: string }>;
     readResource(binding: string, uri: string, options?: InvokeOptions): Promise<{ contents: unknown[] }>;
     listPrompts(binding: string, cursor?: string, options?: InvokeOptions): Promise<{ prompts: unknown[]; nextCursor?: string }>;

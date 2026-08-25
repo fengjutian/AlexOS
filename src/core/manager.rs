@@ -1679,7 +1679,20 @@ impl ManagerRouter {
             "manager.set_permission" => match parse_set_permission(&request.params) {
                 Ok((id, permission, decision)) => {
                     match self.manager.set_permission(&id, &permission, decision) {
-                        Ok(()) => json_response(&request.id, &serde_json::json!({ "ok": true })),
+                        Ok(()) => {
+                            if permission == "mcp.use"
+                                && decision == PermissionDecision::Denied
+                            {
+                                let _ = self.daemon_command(
+                                    "mcp-permission-revoked",
+                                    crate::daemon::ControlCommand::McpRevokeApplication {
+                                        app_id: id.clone(),
+                                        reason: "mcp.use permission revoked by user".into(),
+                                    },
+                                );
+                            }
+                            json_response(&request.id, &serde_json::json!({ "ok": true }))
+                        }
                         Err(error) => manager_error_response(&request.id, error),
                     }
                 }

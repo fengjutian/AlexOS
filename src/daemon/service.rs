@@ -184,6 +184,7 @@ pub struct DaemonService {
     mcp_tokens: Option<crate::mcp::oauth::TokenVault>,
     mcp_oauth_pending: Arc<Mutex<BTreeMap<String, PendingMcpOAuth>>>,
     mcp_input_pending: Arc<Mutex<BTreeMap<String, PendingMcpInput>>>,
+    mcp_approvals: crate::mcp::ApprovalStore,
     models: Option<crate::model::ModelManager>,
     agents: Option<crate::agent::AgentManager>,
 }
@@ -204,6 +205,7 @@ impl DaemonService {
             mcp_tokens: None,
             mcp_oauth_pending: Arc::new(Mutex::new(BTreeMap::new())),
             mcp_input_pending: Arc::new(Mutex::new(BTreeMap::new())),
+            mcp_approvals: crate::mcp::ApprovalStore::default(),
             models: None,
             agents: None,
         }
@@ -469,13 +471,32 @@ impl DaemonService {
                 binding,
                 name,
                 arguments,
-            } => self.mcp_call_tool(&id, &app_id, &binding, &name, arguments),
+                approval_token,
+            } => self.mcp_call_tool(&id, &app_id, &binding, &name, arguments, approval_token.as_deref()),
+            ControlCommand::McpApprovalIssue { app_id, binding, name, argument_hash } => {
+                self.require_mcp_tool_policy(&app_id, &binding, &name, true).and_then(|_| self.mcp_approvals.issue(
+                    crate::mcp::ApprovalBinding {
+                        application: app_id,
+                        connection: binding,
+                        tool: name,
+                        argument_hash,
+                    },
+                    crate::mcp::ApprovalStore::DEFAULT_TTL,
+                ).map(|token| json!({"approvalToken": token, "expiresInMs": crate::mcp::ApprovalStore::DEFAULT_TTL.as_millis()}))
+                 .map_err(|error| error.to_string()))
+            }
+            ControlCommand::McpRevokeApplication { app_id, reason } => {
+                let approvals = self.mcp_approvals.revoke_application(&app_id);
+                let streams = self.streams.close_app(&app_id);
+                Ok(json!({"revokedApprovals": approvals, "cancelledStreams": streams, "reason": reason}))
+            }
             ControlCommand::McpCallToolInteractive {
                 app_id,
                 binding,
                 stream_id,
                 name,
                 arguments,
+                approval_token,
                 allowed_input_methods,
             } => self.mcp_call_tool_interactive(
                 &app_id,
@@ -483,6 +504,7 @@ impl DaemonService {
                 &stream_id,
                 &name,
                 arguments,
+                approval_token.as_deref(),
                 allowed_input_methods,
             ),
             ControlCommand::McpInputRespond {
@@ -1523,6 +1545,47 @@ impl DaemonService {
         Ok(json!({ "tools": tools, "nextCursor": next_cursor }))
     }
 
+    /// Resolve MCP authorization from the daemon-owned installed manifest.
+    /// When no manager is attached (isolated protocol/unit tests), policy is
+    /// enforced by the embedding caller as before. Production alexd always
+    /// has a manager and therefore never trusts a client-provided flag.
+    fn require_mcp_tool_policy(
+        &self,
+        app_id: &str,
+        binding: &str,
+        tool: &str,
+        issuing_approval: bool,
+    ) -> Result<bool, String> {
+        let Some(manager) = &self.manager else {
+            return Ok(issuing_approval);
+        };
+        let details = manager.get_app(app_id).map_err(|error| error.to_string())?;
+        let granted = details.permissions.iter().any(|permission| {
+            permission.name == "mcp.use"
+                && permission.decision == crate::authorization::PermissionDecision::Granted
+        });
+        if !granted {
+            self.mcp_approvals.revoke_application(app_id);
+            return Err("mcp.use is not granted or was revoked".into());
+        }
+        let policy = details.manifest.permissions.iter().find_map(|permission| {
+            if let crate::permission::Permission::McpUse {
+                servers, tools, always_ask, ..
+            } = permission
+                && servers.iter().any(|server| server == binding)
+                && tools.get(binding).is_some_and(|allowed| allowed.iter().any(|name| name == tool))
+            {
+                return Some(always_ask.get(binding)
+                    .is_some_and(|names| names.iter().any(|name| name == tool)));
+            }
+            None
+        }).ok_or_else(|| "MCP binding or tool is not declared by the installed manifest".to_owned())?;
+        if issuing_approval && !policy {
+            return Err("MCP tool does not use the always-ask policy".into());
+        }
+        Ok(policy)
+    }
+
     fn mcp_call_tool(
         &self,
         call_id: &str,
@@ -1530,11 +1593,22 @@ impl DaemonService {
         binding: &str,
         name: &str,
         arguments: serde_json::Value,
+        approval_token: Option<&str>,
     ) -> Result<serde_json::Value, String> {
+        let always_ask = self.require_mcp_tool_policy(app_id, binding, name, false)?;
         let mut started = crate::mcp::AuditLog::entry(call_id, app_id, binding, name, "started");
         started.argument_hash = Some(
             crate::mcp::audit_argument_hash(&arguments).map_err(|error| error.to_string())?,
         );
+        if always_ask && approval_token.is_none() {
+            return Err("MCP approval token is required by the installed manifest".into());
+        }
+        if let Some(token) = approval_token {
+            self.mcp_approvals.consume(token, &crate::mcp::ApprovalBinding {
+                application: app_id.into(), connection: binding.into(), tool: name.into(),
+                argument_hash: started.argument_hash.clone().expect("argument hash assigned"),
+            }).map_err(|error| error.to_string())?;
+        }
         if let Some(audit) = &self.mcp_audit {
             audit
                 .append(&started)
@@ -1545,6 +1619,7 @@ impl DaemonService {
             .mcp
             .get(app_id, binding)
             .and_then(|client| client.call_tool(name, arguments))
+            .and_then(crate::mcp::filter_tool_result)
             .and_then(|result| {
                 serde_json::to_value(result)
                     .map_err(|error| crate::mcp::McpError::Protocol(error.to_string()))
@@ -1592,13 +1667,13 @@ impl DaemonService {
     }
 
     fn mcp_audit(&self, app_id: &str, limit: usize) -> Result<serde_json::Value, String> {
-        let entries = self
-            .mcp_audit
+        let audit = self.mcp_audit
             .as_ref()
-            .ok_or_else(|| "MCP audit is unavailable".to_owned())?
-            .recent(app_id, limit)
+            .ok_or_else(|| "MCP audit is unavailable".to_owned())?;
+        let integrity = audit.verify().map_err(|error| error.to_string())?;
+        let entries = audit.recent(app_id, limit)
             .map_err(|error| error.to_string())?;
-        Ok(json!({ "entries": entries }))
+        Ok(json!({ "entries": entries, "integrity": integrity }))
     }
 
     fn mcp_call_tool_interactive(
@@ -1608,8 +1683,10 @@ impl DaemonService {
         stream_id: &str,
         name: &str,
         arguments: serde_json::Value,
+        approval_token: Option<&str>,
         allowed_input_methods: Vec<String>,
     ) -> Result<serde_json::Value, String> {
+        let always_ask = self.require_mcp_tool_policy(app_id, binding, name, false)?;
         let base = self
             .mcp
             .get(app_id, binding)
@@ -1635,6 +1712,15 @@ impl DaemonService {
         audit_entry.argument_hash = Some(
             crate::mcp::audit_argument_hash(&arguments).map_err(|error| error.to_string())?,
         );
+        if always_ask && approval_token.is_none() {
+            return Err("MCP approval token is required by the installed manifest".into());
+        }
+        if let Some(token) = approval_token {
+            self.mcp_approvals.consume(token, &crate::mcp::ApprovalBinding {
+                application: app_id.into(), connection: binding.into(), tool: name.into(),
+                argument_hash: audit_entry.argument_hash.clone().expect("argument hash assigned"),
+            }).map_err(|error| error.to_string())?;
+        }
         if let Some(audit) = &self.mcp_audit {
             audit.append(&audit_entry).map_err(|error| {
                 format!("MCP audit unavailable; interactive tool was not invoked: {error}")
@@ -1648,7 +1734,8 @@ impl DaemonService {
             .name("alex-mcp-mrtr".into())
             .spawn(move || {
                 let started_at = std::time::Instant::now();
-                let result = client.call_tool(&tool, arguments);
+                let result = client.call_tool(&tool, arguments)
+                    .and_then(crate::mcp::filter_tool_result);
                 audit_entry.timestamp_ms = now_ms().unwrap_or_default();
                 audit_entry.phase = "finished".into();
                 audit_entry.duration_ms = Some(
@@ -2840,13 +2927,28 @@ mod tests {
         }));
         assert!(tools.ok);
         assert_eq!(tools.result.unwrap()["tools"][0]["name"], "echo");
+        let arguments = json!({"text":"hello"});
+        let issued = service.handle(request(ControlCommand::McpApprovalIssue {
+            app_id: "com.example.app".into(),
+            binding: "tools".into(),
+            name: "echo".into(),
+            argument_hash: crate::mcp::audit_argument_hash(&arguments).unwrap(),
+        }));
+        assert!(issued.ok, "{:?}", issued.error);
+        let approval_token = issued.result.unwrap()["approvalToken"].as_str().unwrap().to_owned();
         let called = service.handle(request(ControlCommand::McpCallTool {
             app_id: "com.example.app".into(),
             binding: "tools".into(),
             name: "echo".into(),
-            arguments: json!({"text":"hello"}),
+            arguments: arguments.clone(),
+            approval_token: Some(approval_token.clone()),
         }));
         assert!(called.ok);
+        let replay = service.handle(request(ControlCommand::McpCallTool {
+            app_id: "com.example.app".into(), binding: "tools".into(), name: "echo".into(),
+            arguments, approval_token: Some(approval_token),
+        }));
+        assert!(!replay.ok, "an approval token must be consumed exactly once");
         let audit = std::fs::read_to_string(temp.path().join("audit").join("mcp.jsonl")).unwrap();
         let entries = audit
             .lines()
@@ -2898,6 +3000,7 @@ mod tests {
             stream_id: "mrtr-1".into(),
             name: "confirm".into(),
             arguments: json!({}),
+            approval_token: None,
             allowed_input_methods: vec!["elicitation/create".into()],
         }));
         assert!(opened.ok, "{:?}", opened.error);

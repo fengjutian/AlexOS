@@ -13,6 +13,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
+use base64::Engine as _;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 use crate::platform::PlatformServices;
 
@@ -95,20 +97,19 @@ impl ModelStore {
         mut manifest: ModelManifest,
     ) -> Result<ModelManifest, ModelError> {
         validate_model_id(&manifest.id)?;
-        let data = fs::read(source)?;
-        let actual = format!("sha256:{}", hex_digest(&data));
+        let actual = format!("sha256:{}", file_hex_digest(source)?);
         if manifest.digest != actual {
             return Err(ModelError::DigestMismatch {
                 expected: manifest.digest,
                 actual,
             });
         }
-        manifest.size_bytes = data.len() as u64;
+        manifest.size_bytes = fs::metadata(source)?.len();
         let digest = manifest.digest.trim_start_matches("sha256:");
         let blob = self.blobs_dir().join(digest);
         if !blob.exists() {
             let temp = self.root.join("partial").join(format!("{digest}.tmp"));
-            fs::write(&temp, &data)?;
+            fs::copy(source, &temp)?;
             fs::rename(temp, &blob)?;
         }
         let mut index = self.load_index()?;
@@ -191,6 +192,82 @@ impl ModelStore {
     fn save_manifest(&self, value: &ModelManifest) -> Result<(), ModelError> {
         atomic_json(&self.manifest_path(&value.id), value)
     }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ModelDownloadRequest {
+    pub url: String,
+    pub manifest: ModelManifest,
+    /// Base64 Ed25519 public key and signature over canonical manifest JSON.
+    pub publisher_key: String,
+    pub signature: String,
+    #[serde(default)]
+    pub accept_license: bool,
+}
+
+impl ModelStore {
+    pub fn download_and_import(
+        &self,
+        request: &ModelDownloadRequest,
+        progress: &mut impl FnMut(u64, u64) -> bool,
+    ) -> Result<ModelManifest, ModelError> {
+        validate_download_request(request)?;
+        let partial = self.root.join("partial").join(format!("{}.download.part", safe_filename(&request.manifest.id)));
+        let expected = request.manifest.digest.strip_prefix("sha256:")
+            .ok_or_else(|| ModelError::InvalidMetadata("model digest must use sha256:".into()))?;
+        let agent = ureq::Agent::config_builder()
+            .timeout_global(Some(std::time::Duration::from_secs(60 * 60)))
+            .https_only(true)
+            .build().into();
+        crate::core::update::resumable_download(
+            &agent, &request.url, &partial, request.manifest.size_bytes, expected,
+            64 * 1024 * 1024 * 1024, progress,
+        ).map_err(|error| ModelError::Worker(error.to_string()))?;
+        scan_model_blob(&partial, &request.manifest)?;
+        let imported = self.import(&partial, request.manifest.clone())?;
+        let _ = fs::remove_file(&partial);
+        Ok(imported)
+    }
+}
+
+fn validate_download_request(request: &ModelDownloadRequest) -> Result<(), ModelError> {
+    validate_model_id(&request.manifest.id)?;
+    if request.manifest.license.as_deref().is_some_and(|license| !license.trim().is_empty())
+        && !request.accept_license
+    {
+        return Err(ModelError::InvalidMetadata("model license has not been accepted".into()));
+    }
+    if request.manifest.source.as_deref() != Some(request.url.as_str()) {
+        return Err(ModelError::InvalidMetadata("signed model source does not match download URL".into()));
+    }
+    let key: [u8; 32] = base64::engine::general_purpose::STANDARD.decode(&request.publisher_key)
+        .map_err(|_| ModelError::InvalidMetadata("invalid publisher key".into()))?
+        .try_into().map_err(|_| ModelError::InvalidMetadata("invalid publisher key length".into()))?;
+    let signature: [u8; 64] = base64::engine::general_purpose::STANDARD.decode(&request.signature)
+        .map_err(|_| ModelError::InvalidMetadata("invalid model signature".into()))?
+        .try_into().map_err(|_| ModelError::InvalidMetadata("invalid model signature length".into()))?;
+    let payload = serde_json::to_vec(&request.manifest)
+        .map_err(|error| ModelError::InvalidMetadata(error.to_string()))?;
+    VerifyingKey::from_bytes(&key).map_err(|error| ModelError::InvalidMetadata(error.to_string()))?
+        .verify(&payload, &Signature::from_bytes(&signature))
+        .map_err(|_| ModelError::InvalidMetadata("model signature verification failed".into()))
+}
+
+fn scan_model_blob(path: &Path, manifest: &ModelManifest) -> Result<(), ModelError> {
+    let mut file = fs::File::open(path)?;
+    let mut magic = [0u8; 8];
+    let read = file.read(&mut magic)?;
+    let magic = &magic[..read];
+    if magic.starts_with(b"MZ") || magic.starts_with(b"\x7fELF") || magic.starts_with(b"#!")
+        || magic.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]) || magic.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
+    {
+        return Err(ModelError::InvalidMetadata("model blob looks like executable content".into()));
+    }
+    if manifest.format.eq_ignore_ascii_case("gguf") && !magic.starts_with(b"GGUF") {
+        return Err(ModelError::InvalidMetadata("GGUF model has invalid magic bytes".into()));
+    }
+    Ok(())
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -788,11 +865,23 @@ fn validate_model_id(id: &str) -> Result<(), ModelError> {
 fn safe_filename(id: &str) -> String {
     id.replace('/', "__").replace('@', "--")
 }
+#[cfg(test)]
 fn hex_digest(bytes: &[u8]) -> String {
     Sha256::digest(bytes)
         .iter()
         .map(|v| format!("{v:02x}"))
         .collect()
+}
+fn file_hex_digest(path: &Path) -> Result<String, ModelError> {
+    let mut file = fs::File::open(path)?;
+    let mut hasher = Sha256::new();
+    let mut buffer = [0u8; 1024 * 1024];
+    loop {
+        let count = file.read(&mut buffer)?;
+        if count == 0 { break; }
+        hasher.update(&buffer[..count]);
+    }
+    Ok(hasher.finalize().iter().map(|value| format!("{value:02x}")).collect())
 }
 fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), ModelError> {
     let parent = path
@@ -812,6 +901,7 @@ fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), ModelError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use ed25519_dalek::{Signer, SigningKey};
     fn manifest(data: &[u8], id: &str) -> ModelManifest {
         ModelManifest {
             id: id.into(),
@@ -856,6 +946,41 @@ mod tests {
             Err(ModelError::DigestMismatch { .. })
         ));
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn model_download_requires_license_acceptance_and_valid_source_bound_signature() {
+        let signing = SigningKey::from_bytes(&[7u8; 32]);
+        let mut model = manifest(b"GGUFweights", "local/signed@1");
+        model.size_bytes = 11;
+        model.license = Some("apache-2.0".into());
+        model.source = Some("https://models.example/signed.gguf".into());
+        let payload = serde_json::to_vec(&model).unwrap();
+        let mut request = ModelDownloadRequest {
+            url: model.source.clone().unwrap(),
+            manifest: model,
+            publisher_key: base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes()),
+            signature: base64::engine::general_purpose::STANDARD.encode(signing.sign(&payload).to_bytes()),
+            accept_license: false,
+        };
+        assert!(validate_download_request(&request).unwrap_err().to_string().contains("license"));
+        request.accept_license = true;
+        validate_download_request(&request).unwrap();
+        request.url = "https://attacker.example/model.gguf".into();
+        assert!(validate_download_request(&request).is_err());
+    }
+
+    #[test]
+    fn model_scanner_rejects_executables_and_invalid_gguf() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("blob");
+        let model = manifest(b"", "local/test@1");
+        fs::write(&path, b"MZ executable").unwrap();
+        assert!(scan_model_blob(&path, &model).is_err());
+        fs::write(&path, b"not gguf").unwrap();
+        assert!(scan_model_blob(&path, &model).is_err());
+        fs::write(&path, b"GGUF valid").unwrap();
+        scan_model_blob(&path, &model).unwrap();
     }
 
     #[test]

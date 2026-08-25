@@ -252,25 +252,49 @@ fn download_package(
         "{}-{}.alex.part",
         manifest.app_id, manifest.version
     ));
+    resumable_download(
+        agent,
+        &manifest.url,
+        &partial,
+        manifest.size,
+        &manifest.sha256,
+        MAX_DOWNLOAD_BYTES,
+        &mut |downloaded, total| {
+            let percent = 15 + ((downloaded.saturating_mul(70) / total.max(1)).min(70) as u8);
+            progress("downloading", percent)
+        },
+    )
+}
+
+pub(crate) fn resumable_download(
+    agent: &ureq::Agent,
+    url: &str,
+    partial: &Path,
+    expected_size: u64,
+    sha256: &str,
+    max_bytes: u64,
+    progress: &mut impl FnMut(u64, u64) -> bool,
+) -> Result<PathBuf, UpdateError> {
+    require_https(url)?;
     let metadata_path = resume_meta_path(&partial);
     let metadata = std::fs::read(&metadata_path)
         .ok()
         .and_then(|bytes| serde_json::from_slice::<ResumeMetadata>(&bytes).ok());
     let mut offset = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
     if (offset > 0 && metadata.is_none())
-        || offset > manifest.size
+        || offset > expected_size
         || metadata.as_ref().is_some_and(|m| {
-            m.url != manifest.url || m.expected_size != manifest.size || m.sha256 != manifest.sha256
+            m.url != url || m.expected_size != expected_size || m.sha256 != sha256
         })
     {
         let _ = std::fs::remove_file(&partial);
         let _ = std::fs::remove_file(&metadata_path);
         offset = 0;
     }
-    if offset == manifest.size && file_sha256(&partial)? == manifest.sha256 {
-        return Ok(partial);
+    if offset == expected_size && file_sha256(&partial)? == sha256 {
+        return Ok(partial.to_path_buf());
     }
-    let mut request = agent.get(&manifest.url);
+    let mut request = agent.get(url);
     if offset > 0 {
         request = request.header("Range", format!("bytes={offset}-"));
         if let Some(etag) = metadata.as_ref().and_then(|m| m.etag.as_deref()) {
@@ -306,17 +330,17 @@ fn download_package(
     std::fs::write(
         &metadata_path,
         serde_json::to_vec_pretty(&ResumeMetadata {
-            url: manifest.url.clone(),
+            url: url.to_owned(),
             etag,
-            expected_size: manifest.size,
-            sha256: manifest.sha256.clone(),
+            expected_size,
+            sha256: sha256.to_owned(),
         })
         .map_err(|error| UpdateError::Manifest(error.to_string()))?,
     )?;
     let mut reader = response
         .body_mut()
         .with_config()
-        .limit(MAX_DOWNLOAD_BYTES + 1)
+        .limit(max_bytes + 1)
         .reader();
     let mut output = OpenOptions::new()
         .create(true)
@@ -346,23 +370,22 @@ fn download_package(
             break;
         }
         size += count as u64;
-        if size > MAX_DOWNLOAD_BYTES {
-            return Err(UpdateError::Transport("download exceeds 512 MiB".into()));
+        if size > max_bytes {
+            return Err(UpdateError::Transport(format!("download exceeds {max_bytes} bytes")));
         }
         output.write_all(&buffer[..count])?;
         hasher.update(&buffer[..count]);
-        let percent = 15 + ((size.saturating_mul(70) / manifest.size.max(1)).min(70) as u8);
-        if !progress("downloading", percent) {
-            return Err(UpdateError::Transport("update cancelled".into()));
+        if !progress(size, expected_size) {
+            return Err(UpdateError::Transport("download cancelled".into()));
         }
     }
-    if size != manifest.size || format!("{:x}", hasher.finalize()) != manifest.sha256 {
+    if size != expected_size || format!("{:x}", hasher.finalize()) != sha256 {
         return Err(UpdateError::Manifest(
             "download size or SHA-256 mismatch".into(),
         ));
     }
     output.flush()?;
-    Ok(partial)
+    Ok(partial.to_path_buf())
 }
 
 fn resume_meta_path(partial: &Path) -> PathBuf {

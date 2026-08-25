@@ -79,6 +79,10 @@ pub enum Permission {
         resources: std::collections::BTreeMap<String, Vec<String>>,
         #[serde(default)]
         prompts: std::collections::BTreeMap<String, Vec<String>>,
+        /// Tools that require fresh native user confirmation for every call.
+        /// Keys are MCP binding names and values are exact tool names.
+        #[serde(default, rename = "alwaysAsk")]
+        always_ask: std::collections::BTreeMap<String, Vec<String>>,
     },
     #[serde(rename = "model.use")]
     ModelUse { models: Vec<String> },

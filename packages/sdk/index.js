@@ -247,7 +247,15 @@ export function createAlexClient(transport = browserTransport()) {
       },
       async audit(limit = 200, options) {
         const result = await invoke("mcp.audit", { limit }, options);
+        if (result.integrity && !result.integrity.valid) {
+          console.error(
+            `Alex MCP audit integrity failure at line ${result.integrity.damagedLine ?? "unknown"}: ${result.integrity.reason ?? "hash-chain mismatch"}`,
+          );
+        }
         return result.entries ?? [];
+      },
+      auditReport(limit = 200, options) {
+        return invoke("mcp.audit", { limit }, options);
       },
       listResources(binding, cursor, options) {
         return invoke("mcp.listResources", { binding, cursor }, options);

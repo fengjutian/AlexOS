@@ -183,6 +183,37 @@ struct ModelSecretParams {
 }
 
 impl ApiRouter {
+    fn mcp_approval_token(
+        &self,
+        app_id: &str,
+        binding: &str,
+        name: &str,
+        arguments: &Value,
+    ) -> Result<Option<String>, (&'static str, String)> {
+        let always_ask = self.manifest.permissions.iter().any(|permission| {
+            matches!(permission, Permission::McpUse { always_ask, .. }
+                if always_ask.get(binding).is_some_and(|tools| tools.iter().any(|tool| tool == name)))
+        });
+        if !always_ask {
+            return Ok(None);
+        }
+        let prompt = format!("MCP {binding}: {name}");
+        let approved = self.native_host.as_ref()
+            .and_then(|host| host.confirm_permission(&self.manifest.name, &prompt).ok())
+            .or_else(|| self.desktop_services.confirm_permission(&self.manifest.name, &prompt).ok())
+            .unwrap_or(false);
+        if !approved {
+            return Err(("MCP_APPROVAL_DENIED", "the user denied this MCP tool call".into()));
+        }
+        let argument_hash = crate::mcp::audit_argument_hash(arguments)
+            .map_err(|error| ("MCP_APPROVAL_FAILED", error.to_string()))?;
+        let issued = self.daemon_ai("mcp-approval-issue", crate::daemon::ControlCommand::McpApprovalIssue {
+            app_id: app_id.into(), binding: binding.into(), name: name.into(), argument_hash,
+        })?;
+        issued.get("approvalToken").and_then(Value::as_str).map(str::to_owned)
+            .ok_or(("MCP_APPROVAL_FAILED", "daemon returned no approval token".into())).map(Some)
+    }
+
     fn daemon_ai(&self, operation: &str, command: crate::daemon::ControlCommand) -> ApiResult {
         self.runtime
             .as_ref()
@@ -356,6 +387,9 @@ impl ApiRouter {
             .and_then(|runtime| runtime.app_id())
             .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
             .to_owned();
+        let approval_token = self.mcp_approval_token(
+            &app_id, &params.binding, &params.name, &params.arguments,
+        )?;
         self.daemon_ai(
             "mcp-call-tool",
             crate::daemon::ControlCommand::McpCallTool {
@@ -363,6 +397,7 @@ impl ApiRouter {
                 binding: params.binding,
                 name: params.name,
                 arguments: params.arguments,
+                approval_token,
             },
         )
     }
@@ -391,6 +426,9 @@ impl ApiRouter {
             allowed_input_methods.push("roots/list".into());
         }
         let stream_id = format!("mcp-mrtr:{app_id}:{}:{request_id}", params.binding);
+        let approval_token = self.mcp_approval_token(
+            &app_id, &params.binding, &params.name, &params.arguments,
+        )?;
         self.daemon_ai(
             "mcp-call-tool-interactive",
             crate::daemon::ControlCommand::McpCallToolInteractive {
@@ -399,6 +437,7 @@ impl ApiRouter {
                 stream_id,
                 name: params.name,
                 arguments: params.arguments,
+                approval_token,
                 allowed_input_methods,
             },
         )

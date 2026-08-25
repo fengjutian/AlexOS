@@ -211,6 +211,18 @@ pub enum ControlCommand {
         name: String,
         #[serde(default)]
         arguments: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_token: Option<String>,
+    },
+    McpApprovalIssue {
+        app_id: String,
+        binding: String,
+        name: String,
+        argument_hash: String,
+    },
+    McpRevokeApplication {
+        app_id: String,
+        reason: String,
     },
     McpCallToolInteractive {
         app_id: String,
@@ -219,6 +231,8 @@ pub enum ControlCommand {
         name: String,
         #[serde(default)]
         arguments: Value,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        approval_token: Option<String>,
         allowed_input_methods: Vec<String>,
     },
     McpInputRespond {
@@ -630,6 +644,7 @@ mod tests {
                 binding: "files".into(),
                 name: "read_file".into(),
                 arguments: serde_json::json!({"path":"README.md"}),
+                approval_token: None,
             },
             ControlCommand::McpOAuthBegin {
                 app_id: "com.example.app".into(),
