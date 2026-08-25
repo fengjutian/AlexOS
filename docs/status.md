@@ -111,12 +111,15 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - App Manager、Daemon、Dev 和 `ApplicationSupervisor` 已消费统一模型；
 - v2 多服务能够按依赖 layer 启动、失败回滚、反向停止，并聚合应用/服务状态；
 - 每服务健康检查、watchdog、重启策略、独立日志、环境变量和端口已接线；
-- Daemon 恢复服务级 desired state 时按依赖排序，依赖未声明为 running 时拒绝恢复下游服务。
+- Daemon 恢复服务级 desired state 时按依赖排序，依赖未声明为 running 时拒绝恢复下游服务；
+- 服务级 resources 配额已接入 Manifest v2（`resources.memoryMb` / `cpuPercent` / `processes` /
+  `dataQuotaMb`），含校验并投影到统一 `ServiceDescriptor`；硬性 enforcement 仍属 0.3 受管 Runtime。
 
 限制：
 
 - v2 的 Python/Native 仅完成声明和校验，尚无对应 Runtime Provider；
-- 服务级 CPU、内存、磁盘和子进程 resources 配额尚未接入 Manifest v2；
+- 服务级 CPU、内存、磁盘和子进程配额当前仅「声明 + 校验 + 投影」，尚未在
+  service 启动路径强制（Job Object 内存/进程数与磁盘配额属 0.3）；
 - headless Agent 尚无独立产品入口和 GUI E2E；
 - 没有图标、作者、许可证、最小 Alex 版本和平台条件；
 - 没有 Manifest Schema 文件或自动代码生成。

@@ -40,7 +40,9 @@ nav_order: 4
 - [已完成] 多服务依赖分层启动、失败回滚、反向停止、聚合状态和 generation 防旧任务写回；
 - [已完成] 每服务 health、restart、独立日志、env 和 port；
 - [已完成] Daemon 按服务 desired state 和依赖顺序恢复，缺失 running 依赖时安全拒绝；
-- 服务级 resources 配额；
+- [已完成] 服务级 resources 配额（`memoryMb` / `cpuPercent` / `processes` / `dataQuotaMb`）接入
+  Manifest v2 schema、校验并投影到统一 `ServiceDescriptor`；
+- 服务级 resources 配额的硬性 enforcement（Job Object 内存/进程数、磁盘配额）——属 0.3 受管 Runtime；
 - 无 frontend 的后台/Agent 应用产品入口和完整 E2E。
 
 ### 0.3 受管 Runtime
