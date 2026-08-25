@@ -562,7 +562,7 @@ fn recovery_service_order<'a>(
         .collect();
     for name in &desired {
         let spec = specs
-            .get(name)
+            .get(name.as_str())
             .ok_or_else(|| format!("persisted service {name:?} is no longer declared"))?;
         for dependency in &spec.depends_on {
             if !desired.contains(dependency.as_str()) {
