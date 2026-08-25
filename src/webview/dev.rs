@@ -839,7 +839,8 @@ mod windows {
                                         let router = Arc::clone(&ipc_router);
                                         let proxy = ipc_proxy.clone();
                                         let body = request.body().clone();
-                                        let _ = crate::runtime::task_executor::ipc_executor()
+                                        let fallback_proxy = proxy.clone();
+                                        if crate::runtime::task_executor::ipc_executor()
                                             .submit(move || {
                                                 let response = router.dispatch_json_for_window(
                                                     &body,
@@ -852,7 +853,20 @@ mod windows {
                                                             json,
                                                         ));
                                                 }
-                                            });
+                                            })
+                                            .is_err()
+                                        {
+                                            let response = crate::ipc::Response::error(
+                                                "unknown",
+                                                "HOST_BUSY",
+                                                "host IPC queue is full",
+                                            );
+                                            if let Ok(json) = serde_json::to_string(&response) {
+                                                let _ = fallback_proxy.send_event(
+                                                    UserEvent::IpcResponse(Some(child_id), json),
+                                                );
+                                            }
+                                        }
                                     })
                                     .with_custom_protocol("alex".into(), move |_id, request| {
                                         asset_response(&asset_root, &frontend, request.uri().path())
@@ -925,13 +939,18 @@ mod windows {
             }
 
             for (event, delivered) in router.event_bus().drain_pending() {
-                crate::shell::windows::emit_subscribed(
-                    &webview,
-                    &event,
-                    &delivered.subscription_id,
-                    delivered.sequence,
-                    &delivered.payload,
-                );
+                let target = delivered
+                    .window_id
+                    .and_then(|id| secondary_windows.webview(id));
+                if delivered.window_id.is_none() || target.is_some() {
+                    crate::shell::windows::emit_subscribed(
+                        target.unwrap_or(&webview),
+                        &event,
+                        &delivered.subscription_id,
+                        delivered.sequence,
+                        &delivered.payload,
+                    );
+                }
             }
 
             // 100 ms tick: drain dev commands while the event loop is otherwise idle.
