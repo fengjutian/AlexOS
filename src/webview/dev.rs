@@ -558,7 +558,7 @@ mod windows {
         dev::{is_ignored, load_alexignore},
         manifest::AppManifest,
         manifest_v2::{FrontendDev, ServiceDev},
-        native::{HostCommand, NativeError},
+        native::HostCommand,
         runtime::RuntimeHandle,
         shell::windows::{BRIDGE, UserEvent, WindowHost, asset_response, emit_event},
         webview::desktop_resources::DesktopResources,

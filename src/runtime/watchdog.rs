@@ -379,6 +379,7 @@ mod tests {
                 policy,
                 max_retries,
             },
+            resources: None,
         }
     }
 

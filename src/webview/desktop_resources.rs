@@ -4,7 +4,7 @@ use std::{collections::HashMap, path::PathBuf};
 
 use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
 use muda::{
-    CheckMenuItem, Menu, MenuItem as NativeMenuItem, PredefinedMenuItem, Submenu,
+    CheckMenuItem, ContextMenu, Menu, MenuItem as NativeMenuItem, PredefinedMenuItem, Submenu,
 };
 use tao::platform::windows::WindowExtWindows;
 use tao::window::Window;
@@ -73,8 +73,12 @@ impl DesktopResources {
             .filter(|url| url.scheme() == "file")
             .and_then(|url| url.to_file_path().ok())
             .unwrap_or_else(|| root.join(&spec.icon));
-        let icon = tray_icon::Icon::from_path(&icon_path, None)
-            .map_err(|error| failed(&format!("failed to load tray icon {}", icon_path.display()), error))?;
+        let icon = tray_icon::Icon::from_path(&icon_path, None).map_err(|error| {
+            failed(
+                &format!("failed to load tray icon {}", icon_path.display()),
+                error,
+            )
+        })?;
         let mut builder = TrayIconBuilder::new().with_id(id.clone()).with_icon(icon);
         if let Some(tooltip) = spec.tooltip {
             builder = builder.with_tooltip(tooltip);
@@ -158,32 +162,46 @@ fn build_menu(template: &MenuTemplate) -> Result<Menu, NativeError> {
 fn append_menu_items(parent: &dyn MenuAppender, items: &[MenuItem]) -> Result<(), NativeError> {
     for item in items {
         match item {
-            MenuItem::Normal { id, label, accelerator, enabled } => {
+            MenuItem::Normal {
+                id,
+                label,
+                accelerator,
+                enabled,
+            } => {
                 let accelerator = accelerator
                     .as_deref()
                     .map(str::parse)
                     .transpose()
                     .map_err(|error| failed("invalid menu accelerator", error))?;
-                parent.append_item(&NativeMenuItem::with_id(
-                    id,
-                    label,
-                    enabled.unwrap_or(true),
-                    accelerator,
-                )).map_err(|error| failed("failed to append menu item", error))?;
+                parent
+                    .append_item(&NativeMenuItem::with_id(
+                        id,
+                        label,
+                        enabled.unwrap_or(true),
+                        accelerator,
+                    ))
+                    .map_err(|error| failed("failed to append menu item", error))?;
             }
-            MenuItem::Checkbox { id, label, checked, accelerator } => {
+            MenuItem::Checkbox {
+                id,
+                label,
+                checked,
+                accelerator,
+            } => {
                 let accelerator = accelerator
                     .as_deref()
                     .map(str::parse)
                     .transpose()
                     .map_err(|error| failed("invalid menu accelerator", error))?;
-                parent.append_item(&CheckMenuItem::with_id(
-                    id,
-                    label,
-                    true,
-                    checked.unwrap_or(false),
-                    accelerator,
-                )).map_err(|error| failed("failed to append menu item", error))?;
+                parent
+                    .append_item(&CheckMenuItem::with_id(
+                        id,
+                        label,
+                        true,
+                        checked.unwrap_or(false),
+                        accelerator,
+                    ))
+                    .map_err(|error| failed("failed to append menu item", error))?;
             }
             MenuItem::Separator => parent
                 .append_item(&PredefinedMenuItem::separator())

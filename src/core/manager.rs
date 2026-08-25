@@ -1422,6 +1422,7 @@ fn service_descriptor_from_backend(
             policy: restart_policy,
             max_retries,
         },
+        resources: None,
     }
 }
 

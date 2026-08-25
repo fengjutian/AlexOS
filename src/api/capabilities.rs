@@ -30,3 +30,24 @@ pub fn experimental() -> Vec<String> {
         .map(|v| (*v).to_owned())
         .collect()
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::native::NativeHostCapabilities;
+
+    #[test]
+    fn native_desktop_methods_are_reported_by_individual_feature() {
+        let available = available(NativeHostCapabilities {
+            secondary_windows: true,
+            menus: false,
+            tray: true,
+            shortcuts: false,
+            ..Default::default()
+        });
+        assert!(available.iter().any(|method| method == "window.create"));
+        assert!(available.iter().any(|method| method == "tray.create"));
+        assert!(!available.iter().any(|method| method == "menu.setApplicationMenu"));
+        assert!(!available.iter().any(|method| method == "shortcuts.register"));
+    }
+}

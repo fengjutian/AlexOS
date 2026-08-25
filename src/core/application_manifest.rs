@@ -47,7 +47,7 @@ use crate::{
     },
     manifest_v2::{
         ApplicationManifestV2, HealthKind, ManifestV2Error, RestartPolicyV2, ServiceHealth,
-        ServicePort, ServiceRuntime, ServiceSpec,
+        ServicePort, ServiceResources, ServiceRuntime, ServiceSpec,
     },
 };
 
@@ -294,6 +294,11 @@ pub struct ServiceDescriptor {
     pub mode: ServiceMode,
     pub health: Option<ServiceHealthDescriptor>,
     pub restart: ServiceRestartDescriptor,
+    /// Per-service resource quotas. `None` means the host applies
+    /// no quota. Only v2 manifests can declare these today; v1
+    /// backends project `None`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ServiceResourcesDescriptor>,
 }
 
 impl ServiceDescriptor {
@@ -366,6 +371,26 @@ impl Default for ServiceRestartDescriptor {
             max_retries: 5,
         }
     }
+}
+
+/// Per-service resource quotas in the unified service view. Mirrors
+/// [`crate::manifest_v2::ServiceResources`] so a resolved service
+/// carries the same four quota fields regardless of schema version.
+#[derive(Debug, Clone, Default, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ServiceResourcesDescriptor {
+    /// Hard memory cap in MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u32>,
+    /// CPU share (0-100), a percentage of one CPU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_percent: Option<u32>,
+    /// Maximum number of processes in the service process tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processes: Option<u32>,
+    /// Soft per-instance data directory quota in MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_quota_mb: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, PartialEq, Eq)]
@@ -528,6 +553,7 @@ fn v1_backend_to_service(backend: &Backend) -> ServiceDescriptor {
         },
         health,
         restart,
+        resources: None,
     }
 }
 
@@ -607,6 +633,16 @@ fn v2_service_to_descriptor(name: &str, spec: &ServiceSpec) -> ServiceDescriptor
         },
         health,
         restart,
+        resources: spec.resources.as_ref().map(map_v2_resources),
+    }
+}
+
+fn map_v2_resources(resources: &ServiceResources) -> ServiceResourcesDescriptor {
+    ServiceResourcesDescriptor {
+        memory_mb: resources.memory_mb,
+        cpu_percent: resources.cpu_percent,
+        processes: resources.processes,
+        data_quota_mb: resources.data_quota_mb,
     }
 }
 
@@ -698,6 +734,11 @@ services:
       LOG_LEVEL: info
     health: { type: http, path: /health, intervalMs: 3000, timeoutMs: 1500 }
     restart: { policy: on-failure, maxRetries: 7 }
+    resources:
+      memoryMb: 512
+      cpuPercent: 50
+      processes: 4
+      dataQuotaMb: 1024
   worker:
     runtime: python
     command: worker.py
@@ -835,6 +876,12 @@ services:
         assert_eq!(api.restart.policy, ServiceRestartPolicy::OnFailure);
         assert_eq!(api.restart.max_retries, 7);
 
+        let resources = api.resources.as_ref().expect("api resources");
+        assert_eq!(resources.memory_mb, Some(512));
+        assert_eq!(resources.cpu_percent, Some(50));
+        assert_eq!(resources.processes, Some(4));
+        assert_eq!(resources.data_quota_mb, Some(1024));
+
         let worker = services
             .iter()
             .find(|s| s.name == "worker")
@@ -844,6 +891,7 @@ services:
         let worker_health = worker.health.as_ref().expect("process health");
         assert_eq!(worker_health.kind, ServiceHealthKind::Process);
         assert!(worker.depends_on.is_empty());
+        assert!(worker.resources.is_none(), "worker declares no quota");
     }
 
     #[test]
@@ -1094,6 +1142,9 @@ services:
         let api = resolved.services.get("api").expect("api");
         assert_eq!(api.depends_on, vec!["worker"]);
         assert_eq!(api.port, Some(29010));
+        let resources = api.resources.as_ref().expect("api resources");
+        assert_eq!(resources.memory_mb, Some(512));
+        assert_eq!(resources.cpu_percent, Some(50));
         let worker = resolved.services.get("worker").expect("worker");
         assert_eq!(worker.runtime, ServiceRuntime::Python);
     }

@@ -40,23 +40,16 @@ pub fn run(
 #[cfg(windows)]
 pub mod windows {
     use std::{
-        collections::HashMap,
         path::{Path, PathBuf},
         sync::Arc,
         time::Duration,
     };
 
-    use global_hotkey::{GlobalHotKeyEvent, GlobalHotKeyManager, HotKeyState, hotkey::HotKey};
-    use muda::{
-        CheckMenuItem, ContextMenu, Menu, MenuItem as NativeMenuItem, PredefinedMenuItem, Submenu,
-    };
-    use tao::platform::windows::WindowExtWindows;
     use tao::{
         event::{Event, WindowEvent},
         event_loop::{ControlFlow, EventLoopBuilder},
         window::WindowBuilder,
     };
-    use tray_icon::{TrayIcon, TrayIconBuilder, TrayIconEvent};
     use wry::{
         NewWindowResponse, WebViewBuilder,
         http::{Response as HttpResponse, header::CONTENT_TYPE},
@@ -66,7 +59,6 @@ pub mod windows {
         api::ApiRouter,
         authorization::PermissionStore,
         manifest::AppManifest,
-        menu_tray::{MenuItem, MenuTemplate},
         native::{HostCommand, NativeError, NativeHost, NativeHostCapabilities},
         runtime::RuntimeHandle,
         webview::desktop_resources::DesktopResources,

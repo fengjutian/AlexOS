@@ -154,6 +154,15 @@ impl ApiRouter {
         Ok(json!({
             "capabilities": available,
             "experimental": experimental,
+            "nativeHost": {
+                "secondaryWindows": native.secondary_windows,
+                "menus": native.menus,
+                "tray": native.tray,
+                "shortcuts": native.shortcuts,
+                "dialogs": native.dialogs,
+                "media": native.media,
+                "geolocation": native.geolocation,
+            },
             "platform": {
                 "os": format!("{:?}", crate::platform::PlatformServices::operating_system(&platform)).to_ascii_lowercase(),
                 "atomicReplace": platform_capabilities.atomic_replace,

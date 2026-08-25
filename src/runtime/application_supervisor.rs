@@ -1836,6 +1836,7 @@ mod tests {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+            resources: None,
         }
     }
 

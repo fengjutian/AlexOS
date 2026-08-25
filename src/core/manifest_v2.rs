@@ -138,6 +138,35 @@ pub struct ServiceSpec {
     pub restart: ServiceRestart,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub dev: Option<ServiceDev>,
+    /// Per-service resource quotas. `None` means the host applies
+    /// no quota. The 0.2 slice validates and projects these through
+    /// the unified service view; hard enforcement is wired by the
+    /// isolation layer (Job Object / volume quota) in 0.3+.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ServiceResources>,
+}
+
+/// Resource quotas a service declares the host should enforce.
+/// Field names and semantics mirror
+/// [`crate::container::model::ResourceLimits`] so the two stay
+/// interchangeable when the container runtime takes over the
+/// launch path. Every field is optional; a present-but-zero value
+/// is rejected as a configuration error.
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceResources {
+    /// Hard memory cap in MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub memory_mb: Option<u32>,
+    /// CPU share (0-100), a percentage of one CPU.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub cpu_percent: Option<u32>,
+    /// Maximum number of processes in the service process tree.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub processes: Option<u32>,
+    /// Soft per-instance data directory quota in MiB.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub data_quota_mb: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -413,6 +442,36 @@ impl ApplicationManifestV2 {
                     "service {name} HTTP health path must start with '/'"
                 )));
             }
+            if let Some(resources) = &service.resources {
+                if let Some(mem) = resources.memory_mb
+                    && mem == 0
+                {
+                    return Err(validation(format!(
+                        "service {name} resources.memoryMb must be > 0"
+                    )));
+                }
+                if let Some(cpu) = resources.cpu_percent
+                    && cpu > 100
+                {
+                    return Err(validation(format!(
+                        "service {name} resources.cpuPercent must be in 0..=100, got {cpu}"
+                    )));
+                }
+                if let Some(processes) = resources.processes
+                    && processes == 0
+                {
+                    return Err(validation(format!(
+                        "service {name} resources.processes must be > 0"
+                    )));
+                }
+                if let Some(quota) = resources.data_quota_mb
+                    && quota == 0
+                {
+                    return Err(validation(format!(
+                        "service {name} resources.dataQuotaMb must be > 0"
+                    )));
+                }
+            }
             for dependency in &service.depends_on {
                 if !self.services.contains_key(dependency) {
                     return Err(validation(format!(
@@ -637,5 +696,78 @@ services:
         .unwrap();
         let error = load(temp.path()).unwrap_err().to_string();
         assert!(error.contains("package-relative") || error.contains("runtime.python"));
+    }
+
+    #[test]
+    fn service_resources_are_parsed_and_validated() {
+        let (_temp, manifest) = fixture(
+            r#"
+schemaVersion: 2
+id: com.example.quota
+name: quota
+version: 1.0.0
+runtime: { node: "22" }
+services:
+  api:
+    runtime: node
+    command: server/index.js
+    resources:
+      memoryMb: 512
+      cpuPercent: 50
+      processes: 4
+      dataQuotaMb: 1024
+"#,
+        );
+        let resources = manifest.services["api"].resources.as_ref().unwrap();
+        assert_eq!(resources.memory_mb, Some(512));
+        assert_eq!(resources.cpu_percent, Some(50));
+        assert_eq!(resources.processes, Some(4));
+        assert_eq!(resources.data_quota_mb, Some(1024));
+    }
+
+    #[test]
+    fn invalid_resource_quota_is_rejected() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("server")).unwrap();
+        std::fs::write(temp.path().join("server/index.js"), "").unwrap();
+        std::fs::write(
+            temp.path().join("app.yaml"),
+            r#"
+schemaVersion: 2
+id: com.example.badquota
+name: badquota
+version: 1.0.0
+runtime: { node: "22" }
+services:
+  api:
+    runtime: node
+    command: server/index.js
+    resources:
+      cpuPercent: 120
+"#,
+        )
+        .unwrap();
+        let error = load(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("cpuPercent"), "unexpected error: {error}");
+
+        std::fs::write(
+            temp.path().join("app.yaml"),
+            r#"
+schemaVersion: 2
+id: com.example.badquota
+name: badquota
+version: 1.0.0
+runtime: { node: "22" }
+services:
+  api:
+    runtime: node
+    command: server/index.js
+    resources:
+      memoryMb: 0
+"#,
+        )
+        .unwrap();
+        let error = load(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("memoryMb"), "unexpected error: {error}");
     }
 }
