@@ -561,6 +561,7 @@ mod windows {
         native::{HostCommand, NativeError},
         runtime::RuntimeHandle,
         shell::windows::{BRIDGE, UserEvent, WindowHost, asset_response, emit_event},
+        webview::desktop_resources::DesktopResources,
         webview::secondary_windows::SecondaryWindows,
     };
 
@@ -743,6 +744,7 @@ mod windows {
             })
             .with_url(&initial_url)
             .build(&window)?;
+        crate::webview::permissions::attach(&webview, Arc::clone(&router))?;
 
         if let Some(dev) = frontend_dev.as_ref() {
             eprintln!("alex dev: frontend dev server ready at {}", dev.url);
@@ -764,6 +766,7 @@ mod windows {
         let child_init_script = init_script.clone();
         let child_dev_url = frontend_dev.as_ref().map(|dev| dev.url.clone());
         let mut secondary_windows = SecondaryWindows::new();
+        let mut desktop_resources = DesktopResources::new()?;
         let mut last_poll = Instant::now();
         event_loop.run(move |event, event_loop_target, control_flow| {
             *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(50));
@@ -816,6 +819,7 @@ mod windows {
                             let child_id = info.id.raw();
                             secondary_windows.create(event_loop_target, &info, |child_window| {
                                 let ipc_router = Arc::clone(&child_router);
+                                let permission_router = Arc::clone(&child_router);
                                 let ipc_proxy = child_proxy.clone();
                                 let drop_router = Arc::clone(&child_router);
                                 let asset_root = child_root.clone();
@@ -833,7 +837,7 @@ mod windows {
                                 } else {
                                     format!("alex://app/{}", info.url.trim_start_matches('/'))
                                 };
-                                WebViewBuilder::new()
+                                let child_webview = WebViewBuilder::new()
                                     .with_initialization_script(child_init_script.clone())
                                     .with_devtools(cfg!(debug_assertions))
                                     .with_incognito(true)
@@ -889,7 +893,12 @@ mod windows {
                                     })
                                     .with_url(&url)
                                     .build(child_window)
-                                    .map_err(|error| error.to_string())
+                                    .map_err(|error| error.to_string())?;
+                                crate::webview::permissions::attach(
+                                    &child_webview,
+                                    permission_router,
+                                )?;
+                                Ok(child_webview)
                             })
                         }
                         HostCommand::SetWindowBounds(id, bounds) => {
@@ -899,12 +908,22 @@ mod windows {
                             secondary_windows.set_fullscreen(id, fullscreen)
                         }
                         HostCommand::DestroyWindow(id) => secondary_windows.destroy(id),
-                        HostCommand::SetApplicationMenu(_)
-                        | HostCommand::SetContextMenu(_)
-                        | HostCommand::CreateTray(_, _, _)
-                        | HostCommand::DestroyTray(_)
-                        | HostCommand::RegisterShortcut(_)
-                        | HostCommand::UnregisterShortcut(_) => Err(NativeError::Unsupported),
+                        HostCommand::SetApplicationMenu(template) => {
+                            desktop_resources.set_application_menu(&window, &template)
+                        }
+                        HostCommand::SetContextMenu(template) => {
+                            desktop_resources.set_context_menu(&template)
+                        }
+                        HostCommand::CreateTray(id, spec, root) => {
+                            desktop_resources.create_tray(id, spec, root)
+                        }
+                        HostCommand::DestroyTray(id) => desktop_resources.destroy_tray(&id),
+                        HostCommand::RegisterShortcut(accelerator) => {
+                            desktop_resources.register_shortcut(accelerator)
+                        }
+                        HostCommand::UnregisterShortcut(accelerator) => {
+                            desktop_resources.unregister_shortcut(&accelerator)
+                        }
                     };
                     let _ = reply.send(result);
                 }
@@ -939,6 +958,17 @@ mod windows {
                         "window.moved",
                         serde_json::json!({ "x": position.x, "y": position.y }),
                     ),
+                    WindowEvent::MouseInput {
+                        state: tao::event::ElementState::Pressed,
+                        button: tao::event::MouseButton::Right,
+                        ..
+                    } => {
+                        if window_id == window.id() {
+                            desktop_resources.show_context_menu(&window);
+                        } else if let Some(child) = secondary_windows.window_for_native(window_id) {
+                            desktop_resources.show_context_menu(child);
+                        }
+                    }
                     _ => {}
                 },
                 Event::LoopDestroyed => {
@@ -953,6 +983,8 @@ mod windows {
                 }
                 _ => {}
             }
+
+            desktop_resources.drain_events(&router);
 
             for (event, delivered) in router.event_bus().drain_pending() {
                 let target = delivered

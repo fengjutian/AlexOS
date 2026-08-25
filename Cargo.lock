@@ -46,6 +46,7 @@ dependencies = [
  "tray-icon",
  "ureq",
  "url",
+ "webview2-com",
  "windows",
  "wry",
  "zip",

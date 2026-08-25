@@ -221,6 +221,25 @@ impl ApiRouter {
         Arc::clone(&self.stream_manager)
     }
 
+    /// Resolve a WebView2 permission request without prompting. This is called
+    /// on the UI thread after the page-side shim has completed the normal Alex
+    /// first-use flow, so prompting here would re-enter the event loop.
+    pub(crate) fn webview_permission_granted(&self, name: &str) -> bool {
+        let declared = self.manifest.permissions.iter().any(|permission| {
+            matches!(
+                (permission, name),
+                (Permission::MediaCamera, "media.camera")
+                    | (Permission::MediaMicrophone, "media.microphone")
+                    | (Permission::Geolocation, "geolocation")
+            )
+        });
+        declared
+            && self
+                .permission_store
+                .as_ref()
+                .is_none_or(|store| matches!(store.decision(name), PermissionDecision::Granted))
+    }
+
     /// Convert an OS file-drop into app-scoped, short-lived grants and
     /// enqueue it for WebView delivery. Returns false when the package did
     /// not declare (or the user revoked) `filesystem.drop`.

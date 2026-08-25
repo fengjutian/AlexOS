@@ -69,6 +69,7 @@ pub mod windows {
         menu_tray::{MenuItem, MenuTemplate},
         native::{HostCommand, NativeError, NativeHost, NativeHostCapabilities},
         runtime::RuntimeHandle,
+        webview::desktop_resources::DesktopResources,
         webview::secondary_windows::SecondaryWindows,
     };
 
@@ -564,6 +565,7 @@ pub mod windows {
             })
             .with_url("alex://app/")
             .build(&window)?;
+        crate::webview::permissions::attach(&webview, Arc::clone(&router))?;
 
         let child_proxy = event_loop.create_proxy();
         let child_root = package_root.to_path_buf();
@@ -574,11 +576,7 @@ pub mod windows {
         let child_daemon_pipe = daemon_pipe.clone();
         let child_app_id = manifest.id.clone();
         let mut secondary_windows = SecondaryWindows::new();
-        let mut application_menu: Option<Menu> = None;
-        let mut context_menu: Option<Menu> = None;
-        let mut tray_icons: HashMap<String, TrayIcon> = HashMap::new();
-        let hotkey_manager = GlobalHotKeyManager::new()?;
-        let mut hotkeys: HashMap<u32, (HotKey, String)> = HashMap::new();
+        let mut desktop_resources = DesktopResources::new()?;
         let (reload_tx, reload_rx) = std::sync::mpsc::sync_channel(1);
         let mut _dev_watcher = if dev_mode {
             use notify::Watcher as _;
@@ -648,6 +646,7 @@ pub mod windows {
                                 &info,
                                 |child_window| {
                                     let ipc_router = Arc::clone(&child_router);
+                                    let permission_router = Arc::clone(&child_router);
                                     let ipc_proxy = child_proxy.clone();
                                     let child_id = info.id.raw();
                                     let asset_root = child_root.clone();
@@ -661,7 +660,7 @@ pub mod windows {
                                     } else {
                                         format!("alex://app/{}", info.url.trim_start_matches('/'))
                                     };
-                                    WebViewBuilder::new()
+                                    let child_webview = WebViewBuilder::new()
                                         .with_initialization_script(child_init_script.clone())
                                         .with_incognito(true)
                                         .with_clipboard(false)
@@ -725,7 +724,12 @@ pub mod windows {
                                         })
                                         .with_url(&url)
                                         .build(child_window)
-                                        .map_err(|error| error.to_string())
+                                        .map_err(|error| error.to_string())?;
+                                    crate::webview::permissions::attach(
+                                        &child_webview,
+                                        permission_router,
+                                    )?;
+                                    Ok(child_webview)
                                 },
                             );
                         }
@@ -738,115 +742,23 @@ pub mod windows {
                         HostCommand::DestroyWindow(id) => {
                             host_result = secondary_windows.destroy(id);
                         }
-                        HostCommand::SetApplicationMenu(template) => match build_menu(&template) {
-                            Ok(menu) => {
-                                if let Some(previous) = application_menu.take() {
-                                    let _ =
-                                        unsafe { previous.remove_for_hwnd(window.hwnd() as isize) };
-                                }
-                                match unsafe { menu.init_for_hwnd(window.hwnd() as isize) } {
-                                    Ok(()) => application_menu = Some(menu),
-                                    Err(error) => {
-                                        host_result = Err(NativeError::Failed(format!(
-                                            "failed to attach application menu: {error}"
-                                        )))
-                                    }
-                                }
-                            }
-                            Err(error) => {
-                                host_result = Err(NativeError::Failed(format!(
-                                    "invalid native menu: {error}"
-                                )))
-                            }
-                        },
-                        HostCommand::SetContextMenu(template) => match build_menu(&template) {
-                            Ok(menu) => context_menu = Some(menu),
-                            Err(error) => {
-                                host_result = Err(NativeError::Failed(format!(
-                                    "invalid context menu: {error}"
-                                )))
-                            }
-                        },
+                        HostCommand::SetApplicationMenu(template) => {
+                            host_result = desktop_resources.set_application_menu(&window, &template)
+                        }
+                        HostCommand::SetContextMenu(template) => {
+                            host_result = desktop_resources.set_context_menu(&template)
+                        }
                         HostCommand::CreateTray(id, spec, root) => {
-                            let icon_path = url::Url::parse(&spec.icon)
-                                .ok()
-                                .filter(|url| url.scheme() == "file")
-                                .and_then(|url| url.to_file_path().ok())
-                                .unwrap_or_else(|| root.join(&spec.icon));
-                            match tray_icon::Icon::from_path(&icon_path, None) {
-                                Ok(icon) => {
-                                    let mut builder =
-                                        TrayIconBuilder::new().with_id(id.clone()).with_icon(icon);
-                                    if let Some(tooltip) = spec.tooltip {
-                                        builder = builder.with_tooltip(tooltip);
-                                    }
-                                    if let Some(template) = spec.menu
-                                        && let Ok(menu) = build_menu(&template)
-                                    {
-                                        builder = builder.with_menu(Box::new(menu));
-                                    }
-                                    match builder.build() {
-                                        Ok(tray) => {
-                                            tray_icons.insert(id, tray);
-                                        }
-                                        Err(error) => {
-                                            host_result = Err(NativeError::Failed(format!(
-                                                "failed to create tray icon: {error}"
-                                            )))
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    host_result = Err(NativeError::Failed(format!(
-                                        "failed to load tray icon {}: {error}",
-                                        icon_path.display()
-                                    )))
-                                }
-                            }
+                            host_result = desktop_resources.create_tray(id, spec, root)
                         }
                         HostCommand::DestroyTray(id) => {
-                            if tray_icons.remove(&id).is_none() {
-                                host_result =
-                                    Err(NativeError::Failed(format!("unknown tray icon {id}")));
-                            }
+                            host_result = desktop_resources.destroy_tray(&id)
                         }
                         HostCommand::RegisterShortcut(accelerator) => {
-                            match accelerator.parse::<HotKey>() {
-                                Ok(hotkey) => match hotkey_manager.register(hotkey) {
-                                    Ok(()) => {
-                                        hotkeys.insert(hotkey.id(), (hotkey, accelerator));
-                                    }
-                                    Err(error) => {
-                                        host_result = Err(NativeError::Failed(format!(
-                                            "shortcut registration failed: {error}"
-                                        )))
-                                    }
-                                },
-                                Err(error) => {
-                                    host_result = Err(NativeError::Failed(format!(
-                                        "invalid accelerator: {error}"
-                                    )))
-                                }
-                            }
+                            host_result = desktop_resources.register_shortcut(accelerator)
                         }
                         HostCommand::UnregisterShortcut(accelerator) => {
-                            if let Some((id, (hotkey, _))) = hotkeys
-                                .iter()
-                                .find(|(_, (_, value))| value == &accelerator)
-                                .map(|(id, value)| (*id, value.clone()))
-                            {
-                                if let Err(error) = hotkey_manager.unregister(hotkey) {
-                                    host_result = Err(NativeError::Failed(format!(
-                                        "shortcut unregister failed: {error}"
-                                    )));
-                                } else {
-                                    hotkeys.remove(&id);
-                                }
-                            } else {
-                                host_result = Err(NativeError::Failed(format!(
-                                    "shortcut is not registered: {accelerator}"
-                                )));
-                            }
+                            host_result = desktop_resources.unregister_shortcut(&accelerator)
                         }
                     }
                     let _ = reply.send(host_result);
@@ -890,45 +802,17 @@ pub mod windows {
                         button: tao::event::MouseButton::Right,
                         ..
                     } => {
-                        if let Some(menu) = &context_menu {
-                            let hwnd = if window_id == window.id() {
-                                Some(window.hwnd() as isize)
-                            } else {
-                                secondary_windows
-                                    .window_for_native(window_id)
-                                    .map(|child| child.hwnd())
-                            };
-                            if let Some(hwnd) = hwnd {
-                                unsafe {
-                                    menu.show_context_menu_for_hwnd(hwnd, None);
-                                }
-                            }
+                        if window_id == window.id() {
+                            desktop_resources.show_context_menu(&window);
+                        } else if let Some(child) = secondary_windows.window_for_native(window_id) {
+                            desktop_resources.show_context_menu(child);
                         }
                     }
                     _ => {}
                 },
                 _ => {}
             }
-            while let Ok(event) = muda::MenuEvent::receiver().try_recv() {
-                router
-                    .event_bus()
-                    .deliver("menu.clicked", &serde_json::json!({ "id": event.id().0 }));
-            }
-            while let Ok(event) = TrayIconEvent::receiver().try_recv() {
-                router
-                    .event_bus()
-                    .deliver("tray.clicked", &serde_json::json!({ "id": event.id().0 }));
-            }
-            while let Ok(event) = GlobalHotKeyEvent::receiver().try_recv() {
-                if event.state == HotKeyState::Pressed
-                    && let Some((_, accelerator)) = hotkeys.get(&event.id)
-                {
-                    router.event_bus().deliver(
-                        "shortcut.triggered",
-                        &serde_json::json!({ "accelerator": accelerator }),
-                    );
-                }
-            }
+            desktop_resources.drain_events(&router);
             if dev_mode {
                 while let Ok(command) = reload_rx.try_recv() {
                     match command {
@@ -1000,72 +884,6 @@ pub mod windows {
                 .into());
         }
         Ok(())
-    }
-
-    fn build_menu(template: &MenuTemplate) -> Result<Menu, Box<dyn std::error::Error>> {
-        let menu = Menu::new();
-        append_menu_items(&menu, &template.items)?;
-        Ok(menu)
-    }
-
-    fn append_menu_items(
-        parent: &dyn MenuAppender,
-        items: &[MenuItem],
-    ) -> Result<(), Box<dyn std::error::Error>> {
-        for item in items {
-            match item {
-                MenuItem::Normal {
-                    id,
-                    label,
-                    accelerator,
-                    enabled,
-                } => {
-                    let accelerator = accelerator.as_deref().map(str::parse).transpose()?;
-                    parent.append_item(&NativeMenuItem::with_id(
-                        id,
-                        label,
-                        enabled.unwrap_or(true),
-                        accelerator,
-                    ))?;
-                }
-                MenuItem::Checkbox {
-                    id,
-                    label,
-                    checked,
-                    accelerator,
-                } => {
-                    let accelerator = accelerator.as_deref().map(str::parse).transpose()?;
-                    parent.append_item(&CheckMenuItem::with_id(
-                        id,
-                        label,
-                        true,
-                        checked.unwrap_or(false),
-                        accelerator,
-                    ))?;
-                }
-                MenuItem::Separator => parent.append_item(&PredefinedMenuItem::separator())?,
-                MenuItem::Submenu { id, label, items } => {
-                    let submenu = Submenu::with_id(id, label, true);
-                    append_menu_items(&submenu, items)?;
-                    parent.append_item(&submenu)?;
-                }
-            }
-        }
-        Ok(())
-    }
-
-    trait MenuAppender {
-        fn append_item(&self, item: &dyn muda::IsMenuItem) -> muda::Result<()>;
-    }
-    impl MenuAppender for Menu {
-        fn append_item(&self, item: &dyn muda::IsMenuItem) -> muda::Result<()> {
-            self.append(item)
-        }
-    }
-    impl MenuAppender for Submenu {
-        fn append_item(&self, item: &dyn muda::IsMenuItem) -> muda::Result<()> {
-            self.append(item)
-        }
     }
 
     pub fn asset_response(
