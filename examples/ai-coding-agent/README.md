@@ -6,22 +6,13 @@ execution, an MCP filesystem tool, explicit permissions, and a packageable v2
 manifest.
 
 ```powershell
-# Install dependencies once
-cd examples/ai-coding-agent/app
-npm install
-npm run build
-
-# No frontend build is needed in development: alex dev starts Vite.
-cd ../frontend
-npm install
-
-# Validate and run the complete application (from the app root)
-cd ..
-cargo run --manifest-path ../../Cargo.toml -- validate .
-cargo run --manifest-path ../../Cargo.toml -- dev .
+# From the repository root. On the first run Alex installs missing frontend
+# dependencies, starts Vite, waits for it to become ready, then opens WebView.
+cargo run -- validate examples/ai-coding-agent
+cargo run -- dev examples/ai-coding-agent
 
 # Production packaging still requires compiled frontend assets.
-cd frontend
+cd examples/ai-coding-agent/frontend
 npm run build
 cd ..
 cargo run --manifest-path ../../Cargo.toml -- pack . ../../target/ai-coding-agent.alx

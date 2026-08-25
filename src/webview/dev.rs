@@ -587,6 +587,9 @@ mod windows {
         });
         let manifest_path = canonical_root.join("manifest.json");
 
+        if let Some(dev) = frontend_dev.as_ref() {
+            install_frontend_dependencies(&canonical_root, dev)?;
+        }
         let mut frontend_process = match frontend_dev.as_ref() {
             Some(dev) => Some(start_frontend_dev_server(&canonical_root, dev)?),
             None => None,
@@ -817,13 +820,58 @@ mod windows {
             dev.args.join(" "),
             dev.cwd
         );
-        Ok(Command::new(&dev.command)
+        let mut command = frontend_command(&dev.command)?;
+        Ok(command
             .args(&dev.args)
             .current_dir(package_root.join(&dev.cwd))
             .stdin(Stdio::null())
             .stdout(Stdio::inherit())
             .stderr(Stdio::inherit())
             .spawn()?)
+    }
+
+    fn install_frontend_dependencies(
+        package_root: &Path,
+        dev: &FrontendDev,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(install) = &dev.install else {
+            return Ok(());
+        };
+        let cwd = package_root.join(&dev.cwd);
+        if cwd.join("node_modules").is_dir() {
+            return Ok(());
+        }
+        eprintln!(
+            "alex dev: frontend dependencies missing; running {} {}",
+            install.command,
+            install.args.join(" ")
+        );
+        let status = frontend_command(&install.command)?
+            .args(&install.args)
+            .current_dir(&cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()?;
+        if !status.success() {
+            return Err(format!("frontend dependency install failed with {status}").into());
+        }
+        Ok(())
+    }
+
+    fn frontend_command(name: &str) -> Result<Command, Box<dyn std::error::Error>> {
+        if matches!(name, "npm" | "npm.cmd")
+            && let Some(node) = crate::runtime::discover_node()
+            && let Some(bin) = node.parent()
+        {
+            let npm_cli = bin.join("node_modules").join("npm").join("bin").join("npm-cli.js");
+            if npm_cli.is_file() {
+                let mut command = Command::new(node);
+                command.arg(npm_cli);
+                return Ok(command);
+            }
+        }
+        Ok(Command::new(name))
     }
 
     fn wait_for_dev_server(

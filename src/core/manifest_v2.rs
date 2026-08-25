@@ -83,9 +83,19 @@ pub struct FrontendDev {
     pub command: String,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<FrontendDevInstall>,
     #[serde(default = "default_frontend_dev_cwd")]
     pub cwd: String,
     pub url: String,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrontendDevInstall {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
 }
 
 fn default_frontend_dev_cwd() -> String {
@@ -332,6 +342,12 @@ impl ApplicationManifestV2 {
                     return Err(validation(
                         "frontend dev URL must use HTTP on a loopback host",
                     ));
+                }
+                if dev.install.as_ref().is_some_and(|install| {
+                    install.command.trim().is_empty()
+                        || install.command.contains(['\r', '\n', '\0'])
+                }) {
+                    return Err(validation("frontend install command is invalid"));
                 }
             }
         }
