@@ -334,6 +334,15 @@ export interface McpConnectionInfo {
   binding: string;
   era: "modern" | "legacy";
 }
+export interface McpConnectionHealth {
+  application: string;
+  binding: string;
+  state: "healthy" | "degraded" | "unhealthy";
+  checkedAtMs: number;
+  latencyMs: number;
+  consecutiveFailures: number;
+  lastError?: string;
+}
 export interface McpSubscriptionFilter {
   toolsListChanged?: boolean;
   promptsListChanged?: boolean;
@@ -471,6 +480,7 @@ export interface AlexClient {
   };
   readonly mcp: {
     connections(options?: InvokeOptions): Promise<McpConnectionInfo[]>;
+    health(options?: InvokeOptions): Promise<McpConnectionHealth[]>;
     discover(binding: string, options?: InvokeOptions): Promise<McpDiscoverResult>;
     listTools(
       binding: string,

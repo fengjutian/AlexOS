@@ -10,8 +10,9 @@ use std::{
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
         Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
+        atomic::{AtomicBool, AtomicU64, Ordering},
     },
+    thread::JoinHandle,
     time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
@@ -1030,6 +1031,132 @@ pub struct ConnectionInfo {
     pub application: String,
     pub binding: String,
     pub era: ProtocolEra,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ConnectionHealth {
+    pub application: String,
+    pub binding: String,
+    pub state: ConnectionHealthState,
+    pub checked_at_ms: u64,
+    pub latency_ms: u64,
+    pub consecutive_failures: u32,
+    #[serde(skip_serializing_if = "Option::is_none")]
+    pub last_error: Option<String>,
+}
+
+#[derive(Debug, Clone, Copy, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "kebab-case")]
+pub enum ConnectionHealthState {
+    Healthy,
+    Degraded,
+    Unhealthy,
+}
+
+struct HealthMonitorInner {
+    stop: AtomicBool,
+    statuses: Mutex<BTreeMap<(String, String), ConnectionHealth>>,
+    worker: Mutex<Option<JoinHandle<()>>>,
+}
+
+impl Drop for HealthMonitorInner {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Ok(worker) = self.worker.get_mut()
+            && let Some(worker) = worker.take()
+            && worker.thread().id() != std::thread::current().id()
+        {
+            let _ = worker.join();
+        }
+    }
+}
+
+#[derive(Clone)]
+pub struct ConnectionHealthMonitor {
+    inner: Arc<HealthMonitorInner>,
+}
+
+impl ConnectionHealthMonitor {
+    pub fn start(manager: ConnectionManager, interval: Duration) -> Result<Self, McpError> {
+        if interval < Duration::from_millis(100) {
+            return Err(McpError::InvalidConfig(
+                "MCP health interval must be at least 100ms".into(),
+            ));
+        }
+        let inner = Arc::new(HealthMonitorInner {
+            stop: AtomicBool::new(false),
+            statuses: Mutex::new(BTreeMap::new()),
+            worker: Mutex::new(None),
+        });
+        let weak = Arc::downgrade(&inner);
+        let worker = std::thread::Builder::new()
+            .name("alex-mcp-health".into())
+            .spawn(move || {
+                while let Some(inner) = weak.upgrade() {
+                    if inner.stop.load(Ordering::Acquire) {
+                        break;
+                    }
+                    for connection in manager.list() {
+                        let started = std::time::Instant::now();
+                        let result = manager
+                            .get(&connection.application, &connection.binding)
+                            .and_then(|client| client.ping());
+                        let key = (connection.application.clone(), connection.binding.clone());
+                        if let Ok(mut statuses) = inner.statuses.lock() {
+                            let previous = statuses.get(&key).map_or(0, |value| value.consecutive_failures);
+                            let failures = if result.is_ok() { 0 } else { previous.saturating_add(1) };
+                            statuses.insert(key, ConnectionHealth {
+                                application: connection.application,
+                                binding: connection.binding,
+                                state: match failures {
+                                    0 => ConnectionHealthState::Healthy,
+                                    1 | 2 => ConnectionHealthState::Degraded,
+                                    _ => ConnectionHealthState::Unhealthy,
+                                },
+                                checked_at_ms: SystemTime::now()
+                                    .duration_since(UNIX_EPOCH)
+                                    .unwrap_or_default()
+                                    .as_millis()
+                                    .try_into()
+                                    .unwrap_or(u64::MAX),
+                                latency_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
+                                consecutive_failures: failures,
+                                last_error: result.err().map(|error| error.to_string()),
+                            });
+                        }
+                    }
+                    let slices = (interval.as_millis() / 100).max(1);
+                    for _ in 0..slices {
+                        if inner.stop.load(Ordering::Acquire) {
+                            break;
+                        }
+                        std::thread::sleep(Duration::from_millis(100));
+                    }
+                }
+            })
+            .map_err(|error| McpError::Transport(error.to_string()))?;
+        *inner
+            .worker
+            .lock()
+            .map_err(|_| McpError::Transport("MCP health worker lock poisoned".into()))? =
+            Some(worker);
+        Ok(Self { inner })
+    }
+
+    pub fn list(&self, application: &str) -> Vec<ConnectionHealth> {
+        self.inner
+            .statuses
+            .lock()
+            .map(|values| {
+                values
+                    .values()
+                    .filter(|value| value.application == application)
+                    .cloned()
+                    .collect()
+            })
+            .unwrap_or_default()
+    }
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

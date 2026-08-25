@@ -238,6 +238,19 @@ impl ApiRouter {
             crate::daemon::ControlCommand::McpConnections { app_id },
         )
     }
+    pub(crate) fn mcp_health(&self) -> ApiResult {
+        self.mcp_scope(None, None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-health",
+            crate::daemon::ControlCommand::McpHealth { app_id },
+        )
+    }
     pub(crate) fn mcp_list_tools(&self, params: &Value) -> ApiResult {
         let params: McpBindingParams = parse_params(params)?;
         self.mcp_scope(Some(&params.binding), None)?;

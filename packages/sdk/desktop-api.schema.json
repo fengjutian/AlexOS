@@ -144,6 +144,7 @@
       "stream.read",
       "stream.cancel",
       "mcp.connections",
+      "mcp.health",
       "mcp.discover",
       "mcp.listTools",
       "mcp.callTool",
@@ -2449,6 +2450,10 @@
     "mcp.connections": {
       "params": { "$ref": "#/$defs/Empty" },
       "result": { "type": "array", "items": { "type": "object", "properties": { "application": { "type": "string" }, "binding": { "type": "string" }, "era": { "enum": ["modern", "legacy"] } }, "required": ["application", "binding", "era"], "additionalProperties": false } }
+    },
+    "mcp.health": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": { "type": "object", "properties": { "connections": { "type": "array", "items": { "type": "object", "properties": { "application": { "type": "string" }, "binding": { "type": "string" }, "state": { "enum": ["healthy", "degraded", "unhealthy"] }, "checkedAtMs": { "type": "integer", "minimum": 0 }, "latencyMs": { "type": "integer", "minimum": 0 }, "consecutiveFailures": { "type": "integer", "minimum": 0 }, "lastError": { "type": "string" } }, "required": ["application", "binding", "state", "checkedAtMs", "latencyMs", "consecutiveFailures"], "additionalProperties": false } } }, "required": ["connections"], "additionalProperties": false }
     },
     "mcp.discover": {
       "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 } }, "required": ["binding"], "additionalProperties": false },

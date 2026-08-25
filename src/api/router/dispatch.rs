@@ -94,6 +94,7 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "stream.read" => router.stream_read(p),
         "stream.cancel" => router.stream_cancel(p),
         "mcp.connections" => router.mcp_connections(),
+        "mcp.health" => router.mcp_health(),
         "mcp.listTools" => router.mcp_list_tools(p),
         "mcp.discover" => router.mcp_discover(p),
         "mcp.callTool" => router.mcp_call_tool(p),

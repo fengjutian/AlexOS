@@ -199,6 +199,10 @@ export function createAlexClient(transport = browserTransport()) {
       async connections(options) {
         return invoke("mcp.connections", {}, options);
       },
+      async health(options) {
+        const result = await invoke("mcp.health", {}, options);
+        return result.connections ?? [];
+      },
       async listTools(binding, cursor, options) {
         return invoke("mcp.listTools", { binding, cursor }, options);
       },

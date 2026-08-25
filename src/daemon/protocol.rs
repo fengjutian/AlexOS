@@ -132,6 +132,9 @@ pub enum ControlCommand {
     McpConnections {
         app_id: String,
     },
+    McpHealth {
+        app_id: String,
+    },
     McpConnectStdio {
         app_id: String,
         binding: String,

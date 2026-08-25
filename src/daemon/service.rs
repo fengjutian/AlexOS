@@ -135,6 +135,7 @@ pub struct DaemonService {
     websocket_tunnels: Arc<Mutex<BTreeMap<String, crate::proxy::WebSocketTunnel>>>,
     streams: Arc<crate::runtime::stream::StreamManager>,
     mcp: crate::mcp::ConnectionManager,
+    mcp_health: Option<crate::mcp::ConnectionHealthMonitor>,
     mcp_audit: Option<crate::mcp::AuditLog>,
     mcp_configs: Option<crate::mcp::ConnectionConfigStore>,
     mcp_tokens: Option<crate::mcp::oauth::TokenVault>,
@@ -154,6 +155,7 @@ impl DaemonService {
                 crate::runtime::stream::StreamLimits::default(),
             )),
             mcp: crate::mcp::ConnectionManager::default(),
+            mcp_health: None,
             mcp_audit: None,
             mcp_configs: None,
             mcp_tokens: None,
@@ -187,6 +189,10 @@ impl DaemonService {
         self.mcp_tokens = Some(crate::mcp::oauth::TokenVault::new(Arc::new(
             crate::platform::secret::native(),
         )));
+        self.mcp_health = Some(crate::mcp::ConnectionHealthMonitor::start(
+            self.mcp.clone(),
+            std::time::Duration::from_secs(15),
+        ).map_err(|error| error.to_string())?);
         self.restore_mcp_connections();
         Ok(self)
     }
@@ -290,6 +296,13 @@ impl DaemonService {
                     .map_err(|error| error.to_string())
                 })
             }
+            ControlCommand::McpHealth { app_id } => Ok(json!({
+                "connections": self
+                    .mcp_health
+                    .as_ref()
+                    .map(|monitor| monitor.list(&app_id))
+                    .unwrap_or_default()
+            })),
             ControlCommand::McpConnectStdio {
                 app_id,
                 binding,
