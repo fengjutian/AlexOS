@@ -9,7 +9,7 @@
     "build": "tsc",
     "start": "node dist/service.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-reporter=spec \"../../tests/app/**/*.test.ts\""
+    "test": "node --import tsx --test --test-reporter=spec ../tests/app/workspace.test.ts"
   },
   "dependencies": {
     "@alex/coding-agent-shared": "0.1.0"

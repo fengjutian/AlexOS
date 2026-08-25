@@ -5,7 +5,7 @@ import { WorkspaceService } from "./services/workspace.js";
 import { logger } from "./util/logger.js";
 
 const VERSION = "0.1.0";
-const workspaceRoot = path.resolve(process.env.ALEX_WORKSPACE ?? "workspace");
+const workspaceRoot = path.resolve(process.env["ALEX_WORKSPACE"] ?? "workspace");
 
 const workspace = new WorkspaceService({
   root: workspaceRoot,

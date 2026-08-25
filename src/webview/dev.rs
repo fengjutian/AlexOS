@@ -607,6 +607,13 @@ mod windows {
             install_service_dependencies(&canonical_root, dev)?;
         }
         let mut frontend_process = match frontend_dev.as_ref() {
+            Some(dev) if dev_server_is_ready(&dev.url) => {
+                eprintln!(
+                    "alex dev: frontend server already running at {}; reusing it",
+                    dev.url
+                );
+                None
+            }
             Some(dev) => Some(start_frontend_dev_server(&canonical_root, dev)?),
             None => None,
         };
@@ -948,9 +955,6 @@ mod windows {
         let address = format!("{host}:{port}").parse()?;
         let deadline = Instant::now() + Duration::from_secs(30);
         loop {
-            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
-                return Ok(());
-            }
             if let Some(status) = child
                 .as_mut()
                 .and_then(|process| process.try_wait().ok())
@@ -959,6 +963,9 @@ mod windows {
                 return Err(
                     format!("frontend dev command exited before becoming ready: {status}").into(),
                 );
+            }
+            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
+                return Ok(());
             }
             if Instant::now() >= deadline {
                 if let Some(process) = child.as_mut() {
@@ -970,6 +977,22 @@ mod windows {
             }
             thread::sleep(Duration::from_millis(100));
         }
+    }
+
+    fn dev_server_is_ready(url: &str) -> bool {
+        let Ok(parsed) = url::Url::parse(url) else {
+            return false;
+        };
+        let Some(host) = parsed.host_str() else {
+            return false;
+        };
+        let Some(port) = parsed.port_or_known_default() else {
+            return false;
+        };
+        let Ok(address) = format!("{host}:{port}").parse() else {
+            return false;
+        };
+        std::net::TcpStream::connect_timeout(&address, Duration::from_millis(200)).is_ok()
     }
 
     fn same_origin(candidate: &str, allowed: &str) -> bool {

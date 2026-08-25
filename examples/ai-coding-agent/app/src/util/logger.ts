@@ -6,7 +6,7 @@ type Level = "debug" | "info" | "warn" | "error";
 
 const LEVELS: Record<Level, number> = { debug: 10, info: 20, warn: 30, error: 40 };
 
-const minLevel = LEVELS[(process.env.LOG_LEVEL as Level) ?? "info"];
+const minLevel = LEVELS[(process.env["LOG_LEVEL"] as Level) ?? "info"];
 
 function emit(level: Level, args: unknown[]): void {
   if (LEVELS[level] < minLevel) return;

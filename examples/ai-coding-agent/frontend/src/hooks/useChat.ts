@@ -22,6 +22,13 @@ function appendContent(messages: ChatMessage[], id: string, delta: string): Chat
   return messages.map((message) => (message.id === id ? { ...message, content: message.content + delta } : message));
 }
 
+function toolNameFromCall(call: unknown): string | null {
+  if (call && typeof call === "object" && "name" in call && typeof (call as { name: unknown }).name === "string") {
+    return (call as { name: string }).name;
+  }
+  return null;
+}
+
 export function useChat(): UseChatResult {
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [input, setInput] = useState("");
@@ -52,7 +59,8 @@ export function useChat(): UseChatResult {
               return appendContent(current, last.id, event.text);
             });
           } else if (event.type === "toolIntent") {
-            setStatus(`Tool: ${event.call.name}`);
+            const name = toolNameFromCall(event.call);
+            setStatus(name ? `Tool: ${name}` : "Tool");
           } else if (event.type === "error") {
             throw new Error(event.message);
           }

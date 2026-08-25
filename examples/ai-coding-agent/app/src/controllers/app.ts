@@ -38,22 +38,22 @@ export class AppController {
       case RPC_METHODS.PING:
         return this.workspace.ping();
       case RPC_METHODS.ECHO: {
-        const message = params?.message;
+        const message = params?.["message"];
         if (typeof message !== "string") {
           throw new AppError(ErrorCode.InvalidParams, "message is required");
         }
         return this.workspace.echo(message);
       }
       case RPC_METHODS.CONFIG_GET:
-        return this.workspace.configGet(params?.key as string | undefined);
+        return this.workspace.configGet(params?.["key"] as string | undefined);
       case RPC_METHODS.WORKSPACE_LIST:
-        return this.workspace.list(params?.path as string | undefined);
+        return this.workspace.list(params?.["path"] as string | undefined);
       case RPC_METHODS.WORKSPACE_READ: {
-        const path = params?.path;
+        const path = params?.["path"];
         if (typeof path !== "string") {
           throw new AppError(ErrorCode.InvalidParams, "path is required");
         }
-        const maxBytes = params?.maxBytes;
+        const maxBytes = params?.["maxBytes"];
         return this.workspace.read(path, typeof maxBytes === "number" ? maxBytes : undefined);
       }
       default:

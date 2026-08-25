@@ -7,7 +7,8 @@
     "jsx": "react-jsx",
     "useDefineForClassFields": true,
     "allowSyntheticDefaultImports": true,
-    "noEmit": true
+    "noEmit": true,
+    "types": ["vite/client"]
   },
   "include": ["src", "../shared/src"]
 }

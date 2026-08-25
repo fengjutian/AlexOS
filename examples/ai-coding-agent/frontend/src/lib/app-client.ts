@@ -15,7 +15,7 @@ import type {
  * compiler enforces the request/result shape end-to-end.
  */
 export class AppClient {
-  private async invoke<TMethod extends keyof RpcMethodMap>(
+  async invoke<TMethod extends keyof RpcMethodMap>(
     method: TMethod,
     params: RpcParams<TMethod>,
   ): Promise<RpcResult<TMethod>> {

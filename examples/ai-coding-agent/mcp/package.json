@@ -9,7 +9,7 @@
     "build": "tsc",
     "start": "node dist/filesystem.js",
     "typecheck": "tsc --noEmit",
-    "test": "node --import tsx --test --test-reporter=spec \"../../tests/mcp/**/*.test.ts\""
+    "test": "node --import tsx --test --test-reporter=spec ../tests/mcp/tools.test.ts"
   },
   "devDependencies": {
     "@types/node": "latest",
