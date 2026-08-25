@@ -353,6 +353,15 @@ export interface McpAuditEntry {
   errorKind?: string;
 }
 
+export interface McpDiscoverResult {
+  supportedVersions: string[];
+  capabilities: Record<string, unknown>;
+  instructions?: string;
+  ttlMs?: number;
+  cacheScope?: string;
+  _meta?: Record<string, unknown>;
+}
+
 export interface ModelManifest {
   id: string;
   digest: `sha256:${string}`;
@@ -433,6 +442,7 @@ export interface AlexClient {
   };
   readonly mcp: {
     connections(options?: InvokeOptions): Promise<McpConnectionInfo[]>;
+    discover(binding: string, options?: InvokeOptions): Promise<McpDiscoverResult>;
     listTools(
       binding: string,
       cursor?: string,
@@ -445,6 +455,12 @@ export interface AlexClient {
       options?: InvokeOptions,
     ): Promise<{ content: unknown[]; isError: boolean; structuredContent?: unknown }>;
     audit(limit?: number, options?: InvokeOptions): Promise<McpAuditEntry[]>;
+    listResources(binding: string, cursor?: string, options?: InvokeOptions): Promise<{ resources: unknown[]; nextCursor?: string }>;
+    readResource(binding: string, uri: string, options?: InvokeOptions): Promise<{ contents: unknown[] }>;
+    listPrompts(binding: string, cursor?: string, options?: InvokeOptions): Promise<{ prompts: unknown[]; nextCursor?: string }>;
+    getPrompt(binding: string, name: string, input?: Record<string, unknown>, options?: InvokeOptions): Promise<{ description?: string; messages: unknown[] }>;
+    complete(binding: string, reference: Record<string, unknown>, argument: Record<string, unknown>, options?: InvokeOptions): Promise<unknown>;
+    ping(binding: string, options?: InvokeOptions): Promise<{ ok: boolean }>;
   };
   readonly model: {
     list(options?: InvokeOptions): Promise<ModelManifest[]>;

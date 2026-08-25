@@ -202,12 +202,33 @@ export function createAlexClient(transport = browserTransport()) {
       async listTools(binding, cursor, options) {
         return invoke("mcp.listTools", { binding, cursor }, options);
       },
+      async discover(binding, options) {
+        return invoke("mcp.discover", { binding }, options);
+      },
       async callTool(binding, name, input = {}, options) {
         return invoke("mcp.callTool", { binding, name, arguments: input }, options);
       },
       async audit(limit = 200, options) {
         const result = await invoke("mcp.audit", { limit }, options);
         return result.entries ?? [];
+      },
+      listResources(binding, cursor, options) {
+        return invoke("mcp.listResources", { binding, cursor }, options);
+      },
+      readResource(binding, uri, options) {
+        return invoke("mcp.readResource", { binding, uri }, options);
+      },
+      listPrompts(binding, cursor, options) {
+        return invoke("mcp.listPrompts", { binding, cursor }, options);
+      },
+      getPrompt(binding, name, input = {}, options) {
+        return invoke("mcp.getPrompt", { binding, name, arguments: input }, options);
+      },
+      complete(binding, reference, argument, options) {
+        return invoke("mcp.complete", { binding, reference, argument }, options);
+      },
+      ping(binding, options) {
+        return invoke("mcp.ping", { binding }, options);
       },
     }),
     model: Object.freeze({

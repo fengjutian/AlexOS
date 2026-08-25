@@ -174,11 +174,73 @@ impl DaemonService {
             ControlCommand::McpDisconnect { app_id, binding } => Ok(json!({
                 "disconnected": self.mcp.disconnect(&app_id, &binding)
             })),
+            ControlCommand::McpDiscover { app_id, binding } => self
+                .mcp
+                .get(&app_id, &binding)
+                .and_then(|client| client.discover())
+                .and_then(|result| {
+                    serde_json::to_value(result)
+                        .map_err(|error| crate::mcp::McpError::Protocol(error.to_string()))
+                })
+                .map_err(|error| error.to_string()),
             ControlCommand::McpListTools {
                 app_id,
                 binding,
                 cursor,
             } => self.mcp_list_tools(&app_id, &binding, cursor.as_deref()),
+            ControlCommand::McpListResources {
+                app_id,
+                binding,
+                cursor,
+            } => self
+                .mcp
+                .get(&app_id, &binding)
+                .and_then(|client| client.list_resources(cursor.as_deref()))
+                .map_err(|error| error.to_string()),
+            ControlCommand::McpReadResource {
+                app_id,
+                binding,
+                uri,
+            } => self
+                .mcp
+                .get(&app_id, &binding)
+                .and_then(|client| client.read_resource(&uri))
+                .map_err(|error| error.to_string()),
+            ControlCommand::McpListPrompts {
+                app_id,
+                binding,
+                cursor,
+            } => self
+                .mcp
+                .get(&app_id, &binding)
+                .and_then(|client| client.list_prompts(cursor.as_deref()))
+                .map_err(|error| error.to_string()),
+            ControlCommand::McpGetPrompt {
+                app_id,
+                binding,
+                name,
+                arguments,
+            } => self
+                .mcp
+                .get(&app_id, &binding)
+                .and_then(|client| client.get_prompt(&name, arguments))
+                .map_err(|error| error.to_string()),
+            ControlCommand::McpComplete {
+                app_id,
+                binding,
+                reference,
+                argument,
+            } => self
+                .mcp
+                .get(&app_id, &binding)
+                .and_then(|client| client.complete(reference, argument))
+                .map_err(|error| error.to_string()),
+            ControlCommand::McpPing { app_id, binding } => self
+                .mcp
+                .get(&app_id, &binding)
+                .and_then(|client| client.ping())
+                .map(|_| json!({ "ok": true }))
+                .map_err(|error| error.to_string()),
             ControlCommand::McpCallTool {
                 app_id,
                 binding,

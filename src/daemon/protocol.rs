@@ -150,11 +150,49 @@ pub enum ControlCommand {
         app_id: String,
         binding: String,
     },
+    McpDiscover {
+        app_id: String,
+        binding: String,
+    },
     McpListTools {
         app_id: String,
         binding: String,
         #[serde(default, skip_serializing_if = "Option::is_none")]
         cursor: Option<String>,
+    },
+    McpListResources {
+        app_id: String,
+        binding: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+    },
+    McpReadResource {
+        app_id: String,
+        binding: String,
+        uri: String,
+    },
+    McpListPrompts {
+        app_id: String,
+        binding: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+    },
+    McpGetPrompt {
+        app_id: String,
+        binding: String,
+        name: String,
+        #[serde(default)]
+        arguments: Value,
+    },
+    McpComplete {
+        app_id: String,
+        binding: String,
+        reference: Value,
+        argument: Value,
+    },
+    McpPing {
+        app_id: String,
+        binding: String,
     },
     McpCallTool {
         app_id: String,

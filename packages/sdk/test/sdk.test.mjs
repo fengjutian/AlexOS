@@ -32,20 +32,38 @@ test("MCP and local model namespaces map to daemon-owned APIs", async () => {
     async invoke(method, params) {
       calls.push({ method, params });
       if (method === "mcp.listTools") return { tools: [{ name: "echo", inputSchema: {} }] };
+      if (method === "mcp.discover") return { supportedVersions: ["2026-07-28"], capabilities: {} };
       if (method === "mcp.audit") return { entries: [{ tool: "echo", phase: "finished" }] };
+      if (method === "mcp.listResources") return { resources: [{ uri: "file:///readme" }] };
+      if (method === "mcp.readResource") return { contents: [{ uri: "file:///readme", text: "ok" }] };
+      if (method === "mcp.listPrompts") return { prompts: [{ name: "review" }] };
+      if (method === "mcp.getPrompt") return { messages: [{ role: "user" }] };
+      if (method === "mcp.ping") return { ok: true };
       if (method === "model.list") return { models: [{ id: "local/tiny@1" }] };
       return { content: [], isError: false };
     },
   });
   assert.equal((await client.mcp.listTools("tools")).tools[0].name, "echo");
+  assert.equal((await client.mcp.discover("tools")).supportedVersions[0], "2026-07-28");
   await client.mcp.callTool("tools", "echo", { text: "hello" });
   assert.equal((await client.mcp.audit(25))[0].tool, "echo");
+  assert.equal((await client.mcp.listResources("tools")).resources[0].uri, "file:///readme");
+  assert.equal((await client.mcp.readResource("tools", "file:///readme")).contents[0].text, "ok");
+  assert.equal((await client.mcp.listPrompts("tools")).prompts[0].name, "review");
+  assert.equal((await client.mcp.getPrompt("tools", "review")).messages[0].role, "user");
+  assert.equal((await client.mcp.ping("tools")).ok, true);
   assert.equal((await client.model.list())[0].id, "local/tiny@1");
   await client.model.load("local/tiny@1", "llama-cpp");
   assert.deepEqual(calls.map(({ method }) => method), [
     "mcp.listTools",
+    "mcp.discover",
     "mcp.callTool",
     "mcp.audit",
+    "mcp.listResources",
+    "mcp.readResource",
+    "mcp.listPrompts",
+    "mcp.getPrompt",
+    "mcp.ping",
     "model.list",
     "model.load",
   ]);

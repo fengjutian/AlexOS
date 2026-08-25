@@ -197,6 +197,7 @@ pub trait RpcTransport: Send + Sync {
 pub struct StreamableHttpTransport {
     endpoint: Url,
     agent: ureq::Agent,
+    era: ProtocolEra,
     protocol_version: &'static str,
     session_id: Mutex<Option<String>>,
 }
@@ -231,6 +232,7 @@ impl StreamableHttpTransport {
         Ok(Self {
             endpoint,
             agent,
+            era,
             protocol_version: match era {
                 ProtocolEra::Modern => MODERN_PROTOCOL_VERSION,
                 ProtocolEra::Legacy => LEGACY_PROTOCOL_VERSION,
@@ -239,7 +241,7 @@ impl StreamableHttpTransport {
         })
     }
 
-    fn post(&self, value: &Value) -> Result<Option<Value>, McpError> {
+    fn post(&self, method: &str, params: &Value, value: &Value) -> Result<Option<Value>, McpError> {
         let body =
             serde_json::to_vec(value).map_err(|error| McpError::Protocol(error.to_string()))?;
         if body.len() > MAX_MESSAGE_BYTES {
@@ -251,7 +253,16 @@ impl StreamableHttpTransport {
             .header("content-type", "application/json")
             .header("accept", "application/json, text/event-stream")
             .header("mcp-protocol-version", self.protocol_version);
-        if let Some(session_id) = self
+        if self.era == ProtocolEra::Modern {
+            request = request.header("mcp-method", method);
+            if let Some(name) = params
+                .get("name")
+                .or_else(|| params.get("uri"))
+                .and_then(Value::as_str)
+            {
+                request = request.header("mcp-name", name);
+            }
+        } else if let Some(session_id) = self
             .session_id
             .lock()
             .map_err(|_| McpError::Transport("HTTP session lock poisoned".into()))?
@@ -266,10 +277,11 @@ impl StreamableHttpTransport {
             .agent
             .run(request)
             .map_err(|error| McpError::Transport(error.to_string()))?;
-        if let Some(session_id) = response
-            .headers()
-            .get("mcp-session-id")
-            .and_then(|value| value.to_str().ok())
+        if self.era == ProtocolEra::Legacy
+            && let Some(session_id) = response
+                .headers()
+                .get("mcp-session-id")
+                .and_then(|value| value.to_str().ok())
         {
             if session_id.len() > 1024 || session_id.contains(['\r', '\n']) {
                 return Err(McpError::Protocol("invalid MCP session id".into()));
@@ -354,13 +366,21 @@ impl StreamableHttpTransport {
 impl RpcTransport for StreamableHttpTransport {
     fn request(&self, id: u64, method: &str, params: Value) -> Result<Value, McpError> {
         let response = self
-            .post(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?
+            .post(
+                method,
+                &params,
+                &json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}),
+            )?
             .ok_or_else(|| McpError::Protocol("request received no response body".into()))?;
         Self::response_result(response, id)
     }
 
     fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
-        self.post(&json!({"jsonrpc":"2.0","method":method,"params":params}))?;
+        self.post(
+            method,
+            &params,
+            &json!({"jsonrpc":"2.0","method":method,"params":params}),
+        )?;
         Ok(())
     }
 }
@@ -511,6 +531,23 @@ pub struct McpClient {
     next_id: Arc<AtomicU64>,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct DiscoverResult {
+    #[serde(default)]
+    pub supported_versions: Vec<String>,
+    #[serde(default)]
+    pub capabilities: Value,
+    #[serde(default)]
+    pub instructions: Option<String>,
+    #[serde(default)]
+    pub ttl_ms: Option<u64>,
+    #[serde(default)]
+    pub cache_scope: Option<String>,
+    #[serde(default, rename = "_meta")]
+    pub metadata: Value,
+}
+
 impl McpClient {
     pub fn new(transport: Arc<dyn RpcTransport>, era: ProtocolEra) -> Self {
         Self {
@@ -543,6 +580,15 @@ impl McpClient {
             .notify("notifications/initialized", json!({}))?;
         Ok(value)
     }
+    pub fn discover(&self) -> Result<DiscoverResult, McpError> {
+        if self.era != ProtocolEra::Modern {
+            return Err(McpError::Protocol(
+                "server/discover is only valid for modern MCP".into(),
+            ));
+        }
+        serde_json::from_value(self.call("server/discover", json!({}))?)
+            .map_err(|error| McpError::Protocol(error.to_string()))
+    }
     pub fn list_tools(
         &self,
         cursor: Option<&str>,
@@ -559,6 +605,63 @@ impl McpClient {
             .and_then(Value::as_str)
             .map(str::to_owned);
         Ok((tools, cursor))
+    }
+    pub fn list_resources(&self, cursor: Option<&str>) -> Result<Value, McpError> {
+        let value = self.call(
+            "resources/list",
+            cursor.map_or_else(|| json!({}), |value| json!({"cursor":value})),
+        )?;
+        if !value.get("resources").is_some_and(Value::is_array) {
+            return Err(McpError::Protocol(
+                "resources/list response omitted resources".into(),
+            ));
+        }
+        Ok(value)
+    }
+    pub fn read_resource(&self, uri: &str) -> Result<Value, McpError> {
+        if uri.is_empty() {
+            return Err(McpError::InvalidConfig("resource URI is empty".into()));
+        }
+        let value = self.call("resources/read", json!({"uri":uri}))?;
+        if !value.get("contents").is_some_and(Value::is_array) {
+            return Err(McpError::Protocol(
+                "resources/read response omitted contents".into(),
+            ));
+        }
+        Ok(value)
+    }
+    pub fn list_prompts(&self, cursor: Option<&str>) -> Result<Value, McpError> {
+        let value = self.call(
+            "prompts/list",
+            cursor.map_or_else(|| json!({}), |value| json!({"cursor":value})),
+        )?;
+        if !value.get("prompts").is_some_and(Value::is_array) {
+            return Err(McpError::Protocol(
+                "prompts/list response omitted prompts".into(),
+            ));
+        }
+        Ok(value)
+    }
+    pub fn get_prompt(&self, name: &str, arguments: Value) -> Result<Value, McpError> {
+        if name.is_empty() {
+            return Err(McpError::InvalidConfig("prompt name is empty".into()));
+        }
+        let value = self.call("prompts/get", json!({"name":name,"arguments":arguments}))?;
+        if !value.get("messages").is_some_and(Value::is_array) {
+            return Err(McpError::Protocol(
+                "prompts/get response omitted messages".into(),
+            ));
+        }
+        Ok(value)
+    }
+    pub fn complete(&self, reference: Value, argument: Value) -> Result<Value, McpError> {
+        self.call(
+            "completion/complete",
+            json!({"ref":reference,"argument":argument}),
+        )
+    }
+    pub fn ping(&self) -> Result<(), McpError> {
+        self.call("ping", json!({})).map(|_| ())
     }
     pub fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolCallResult, McpError> {
         if name.is_empty() {
@@ -656,6 +759,8 @@ mod tests {
             self.0.lock().unwrap().push((method.into(), params));
             Ok(if method == "tools/list" {
                 json!({"tools":[{"name":"echo","inputSchema":{"type":"object"}}]})
+            } else if method == "server/discover" {
+                json!({"supportedVersions":[MODERN_PROTOCOL_VERSION],"capabilities":{"tools":{}},"ttlMs":1000,"cacheScope":"private"})
             } else {
                 json!({"content":[{"type":"text","text":"ok"}]})
             })
@@ -672,6 +777,10 @@ mod tests {
         assert_eq!(
             transport.0.lock().unwrap()[0].1["_meta"]["io.modelcontextprotocol/protocolVersion"],
             MODERN_PROTOCOL_VERSION
+        );
+        assert_eq!(
+            client.discover().unwrap().supported_versions,
+            vec![MODERN_PROTOCOL_VERSION]
         );
     }
     #[test]
@@ -730,6 +839,7 @@ mod tests {
             reader.read_line(&mut request_line).unwrap();
             let mut content_length = 0;
             let mut saw_protocol = false;
+            let mut saw_method = false;
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
@@ -743,11 +853,15 @@ mod tests {
                 if lower.starts_with("mcp-protocol-version: 2026-07-28") {
                     saw_protocol = true;
                 }
+                if lower.starts_with("mcp-method: tools/list") {
+                    saw_method = true;
+                }
             }
             let mut body = vec![0; content_length];
             reader.read_exact(&mut body).unwrap();
             assert!(request_line.starts_with("POST /mcp HTTP/1.1"));
             assert!(saw_protocol);
+            assert!(saw_method);
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).unwrap()["method"],
                 "tools/list"
@@ -769,10 +883,7 @@ mod tests {
             transport.request(7, "tools/list", json!({})).unwrap(),
             json!({"tools":[]})
         );
-        assert_eq!(
-            transport.session_id.lock().unwrap().as_deref(),
-            Some("session-1")
-        );
+        assert_eq!(transport.session_id.lock().unwrap().as_deref(), None);
         server.join().unwrap();
     }
 }

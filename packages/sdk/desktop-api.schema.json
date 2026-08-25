@@ -140,9 +140,16 @@
       "stream.read",
       "stream.cancel",
       "mcp.connections",
+      "mcp.discover",
       "mcp.listTools",
       "mcp.callTool",
       "mcp.audit",
+      "mcp.listResources",
+      "mcp.readResource",
+      "mcp.listPrompts",
+      "mcp.getPrompt",
+      "mcp.complete",
+      "mcp.ping",
       "model.list",
       "model.import",
       "model.remove",
@@ -2407,6 +2414,10 @@
       "params": { "$ref": "#/$defs/Empty" },
       "result": { "type": "array", "items": { "type": "object", "properties": { "application": { "type": "string" }, "binding": { "type": "string" }, "era": { "enum": ["modern", "legacy"] } }, "required": ["application", "binding", "era"], "additionalProperties": false } }
     },
+    "mcp.discover": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 } }, "required": ["binding"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "supportedVersions": { "type": "array", "items": { "type": "string" } }, "capabilities": { "$ref": "#/$defs/JsonValue" }, "instructions": { "type": "string" }, "ttlMs": { "type": "integer", "minimum": 0 }, "cacheScope": { "type": "string" }, "_meta": { "$ref": "#/$defs/JsonValue" } }, "required": ["supportedVersions", "capabilities"], "additionalProperties": false }
+    },
     "mcp.listTools": {
       "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "cursor": { "type": "string" } }, "required": ["binding"], "additionalProperties": false },
       "result": { "type": "object", "properties": { "tools": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "description": { "type": "string" }, "inputSchema": { "$ref": "#/$defs/JsonValue" } }, "required": ["name", "inputSchema"], "additionalProperties": false } }, "nextCursor": { "type": ["string", "null"] } }, "required": ["tools", "nextCursor"], "additionalProperties": false }
@@ -2418,6 +2429,30 @@
     "mcp.audit": {
       "params": { "type": "object", "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 } }, "additionalProperties": false },
       "result": { "type": "object", "properties": { "entries": { "type": "array", "items": { "type": "object", "properties": { "timestampMs": { "type": "integer", "minimum": 0 }, "callId": { "type": "string" }, "application": { "type": "string" }, "binding": { "type": "string" }, "tool": { "type": "string" }, "phase": { "enum": ["started", "finished"] }, "outcome": { "enum": ["success", "failure"] }, "durationMs": { "type": "integer", "minimum": 0 }, "errorKind": { "type": "string" } }, "required": ["timestampMs", "callId", "application", "binding", "tool", "phase"], "additionalProperties": false } } }, "required": ["entries"], "additionalProperties": false }
+    },
+    "mcp.listResources": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "cursor": { "type": "string" } }, "required": ["binding"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "resources": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "nextCursor": { "type": ["string", "null"] }, "ttlMs": { "type": "integer", "minimum": 0 }, "cacheScope": { "type": "string" } }, "required": ["resources"], "additionalProperties": true }
+    },
+    "mcp.readResource": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "uri": { "type": "string", "minLength": 1 } }, "required": ["binding", "uri"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "contents": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "ttlMs": { "type": "integer", "minimum": 0 }, "cacheScope": { "type": "string" } }, "required": ["contents"], "additionalProperties": true }
+    },
+    "mcp.listPrompts": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "cursor": { "type": "string" } }, "required": ["binding"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "prompts": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "nextCursor": { "type": ["string", "null"] }, "ttlMs": { "type": "integer", "minimum": 0 }, "cacheScope": { "type": "string" } }, "required": ["prompts"], "additionalProperties": true }
+    },
+    "mcp.getPrompt": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "arguments": { "$ref": "#/$defs/JsonValue" } }, "required": ["binding", "name"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "description": { "type": "string" }, "messages": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "ttlMs": { "type": "integer", "minimum": 0 }, "cacheScope": { "type": "string" } }, "required": ["messages"], "additionalProperties": true }
+    },
+    "mcp.complete": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "reference": { "$ref": "#/$defs/JsonValue" }, "argument": { "$ref": "#/$defs/JsonValue" } }, "required": ["binding", "reference", "argument"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/JsonValue" }
+    },
+    "mcp.ping": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 } }, "required": ["binding"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"], "additionalProperties": false }
     },
     "model.list": {
       "params": { "$ref": "#/$defs/Empty" },

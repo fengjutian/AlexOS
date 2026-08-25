@@ -19,6 +19,30 @@ struct McpCallParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpResourceParams {
+    binding: String,
+    uri: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpPromptParams {
+    binding: String,
+    name: String,
+    #[serde(default)]
+    arguments: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpCompleteParams {
+    binding: String,
+    reference: Value,
+    argument: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct McpAuditParams {
     #[serde(default = "default_mcp_audit_limit")]
     limit: usize,
@@ -86,7 +110,7 @@ impl ApiRouter {
             .permissions
             .iter()
             .any(|permission| match permission {
-                Permission::McpUse { servers, tools } => binding.is_none_or(|binding| {
+                Permission::McpUse { servers, tools, .. } => binding.is_none_or(|binding| {
                     servers.iter().any(|value| value == binding)
                         && tool.is_none_or(|tool| {
                             tools
@@ -118,6 +142,43 @@ impl ApiRouter {
         allowed
             .then_some(())
             .ok_or(("PERMISSION_DENIED", "model is not allowed".into()))
+    }
+
+    fn mcp_named_scope(
+        &self,
+        binding: &str,
+        value: Option<&str>,
+        prompt: bool,
+    ) -> Result<(), (&'static str, String)> {
+        let allowed = self.manifest.permissions.iter().any(|permission| {
+            let Permission::McpUse {
+                servers,
+                resources,
+                prompts,
+                ..
+            } = permission
+            else {
+                return false;
+            };
+            if !servers.iter().any(|server| server == binding) {
+                return false;
+            }
+            let scopes = if prompt { prompts } else { resources };
+            scopes.get(binding).is_some_and(|scopes| {
+                value.is_none_or(|value| {
+                    scopes.iter().any(|scope| {
+                        scope == value
+                            || scope
+                                .strip_suffix('*')
+                                .is_some_and(|prefix| value.starts_with(prefix))
+                    })
+                })
+            })
+        }) && self.permission_granted("mcp.use");
+        allowed.then_some(()).ok_or((
+            "PERMISSION_DENIED",
+            "MCP resource or prompt is not allowed".into(),
+        ))
     }
 
     fn require_model_manage(&self) -> Result<(), (&'static str, String)> {
@@ -159,6 +220,23 @@ impl ApiRouter {
             },
         )
     }
+    pub(crate) fn mcp_discover(&self, params: &Value) -> ApiResult {
+        let params: McpBindingParams = parse_params(params)?;
+        self.mcp_scope(Some(&params.binding), None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-discover",
+            crate::daemon::ControlCommand::McpDiscover {
+                app_id,
+                binding: params.binding,
+            },
+        )
+    }
     pub(crate) fn mcp_call_tool(&self, params: &Value) -> ApiResult {
         let params: McpCallParams = parse_params(params)?;
         self.mcp_scope(Some(&params.binding), Some(&params.name))?;
@@ -192,6 +270,121 @@ impl ApiRouter {
             crate::daemon::ControlCommand::McpAudit {
                 app_id,
                 limit: params.limit,
+            },
+        )
+    }
+    pub(crate) fn mcp_list_resources(&self, params: &Value) -> ApiResult {
+        let params: McpBindingParams = parse_params(params)?;
+        self.mcp_named_scope(&params.binding, None, false)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|v| v.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-list-resources",
+            crate::daemon::ControlCommand::McpListResources {
+                app_id,
+                binding: params.binding,
+                cursor: params.cursor,
+            },
+        )
+    }
+    pub(crate) fn mcp_read_resource(&self, params: &Value) -> ApiResult {
+        let params: McpResourceParams = parse_params(params)?;
+        self.mcp_named_scope(&params.binding, Some(&params.uri), false)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|v| v.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-read-resource",
+            crate::daemon::ControlCommand::McpReadResource {
+                app_id,
+                binding: params.binding,
+                uri: params.uri,
+            },
+        )
+    }
+    pub(crate) fn mcp_list_prompts(&self, params: &Value) -> ApiResult {
+        let params: McpBindingParams = parse_params(params)?;
+        self.mcp_named_scope(&params.binding, None, true)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|v| v.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-list-prompts",
+            crate::daemon::ControlCommand::McpListPrompts {
+                app_id,
+                binding: params.binding,
+                cursor: params.cursor,
+            },
+        )
+    }
+    pub(crate) fn mcp_get_prompt(&self, params: &Value) -> ApiResult {
+        let params: McpPromptParams = parse_params(params)?;
+        self.mcp_named_scope(&params.binding, Some(&params.name), true)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|v| v.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-get-prompt",
+            crate::daemon::ControlCommand::McpGetPrompt {
+                app_id,
+                binding: params.binding,
+                name: params.name,
+                arguments: params.arguments,
+            },
+        )
+    }
+    pub(crate) fn mcp_complete(&self, params: &Value) -> ApiResult {
+        let params: McpCompleteParams = parse_params(params)?;
+        let reference_type = params.reference.get("type").and_then(Value::as_str);
+        let name = params
+            .reference
+            .get("name")
+            .or_else(|| params.reference.get("uri"))
+            .and_then(Value::as_str);
+        self.mcp_named_scope(&params.binding, name, reference_type == Some("ref/prompt"))?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|v| v.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-complete",
+            crate::daemon::ControlCommand::McpComplete {
+                app_id,
+                binding: params.binding,
+                reference: params.reference,
+                argument: params.argument,
+            },
+        )
+    }
+    pub(crate) fn mcp_ping(&self, params: &Value) -> ApiResult {
+        let params: McpBindingParams = parse_params(params)?;
+        self.mcp_scope(Some(&params.binding), None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|v| v.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-ping",
+            crate::daemon::ControlCommand::McpPing {
+                app_id,
+                binding: params.binding,
             },
         )
     }

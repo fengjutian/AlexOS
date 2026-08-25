@@ -75,6 +75,10 @@ pub enum Permission {
         servers: Vec<String>,
         #[serde(default)]
         tools: std::collections::BTreeMap<String, Vec<String>>,
+        #[serde(default)]
+        resources: std::collections::BTreeMap<String, Vec<String>>,
+        #[serde(default)]
+        prompts: std::collections::BTreeMap<String, Vec<String>>,
     },
     #[serde(rename = "model.use")]
     ModelUse { models: Vec<String> },
@@ -130,7 +134,9 @@ impl Permission {
             "notification.show" => Some("notification.show"),
             "runtime.invoke" => Some("runtime.invoke"),
             "runtime.restart" => Some("runtime.manage"),
-            "mcp.listTools" | "mcp.callTool" | "mcp.audit" => Some("mcp.use"),
+            "mcp.discover" | "mcp.listTools" | "mcp.callTool" | "mcp.audit"
+            | "mcp.listResources" | "mcp.readResource" | "mcp.listPrompts" | "mcp.getPrompt"
+            | "mcp.complete" | "mcp.ping" => Some("mcp.use"),
             "model.list" | "model.generate" | "model.cancel" => Some("model.use"),
             "model.import" | "model.load" | "model.unload" | "model.remove" => Some("model.manage"),
             "media.camera" => Some("media.camera"),
