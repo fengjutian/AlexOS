@@ -19,6 +19,8 @@ use serde_json::{Value, json};
 use thiserror::Error;
 use url::Url;
 
+use crate::platform::PlatformServices;
+
 pub const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 pub const LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
 const MAX_MESSAGE_BYTES: usize = 1024 * 1024;
@@ -680,6 +682,154 @@ pub struct ConnectionInfo {
     pub era: ProtocolEra,
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(tag = "type", rename_all = "kebab-case", deny_unknown_fields)]
+pub enum PersistedTransport {
+    Stdio {
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+    },
+    StreamableHttp {
+        endpoint: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct PersistedConnection {
+    pub application: String,
+    pub binding: String,
+    pub era: ProtocolEra,
+    pub transport: PersistedTransport,
+    #[serde(default = "default_enabled")]
+    pub enabled: bool,
+}
+
+fn default_enabled() -> bool {
+    true
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ConnectionConfigFile {
+    schema_version: u32,
+    connections: Vec<PersistedConnection>,
+}
+
+#[derive(Clone)]
+pub struct ConnectionConfigStore {
+    path: PathBuf,
+    gate: Arc<Mutex<()>>,
+}
+
+impl ConnectionConfigStore {
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, McpError> {
+        let path = path.into();
+        fs::create_dir_all(path.parent().ok_or_else(|| {
+            McpError::InvalidConfig("MCP connection store path has no parent".into())
+        })?)
+        .map_err(|error| McpError::Transport(error.to_string()))?;
+        let store = Self {
+            path,
+            gate: Arc::new(Mutex::new(())),
+        };
+        if !store.path.exists() {
+            store.save_unlocked(&ConnectionConfigFile {
+                schema_version: 1,
+                connections: Vec::new(),
+            })?;
+        }
+        store.load_unlocked()?;
+        Ok(store)
+    }
+
+    pub fn list(&self) -> Result<Vec<PersistedConnection>, McpError> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| McpError::Transport("MCP connection store lock poisoned".into()))?;
+        Ok(self.load_unlocked()?.connections)
+    }
+
+    pub fn upsert(&self, connection: PersistedConnection) -> Result<(), McpError> {
+        validate_identity(&connection.application, &connection.binding)?;
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| McpError::Transport("MCP connection store lock poisoned".into()))?;
+        let mut file = self.load_unlocked()?;
+        file.connections.retain(|value| {
+            value.application != connection.application || value.binding != connection.binding
+        });
+        if file.connections.len() >= 128 {
+            return Err(McpError::InvalidConfig(
+                "MCP connection store is limited to 128 bindings".into(),
+            ));
+        }
+        file.connections.push(connection);
+        file.connections
+            .sort_by(|a, b| (&a.application, &a.binding).cmp(&(&b.application, &b.binding)));
+        self.save_unlocked(&file)
+    }
+
+    pub fn remove(&self, application: &str, binding: &str) -> Result<bool, McpError> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| McpError::Transport("MCP connection store lock poisoned".into()))?;
+        let mut file = self.load_unlocked()?;
+        let before = file.connections.len();
+        file.connections
+            .retain(|value| value.application != application || value.binding != binding);
+        let removed = file.connections.len() != before;
+        if removed {
+            self.save_unlocked(&file)?;
+        }
+        Ok(removed)
+    }
+
+    fn load_unlocked(&self) -> Result<ConnectionConfigFile, McpError> {
+        let file: ConnectionConfigFile = serde_json::from_slice(
+            &fs::read(&self.path).map_err(|error| McpError::Transport(error.to_string()))?,
+        )
+        .map_err(|error| McpError::Protocol(error.to_string()))?;
+        if file.schema_version != 1 {
+            return Err(McpError::InvalidConfig(format!(
+                "unsupported MCP connection store schema {}",
+                file.schema_version
+            )));
+        }
+        for connection in &file.connections {
+            validate_identity(&connection.application, &connection.binding)?;
+            if let PersistedTransport::StreamableHttp { endpoint } = &connection.transport {
+                StreamableHttpTransport::new(endpoint, connection.era)?;
+            }
+        }
+        if file.connections.len() > 128 {
+            return Err(McpError::InvalidConfig(
+                "MCP connection store exceeds 128 bindings".into(),
+            ));
+        }
+        Ok(file)
+    }
+
+    fn save_unlocked(&self, file: &ConnectionConfigFile) -> Result<(), McpError> {
+        let parent = self.path.parent().expect("connection store has parent");
+        let mut temporary = tempfile::NamedTempFile::new_in(parent)
+            .map_err(|error| McpError::Transport(error.to_string()))?;
+        serde_json::to_writer_pretty(&mut temporary, file)
+            .map_err(|error| McpError::Protocol(error.to_string()))?;
+        temporary
+            .as_file()
+            .sync_all()
+            .map_err(|error| McpError::Transport(error.to_string()))?;
+        crate::platform::native()
+            .atomic_replace(temporary.path(), &self.path)
+            .map_err(|error| McpError::Transport(error.to_string()))
+    }
+}
+
 #[derive(Clone, Default)]
 pub struct ConnectionManager {
     connections: Arc<Mutex<BTreeMap<(String, String), McpClient>>>,
@@ -885,5 +1035,28 @@ mod tests {
         );
         assert_eq!(transport.session_id.lock().unwrap().as_deref(), None);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn connection_configs_persist_and_remove_by_application_binding() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("mcp").join("connections.json");
+        let store = ConnectionConfigStore::open(&path).unwrap();
+        let connection = PersistedConnection {
+            application: "com.example.app".into(),
+            binding: "search".into(),
+            era: ProtocolEra::Modern,
+            transport: PersistedTransport::StreamableHttp {
+                endpoint: "https://mcp.example.test/v1".into(),
+            },
+            enabled: true,
+        };
+        store.upsert(connection.clone()).unwrap();
+        assert_eq!(
+            ConnectionConfigStore::open(&path).unwrap().list().unwrap(),
+            vec![connection]
+        );
+        assert!(store.remove("com.example.app", "search").unwrap());
+        assert!(store.list().unwrap().is_empty());
     }
 }

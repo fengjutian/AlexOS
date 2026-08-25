@@ -36,6 +36,7 @@ pub struct DaemonService {
     streams: Arc<crate::runtime::stream::StreamManager>,
     mcp: crate::mcp::ConnectionManager,
     mcp_audit: Option<crate::mcp::AuditLog>,
+    mcp_configs: Option<crate::mcp::ConnectionConfigStore>,
     models: Option<crate::model::ModelManager>,
 }
 
@@ -50,6 +51,7 @@ impl DaemonService {
             )),
             mcp: crate::mcp::ConnectionManager::default(),
             mcp_audit: None,
+            mcp_configs: None,
             models: None,
         }
     }
@@ -66,11 +68,17 @@ impl DaemonService {
             crate::mcp::AuditLog::open(root.join("audit").join("mcp.jsonl"))
                 .map_err(|error| error.to_string())?,
         );
+        self.mcp_configs = Some(
+            crate::mcp::ConnectionConfigStore::open(root.join("mcp").join("connections.json"))
+                .map_err(|error| error.to_string())?,
+        );
+        self.restore_mcp_connections();
         Ok(self)
     }
 
     pub fn with_manager(mut self, manager: Arc<dyn crate::manager::AppManager>) -> Self {
         self.manager = Some(manager);
+        self.restore_mcp_connections();
         self
     }
 
@@ -171,9 +179,9 @@ impl DaemonService {
                 endpoint,
                 era,
             } => self.mcp_connect_http(&app_id, &binding, &endpoint, era),
-            ControlCommand::McpDisconnect { app_id, binding } => Ok(json!({
-                "disconnected": self.mcp.disconnect(&app_id, &binding)
-            })),
+            ControlCommand::McpDisconnect { app_id, binding } => {
+                self.mcp_disconnect(&app_id, &binding)
+            }
             ControlCommand::McpDiscover { app_id, binding } => self
                 .mcp
                 .get(&app_id, &binding)
@@ -886,6 +894,21 @@ impl DaemonService {
         self.mcp
             .connect(app_id, binding, client)
             .map_err(|error| error.to_string())?;
+        if let Some(configs) = &self.mcp_configs
+            && let Err(error) = configs.upsert(crate::mcp::PersistedConnection {
+                application: app_id.into(),
+                binding: binding.into(),
+                era,
+                transport: crate::mcp::PersistedTransport::Stdio {
+                    command: command.into(),
+                    args: args.to_vec(),
+                },
+                enabled: true,
+            })
+        {
+            self.mcp.disconnect(app_id, binding);
+            return Err(error.to_string());
+        }
         Ok(json!({
             "application": app_id,
             "binding": binding,
@@ -916,6 +939,20 @@ impl DaemonService {
         self.mcp
             .connect(app_id, binding, client)
             .map_err(|error| error.to_string())?;
+        if let Some(configs) = &self.mcp_configs
+            && let Err(error) = configs.upsert(crate::mcp::PersistedConnection {
+                application: app_id.into(),
+                binding: binding.into(),
+                era,
+                transport: crate::mcp::PersistedTransport::StreamableHttp {
+                    endpoint: endpoint.into(),
+                },
+                enabled: true,
+            })
+        {
+            self.mcp.disconnect(app_id, binding);
+            return Err(error.to_string());
+        }
         Ok(json!({
             "application": app_id,
             "binding": binding,
@@ -923,6 +960,59 @@ impl DaemonService {
             "transport": "streamable-http",
             "server": server,
         }))
+    }
+
+    fn mcp_disconnect(&self, app_id: &str, binding: &str) -> Result<serde_json::Value, String> {
+        if let Some(configs) = &self.mcp_configs {
+            configs
+                .remove(app_id, binding)
+                .map_err(|error| error.to_string())?;
+        }
+        Ok(json!({
+            "disconnected": self.mcp.disconnect(app_id, binding)
+        }))
+    }
+
+    fn restore_mcp_connections(&self) {
+        let Some(configs) = &self.mcp_configs else {
+            return;
+        };
+        let values = match configs.list() {
+            Ok(values) => values,
+            Err(error) => {
+                eprintln!("alexd: failed to load MCP connections: {error}");
+                return;
+            }
+        };
+        for value in values.into_iter().filter(|value| value.enabled) {
+            let service = self.clone();
+            let identity = format!("{}/{}", value.application, value.binding);
+            let restore_identity = identity.clone();
+            if let Err(error) = crate::runtime::task_executor::mcp_executor().submit(move || {
+                if service.mcp.get(&value.application, &value.binding).is_ok() {
+                    return;
+                }
+                let result = match &value.transport {
+                    crate::mcp::PersistedTransport::Stdio { command, args } => service
+                        .mcp_connect_stdio(
+                            &value.application,
+                            &value.binding,
+                            command,
+                            args,
+                            value.era,
+                        ),
+                    crate::mcp::PersistedTransport::StreamableHttp { endpoint } => service
+                        .mcp_connect_http(&value.application, &value.binding, endpoint, value.era),
+                };
+                if let Err(error) = result {
+                    eprintln!(
+                        "alexd: failed to restore MCP connection {restore_identity}: {error}"
+                    );
+                }
+            }) {
+                eprintln!("alexd: MCP restore queue rejected {identity}: {error}");
+            }
+        }
     }
 
     fn mcp_list_tools(
@@ -1448,6 +1538,43 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn daemon_restores_and_removes_persisted_http_mcp_connection() {
+        let temp = tempfile::tempdir().unwrap();
+        let configs = crate::mcp::ConnectionConfigStore::open(
+            temp.path().join("mcp").join("connections.json"),
+        )
+        .unwrap();
+        configs
+            .upsert(crate::mcp::PersistedConnection {
+                application: "com.example.app".into(),
+                binding: "remote".into(),
+                era: crate::mcp::ProtocolEra::Modern,
+                transport: crate::mcp::PersistedTransport::StreamableHttp {
+                    endpoint: "https://mcp.example.test/v1".into(),
+                },
+                enabled: true,
+            })
+            .unwrap();
+        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")))
+            .with_ai_root(temp.path())
+            .unwrap();
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(2);
+        while service.mcp.get("com.example.app", "remote").is_err()
+            && std::time::Instant::now() < deadline
+        {
+            std::thread::sleep(std::time::Duration::from_millis(10));
+        }
+        assert!(service.mcp.get("com.example.app", "remote").is_ok());
+        let disconnected = service.handle(request(ControlCommand::McpDisconnect {
+            app_id: "com.example.app".into(),
+            binding: "remote".into(),
+        }));
+        assert!(disconnected.ok, "{:?}", disconnected.error);
+        assert!(configs.list().unwrap().is_empty());
+        assert!(service.mcp.get("com.example.app", "remote").is_err());
     }
 
     #[test]

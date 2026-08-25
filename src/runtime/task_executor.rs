@@ -63,6 +63,11 @@ pub fn update_executor() -> &'static TaskExecutor {
     EXECUTOR.get_or_init(|| TaskExecutor::new("alex-update", 2, 32))
 }
 
+pub fn mcp_executor() -> &'static TaskExecutor {
+    static EXECUTOR: OnceLock<TaskExecutor> = OnceLock::new();
+    EXECUTOR.get_or_init(|| TaskExecutor::new("alex-mcp", 4, 64))
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
