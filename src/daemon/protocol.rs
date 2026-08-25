@@ -116,6 +116,8 @@ pub enum ControlCommand {
     },
     StreamRead {
         stream_id: String,
+        #[serde(default)]
+        wait_ms: u32,
     },
     StreamEnd {
         stream_id: String,

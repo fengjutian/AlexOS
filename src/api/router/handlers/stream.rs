@@ -3,6 +3,8 @@ use super::super::*;
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct StreamIdParams {
     stream_id: String,
+    #[serde(default)]
+    wait_ms: u32,
 }
 
 #[derive(Deserialize)]
@@ -41,13 +43,16 @@ impl ApiRouter {
         if let Some(result) = self
             .runtime
             .as_ref()
-            .and_then(|runtime| runtime.stream_read(&params.stream_id))
+            .and_then(|runtime| runtime.stream_read(&params.stream_id, params.wait_ms))
         {
             return result.map_err(runtime_error);
         }
         let chunk = self
             .stream_manager
-            .pop(&params.stream_id)
+            .pop_wait(
+                &params.stream_id,
+                std::time::Duration::from_millis(params.wait_ms.min(30_000).into()),
+            )
             .map_err(stream_error)?;
         let terminal = self
             .stream_manager

@@ -149,7 +149,10 @@ pub mod windows {
                   await window.alex.invoke("stream.credit", { streamId, bytes: creditBytes });
                   while (true) {
                     if (options.signal?.aborted) throw { code: "ABORTED", message: "stream aborted" };
-                    const next = await window.alex.invoke("stream.read", { streamId });
+                    const next = await window.alex.invoke("stream.read", {
+                      streamId,
+                      waitMs: 1000
+                    }, options);
                     if (typeof next.dataBase64 === "string") {
                       yield next.dataBase64;
                       await window.alex.invoke("stream.credit", { streamId, bytes: next.bytes });
@@ -163,7 +166,8 @@ pub mod windows {
                       }
                       return;
                     }
-                    await new Promise(resolve => setTimeout(resolve, 10));
+                    // A pending response now means the bounded daemon wait expired.
+                    // Loop immediately to renew the wait without a client-side poll timer.
                   }
                 } finally {
                   options.signal?.removeEventListener("abort", abort);

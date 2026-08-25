@@ -122,7 +122,9 @@ impl DaemonService {
                 stream_id,
                 data_base64,
             } => self.stream_push(&stream_id, &data_base64),
-            ControlCommand::StreamRead { stream_id } => self.stream_read(&stream_id),
+            ControlCommand::StreamRead { stream_id, wait_ms } => {
+                self.stream_read(&stream_id, wait_ms)
+            }
             ControlCommand::StreamEnd { stream_id, error } => self.stream_end(&stream_id, error),
             ControlCommand::StreamCancel { stream_id, reason } => {
                 self.stream_cancel(&stream_id, &reason)
@@ -667,10 +669,14 @@ impl DaemonService {
             .map_err(|error| error.to_string())
     }
 
-    fn stream_read(&self, stream_id: &str) -> Result<serde_json::Value, String> {
+    fn stream_read(&self, stream_id: &str, wait_ms: u32) -> Result<serde_json::Value, String> {
+        const MAX_STREAM_READ_WAIT_MS: u32 = 30_000;
         let chunk = self
             .streams
-            .pop(stream_id)
+            .pop_wait(
+                stream_id,
+                std::time::Duration::from_millis(wait_ms.min(MAX_STREAM_READ_WAIT_MS).into()),
+            )
             .map_err(|error| error.to_string())?;
         let terminal = self
             .streams

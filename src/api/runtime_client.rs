@@ -101,13 +101,18 @@ impl RuntimeClient {
         }
     }
 
-    pub(crate) fn stream_read(&self, stream_id: &str) -> Option<Result<Value, RuntimeError>> {
+    pub(crate) fn stream_read(
+        &self,
+        stream_id: &str,
+        wait_ms: u32,
+    ) -> Option<Result<Value, RuntimeError>> {
         match self {
             Self::Local(_) => None,
             Self::Daemon(client) => Some(client.command(
                 &client.next_request_id("stream-read"),
                 ControlCommand::StreamRead {
                     stream_id: stream_id.into(),
+                    wait_ms,
                 },
             )),
         }
