@@ -344,6 +344,7 @@ mod v2_projection_tests {
                 max_retries,
             },
             dev: None,
+            resources: None,
         }
     }
 

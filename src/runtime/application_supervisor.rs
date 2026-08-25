@@ -2058,6 +2058,7 @@ mod tests {
                 health: None,
                 restart: Default::default(),
                 dev: None,
+                resources: None,
             },
         );
         let manifest = ApplicationManifestV2 {

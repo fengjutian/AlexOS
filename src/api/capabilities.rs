@@ -47,7 +47,15 @@ mod tests {
         });
         assert!(available.iter().any(|method| method == "window.create"));
         assert!(available.iter().any(|method| method == "tray.create"));
-        assert!(!available.iter().any(|method| method == "menu.setApplicationMenu"));
-        assert!(!available.iter().any(|method| method == "shortcuts.register"));
+        assert!(
+            !available
+                .iter()
+                .any(|method| method == "menu.setApplicationMenu")
+        );
+        assert!(
+            !available
+                .iter()
+                .any(|method| method == "shortcuts.register")
+        );
     }
 }
