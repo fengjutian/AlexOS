@@ -179,6 +179,8 @@
       "agent.status",
       "agent.list",
       "agent.history",
+      "agent.timeline",
+      "agent.timeline",
       "events.subscribe",
       "events.unsubscribe",
       "system.instances.create",
@@ -2586,6 +2588,7 @@
     "agent.status": { "params": { "$ref": "#/$defs/AgentRunId" }, "result": { "$ref": "#/$defs/JsonValue" } },
     "agent.list": { "params": { "$ref": "#/$defs/Empty" }, "result": { "type": "object", "properties": { "runs": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["runs"], "additionalProperties": false } },
     "agent.history": { "params": { "type": "object", "properties": { "runId": { "type": "string", "minLength": 1 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["runId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "events": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["events"], "additionalProperties": false } },
+    "agent.timeline": { "params": { "type": "object", "properties": { "runId": { "type": "string", "minLength": 1 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["runId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "entries": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["entries"], "additionalProperties": false } },
     "events.subscribe": {
       "params": {
         "type": "object",

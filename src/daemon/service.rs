@@ -52,6 +52,50 @@ struct StreamingMcpInputHandler {
     next_id: std::sync::atomic::AtomicU64,
 }
 
+struct DaemonAgentNativeTools {
+    state: DaemonStateStore,
+}
+
+impl crate::agent::AgentNativeTools for DaemonAgentNativeTools {
+    fn call(
+        &self,
+        application: &str,
+        name: &str,
+        arguments: &serde_json::Value,
+        _idempotency_key: &str,
+    ) -> Result<serde_json::Value, crate::agent::AgentError> {
+        if !arguments.is_null()
+            && arguments
+                .as_object()
+                .is_none_or(|arguments| !arguments.is_empty())
+        {
+            return Err(crate::agent::AgentError::Tool(format!(
+                "Alex native tool {name} does not accept arguments"
+            )));
+        }
+        match name {
+            "system.info" => Ok(json!({
+                "os": std::env::consts::OS,
+                "arch": std::env::consts::ARCH,
+                "family": std::env::consts::FAMILY,
+                "timestampMs": now_ms().unwrap_or_default()
+            })),
+            "runtime.status" => {
+                let state = self
+                    .state
+                    .load()
+                    .map_err(|error| crate::agent::AgentError::Tool(error.to_string()))?;
+                Ok(serde_json::to_value(state.applications.get(application)).map_err(|error| {
+                    crate::agent::AgentError::Tool(error.to_string())
+                })?)
+            }
+            _ => Err(crate::agent::AgentError::Tool(format!(
+                "unknown Alex native tool {name:?}"
+            ))),
+        }
+    }
+}
+
 impl crate::mcp::InputRequiredHandler for StreamingMcpInputHandler {
     fn handle(
         &self,
@@ -175,7 +219,10 @@ impl DaemonService {
             .map_err(|error| error.to_string())?;
         self.agents = Some(
             crate::agent::AgentManager::open(root.join("agents"), models.clone(), self.mcp.clone())
-                .map_err(|error| error.to_string())?,
+                .map_err(|error| error.to_string())?
+                .with_native_tools(Arc::new(DaemonAgentNativeTools {
+                    state: self.state.clone(),
+                })),
         );
         self.models = Some(models);
         self.mcp_audit = Some(

@@ -49,7 +49,18 @@ impl ApiRouter {
         let params: AgentCreateParams = parse_params(params)?;
         self.model_use_scope(Some(&params.spec.model))?;
         for tool in &params.spec.tools {
-            self.mcp_scope(Some(&tool.binding), Some(&tool.name))?;
+            if tool.binding == "alex" {
+                if !matches!(tool.name.as_str(), "system.info" | "runtime.status")
+                    || !tool.idempotent
+                {
+                    return Err((
+                        "PERMISSION_DENIED",
+                        "unsupported or non-idempotent Alex native Agent tool".into(),
+                    ));
+                }
+            } else {
+                self.mcp_scope(Some(&tool.binding), Some(&tool.name))?;
+            }
         }
         self.daemon_agent(
             "agent-create",

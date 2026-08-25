@@ -138,6 +138,7 @@ test("Agent Runtime SDK creates, streams, controls, and reads persistent runs", 
       calls.push({ method, params });
       if (method === "agent.list") return { runs: [{ id: "run-1" }] };
       if (method === "agent.history") return { events: [{ type: "checkpoint", step: 1 }] };
+      if (method === "agent.timeline") return { entries: [{ sequence: 1, timestampMs: 1, generation: 1, step: 1, event: { type: "checkpoint", step: 1 } }] };
       return { id: params.runId ?? "run-1", state: "queued" };
     },
     async *stream(method, params) {
@@ -157,8 +158,9 @@ test("Agent Runtime SDK creates, streams, controls, and reads persistent runs", 
   await client.agent.status(run.id);
   assert.equal((await client.agent.list())[0].id, "run-1");
   assert.equal((await client.agent.history(run.id))[0].type, "checkpoint");
+  assert.equal((await client.agent.timeline(run.id))[0].sequence, 1);
   assert.equal(events.at(-1).state, "completed");
-  assert.deepEqual(calls.map(({ method }) => method), ["agent.create", "agent.start", "agent.pause", "agent.resume", "agent.approve", "agent.deny", "agent.cancel", "agent.status", "agent.list", "agent.history"]);
+  assert.deepEqual(calls.map(({ method }) => method), ["agent.create", "agent.start", "agent.pause", "agent.resume", "agent.approve", "agent.deny", "agent.cancel", "agent.status", "agent.list", "agent.history", "agent.timeline"]);
 });
 
 test("app instance namespace uses the product-facing API", async () => {

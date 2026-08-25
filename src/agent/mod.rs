@@ -191,6 +191,16 @@ pub struct AgentTimelineEntry {
     pub event: AgentEvent,
 }
 
+pub trait AgentNativeTools: Send + Sync {
+    fn call(
+        &self,
+        application: &str,
+        name: &str,
+        arguments: &Value,
+        idempotency_key: &str,
+    ) -> Result<Value, AgentError>;
+}
+
 #[derive(Clone)]
 pub struct AgentManager {
     root: PathBuf,
@@ -199,6 +209,7 @@ pub struct AgentManager {
     gates: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
     cancellations: Arc<Mutex<BTreeMap<String, Arc<AtomicBool>>>>,
     event_sequences: Arc<Mutex<BTreeMap<String, u64>>>,
+    native_tools: Option<Arc<dyn AgentNativeTools>>,
 }
 
 impl AgentManager {
@@ -216,9 +227,15 @@ impl AgentManager {
             gates: Arc::new(Mutex::new(BTreeMap::new())),
             cancellations: Arc::new(Mutex::new(BTreeMap::new())),
             event_sequences: Arc::new(Mutex::new(BTreeMap::new())),
+            native_tools: None,
         };
         manager.recover_interrupted()?;
         Ok(manager)
+    }
+
+    pub fn with_native_tools(mut self, tools: Arc<dyn AgentNativeTools>) -> Self {
+        self.native_tools = Some(tools);
+        self
     }
 
     fn recover_interrupted(&self) -> Result<(), AgentError> {
@@ -497,13 +514,25 @@ impl AgentManager {
                         "agent run was superseded before tool execution".into(),
                     ));
                 }
-                let result = self
-                    .mcp
-                    .get(application, &call.binding)
-                    .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
-                    .map_err(|error| AgentError::Tool(error.to_string()))?;
-                let value = serde_json::to_value(result)
-                    .map_err(|error| AgentError::Tool(error.to_string()))?;
+                let value = if call.binding == "alex" {
+                    self.native_tools
+                        .as_ref()
+                        .ok_or_else(|| AgentError::Tool("Alex native tools are unavailable".into()))?
+                        .call(
+                            application,
+                            &call.name,
+                            &call.arguments,
+                            &call.idempotency_key,
+                        )?
+                } else {
+                    let result = self
+                        .mcp
+                        .get(application, &call.binding)
+                        .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
+                        .map_err(|error| AgentError::Tool(error.to_string()))?;
+                    serde_json::to_value(result)
+                        .map_err(|error| AgentError::Tool(error.to_string()))?
+                };
                 run.usage.tool_calls = run.usage.tool_calls.saturating_add(1);
                 run.messages.push(json!({"role":"tool","name":call.name,"content":value,"idempotencyKey":call.idempotency_key}));
                 run.pending_tool = None;
@@ -871,6 +900,16 @@ pub fn validate_spec(spec: &AgentSpec) -> Result<(), AgentError> {
     }
     if spec.tools.len() > 128 {
         return Err(AgentError::Invalid("too many tools".into()));
+    }
+    for tool in &spec.tools {
+        if tool.binding == "alex"
+            && (!matches!(tool.name.as_str(), "system.info" | "runtime.status")
+                || !tool.idempotent)
+        {
+            return Err(AgentError::Invalid(
+                "Alex native tools must be a supported read-only idempotent tool".into(),
+            ));
+        }
     }
     if spec
         .system_prompt
