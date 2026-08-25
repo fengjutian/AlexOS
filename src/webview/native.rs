@@ -24,6 +24,10 @@ pub enum HostCommand {
 pub trait NativeHost: Send + Sync {
     fn execute(&self, command: HostCommand) -> Result<(), NativeError>;
 
+    fn confirm_mrtr(&self, _title: &str, _message: &str) -> Result<bool, NativeError> {
+        Err(NativeError::Unsupported)
+    }
+
     fn supports_secondary_windows(&self) -> bool {
         false
     }

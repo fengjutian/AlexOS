@@ -189,10 +189,13 @@ impl DaemonService {
         self.mcp_tokens = Some(crate::mcp::oauth::TokenVault::new(Arc::new(
             crate::platform::secret::native(),
         )));
-        self.mcp_health = Some(crate::mcp::ConnectionHealthMonitor::start(
-            self.mcp.clone(),
-            std::time::Duration::from_secs(15),
-        ).map_err(|error| error.to_string())?);
+        self.mcp_health = Some(
+            crate::mcp::ConnectionHealthMonitor::start(
+                self.mcp.clone(),
+                std::time::Duration::from_secs(15),
+            )
+            .map_err(|error| error.to_string())?,
+        );
         self.restore_mcp_connections();
         Ok(self)
     }

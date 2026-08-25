@@ -1104,26 +1104,39 @@ impl ConnectionHealthMonitor {
                             .and_then(|client| client.ping());
                         let key = (connection.application.clone(), connection.binding.clone());
                         if let Ok(mut statuses) = inner.statuses.lock() {
-                            let previous = statuses.get(&key).map_or(0, |value| value.consecutive_failures);
-                            let failures = if result.is_ok() { 0 } else { previous.saturating_add(1) };
-                            statuses.insert(key, ConnectionHealth {
-                                application: connection.application,
-                                binding: connection.binding,
-                                state: match failures {
-                                    0 => ConnectionHealthState::Healthy,
-                                    1 | 2 => ConnectionHealthState::Degraded,
-                                    _ => ConnectionHealthState::Unhealthy,
+                            let previous = statuses
+                                .get(&key)
+                                .map_or(0, |value| value.consecutive_failures);
+                            let failures = if result.is_ok() {
+                                0
+                            } else {
+                                previous.saturating_add(1)
+                            };
+                            statuses.insert(
+                                key,
+                                ConnectionHealth {
+                                    application: connection.application,
+                                    binding: connection.binding,
+                                    state: match failures {
+                                        0 => ConnectionHealthState::Healthy,
+                                        1 | 2 => ConnectionHealthState::Degraded,
+                                        _ => ConnectionHealthState::Unhealthy,
+                                    },
+                                    checked_at_ms: SystemTime::now()
+                                        .duration_since(UNIX_EPOCH)
+                                        .unwrap_or_default()
+                                        .as_millis()
+                                        .try_into()
+                                        .unwrap_or(u64::MAX),
+                                    latency_ms: started
+                                        .elapsed()
+                                        .as_millis()
+                                        .try_into()
+                                        .unwrap_or(u64::MAX),
+                                    consecutive_failures: failures,
+                                    last_error: result.err().map(|error| error.to_string()),
                                 },
-                                checked_at_ms: SystemTime::now()
-                                    .duration_since(UNIX_EPOCH)
-                                    .unwrap_or_default()
-                                    .as_millis()
-                                    .try_into()
-                                    .unwrap_or(u64::MAX),
-                                latency_ms: started.elapsed().as_millis().try_into().unwrap_or(u64::MAX),
-                                consecutive_failures: failures,
-                                last_error: result.err().map(|error| error.to_string()),
-                            });
+                            );
                         }
                     }
                     let slices = (interval.as_millis() / 100).max(1);

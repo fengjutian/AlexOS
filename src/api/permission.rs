@@ -138,9 +138,8 @@ impl Permission {
             "runtime.restart" => Some("runtime.manage"),
             "mcp.discover" | "mcp.listTools" | "mcp.callTool" | "mcp.audit"
             | "mcp.listResources" | "mcp.readResource" | "mcp.listPrompts" | "mcp.getPrompt"
-            | "mcp.complete" | "mcp.ping" | "mcp.health" | "mcp.oauthBegin" | "mcp.oauthComplete" => {
-                Some("mcp.use")
-            }
+            | "mcp.complete" | "mcp.ping" | "mcp.health" | "mcp.oauthBegin"
+            | "mcp.oauthComplete" => Some("mcp.use"),
             "mcp.listen" => Some("mcp.use"),
             "mcp.callToolInteractive" | "mcp.respondInput" => Some("mcp.use"),
             "model.list" | "model.generate" | "model.cancel" => Some("model.use"),

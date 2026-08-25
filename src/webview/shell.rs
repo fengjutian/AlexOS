@@ -198,6 +198,11 @@ pub mod windows {
     #[derive(Debug)]
     pub enum UserEvent {
         IpcResponse(Option<u64>, String),
+        MrtrPrompt(
+            String,
+            String,
+            std::sync::mpsc::SyncSender<Result<bool, NativeError>>,
+        ),
         Host(
             HostCommand,
             std::sync::mpsc::SyncSender<Result<(), NativeError>>,
@@ -246,6 +251,16 @@ pub mod windows {
 
         fn supports_secondary_windows(&self) -> bool {
             self.secondary_windows
+        }
+
+        fn confirm_mrtr(&self, title: &str, message: &str) -> Result<bool, NativeError> {
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+            self.proxy
+                .send_event(UserEvent::MrtrPrompt(title.into(), message.into(), reply_tx))
+                .map_err(|_| NativeError::Failed("window event loop is closed".into()))?;
+            reply_rx
+                .recv_timeout(Duration::from_secs(600))
+                .map_err(|_| NativeError::Failed("MRTR prompt timed out".into()))?
         }
     }
 
@@ -534,6 +549,16 @@ pub mod windows {
                     } else {
                         let _ = webview.evaluate_script(&script);
                     }
+                }
+                Event::UserEvent(UserEvent::MrtrPrompt(title, message, reply)) => {
+                    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+                    let result = MessageDialog::new()
+                        .set_level(MessageLevel::Info)
+                        .set_title(title)
+                        .set_description(message)
+                        .set_buttons(MessageButtons::YesNo)
+                        .show();
+                    let _ = reply.send(Ok(matches!(result, MessageDialogResult::Yes)));
                 }
                 Event::UserEvent(UserEvent::Host(command, reply)) => {
                     let mut host_result = Ok(());

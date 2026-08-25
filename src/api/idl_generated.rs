@@ -64,6 +64,7 @@ pub const ALWAYS: &[&str] = &[
     "stream.read",
     "stream.cancel",
     "mcp.connections",
+    "mcp.health",
     "mcp.discover",
     "mcp.listTools",
     "mcp.callTool",
@@ -515,6 +516,13 @@ pub const METHODS: &[MethodDescriptor] = &[
     },
     MethodDescriptor {
         name: "mcp.connections",
+        domain: "mcp",
+        availability: "always",
+        permission: "mcp.use",
+        execution: "blocking",
+    },
+    MethodDescriptor {
+        name: "mcp.health",
         domain: "mcp",
         availability: "always",
         permission: "mcp.use",

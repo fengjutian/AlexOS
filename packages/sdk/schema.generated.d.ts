@@ -73,6 +73,7 @@ export type AlexCapability =
   | "stream.read"
   | "stream.cancel"
   | "mcp.connections"
+  | "mcp.health"
   | "mcp.discover"
   | "mcp.listTools"
   | "mcp.callTool"
@@ -196,6 +197,7 @@ export interface AlexMethodMap {
   "stream.read": { params: { "streamId": string; "waitMs"?: number }; result: { "streamId": string; "sequence"?: number; "bytes"?: number; "dataBase64"?: string; "pending"?: boolean; "terminal"?: null | { [key: string]: unknown } } };
   "stream.cancel": { params: { "streamId": string; "reason"?: string }; result: { "streamId": string; "cancelled": boolean } };
   "mcp.connections": { params: Empty; result: Array<{ "application": string; "binding": string; "era": "modern" | "legacy" }> };
+  "mcp.health": { params: Empty; result: { "connections": Array<{ "application": string; "binding": string; "state": "healthy" | "degraded" | "unhealthy"; "checkedAtMs": number; "latencyMs": number; "consecutiveFailures": number; "lastError"?: string }> } };
   "mcp.discover": { params: { "binding": string }; result: { "supportedVersions": Array<string>; "capabilities": JsonValue; "instructions"?: string; "ttlMs"?: number; "cacheScope"?: string; "_meta"?: JsonValue } };
   "mcp.listTools": { params: { "binding": string; "cursor"?: string }; result: { "tools": Array<{ "name": string; "description"?: string; "inputSchema": JsonValue }>; "nextCursor": string | null } };
   "mcp.callTool": { params: { "binding": string; "name": string; "arguments"?: JsonValue }; result: { "content": Array<JsonValue>; "isError": boolean; "structuredContent"?: JsonValue } };
