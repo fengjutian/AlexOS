@@ -3,7 +3,17 @@
   "id": "com.alex.desktop_api_demo",
   "name": "Desktop API Demo",
   "version": "0.1.0",
-  "frontend": { "entry": "frontend/index.html" },
+  "frontend": {
+    "entry": "frontend/dist/index.html",
+    "build": { "command": "npm", "args": ["run", "build"] },
+    "dev": {
+      "command": "npm",
+      "args": ["run", "dev", "--", "--host", "127.0.0.1", "--port", "5174", "--strictPort"],
+      "install": { "command": "npm", "args": ["install"] },
+      "cwd": "frontend",
+      "url": "http://127.0.0.1:5174"
+    }
+  },
   "permissions": [
     { "name": "filesystem.read", "paths": ["data"] },
     { "name": "filesystem.write", "paths": ["data"] },

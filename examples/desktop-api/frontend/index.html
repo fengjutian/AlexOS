@@ -1,9 +1,13 @@
 <!doctype html>
-<html lang="zh-CN"><head><meta charset="utf-8"><meta name="viewport" content="width=device-width"><title>Desktop API Demo</title><link rel="stylesheet" href="app.css"></head>
-<body><main><h1>Alex OS Desktop API Demo</h1><p id="status">正在连接 Host…</p>
-<section><h2>系统与路径</h2><button data-action="info">系统信息</button><button data-action="caps">Capabilities</button><button data-action="paths">应用路径</button><pre id="output"></pre></section>
-<section><h2>Storage</h2><input id="text" value="Hello from Alex OS"><button data-action="store">保存</button><button data-action="getStore">读取</button><button data-action="keys">键列表</button><button data-action="deleteStore">删除</button><button data-action="clearStore">清空</button></section>
-<section><h2>文件系统</h2><button data-action="mkdir">创建 data</button><button data-action="write">写文件</button><button data-action="read">读文件</button><button data-action="exists">是否存在</button><button data-action="stat">文件信息</button><button data-action="dir">目录列表</button><button data-action="copyFile">复制</button><button data-action="renameFile">重命名</button><button data-action="removeFile">删除</button><button data-action="watch">监听</button><button data-action="unwatch">取消监听</button></section>
-<section><h2>对话框与桌面</h2><button data-action="open">选择文件</button><button data-action="openMany">多选文件</button><button data-action="openDir">选择目录</button><button data-action="save">保存文件</button><button data-action="copy">复制文本</button><button data-action="paste">读剪贴板</button><button data-action="notify">发送通知</button><button data-action="external">打开网页</button></section>
-<section><h2>窗口</h2><button data-action="title">修改标题</button><button data-action="child">创建子窗口</button><button data-action="windows">窗口列表</button><button data-action="bounds">调整子窗口</button><button data-action="fullscreen">切换全屏</button><button data-action="destroy">关闭子窗口</button><p>也可以把文件拖到此窗口。</p></section>
-<section><h2>事件日志</h2><button data-action="clearEvents">清空日志</button><pre id="events"></pre></section></main><script src="app.js"></script></body></html>
+<html lang="zh-CN">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <link rel="icon" href="data:," />
+    <title>Desktop API Demo</title>
+  </head>
+  <body>
+    <div id="root"></div>
+    <script type="module" src="/src/main.tsx"></script>
+  </body>
+</html>
