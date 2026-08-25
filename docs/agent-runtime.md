@@ -47,7 +47,7 @@ for await (const event of alex.agent.start(run.id)) {
 }
 ```
 
-Other APIs are `pause`, `resume`, `cancel`, `deny`, `status`, `list` and `history`. `resume` queues a paused or failed run; call `start` to consume the resumed execution event stream.
+Other APIs are `pause`, `resume`, `cancel`, `deny`, `status`, `list`, `history` and `timeline`. Timeline entries carry a durable sequence, timestamp, generation, step and typed event. `resume` queues a paused or failed run; call `start` to consume the resumed execution event stream.
 
 ## Recovery and safety
 
@@ -56,5 +56,6 @@ Other APIs are `pause`, `resume`, `cancel`, `deny`, `status`, `list` and `histor
 - Opening the Daemon-owned run store recovers interrupted `running` and `waiting-tool` runs from their last durable checkpoint. Recovery advances the generation so stale workers cannot write back. Attempted non-idempotent tools return to `waiting-approval`; safe queued work can be started again by the controller.
 - Step, token, tool-call and wall-clock budgets fail the run immediately with a stable `AGENT_*` error event.
 - Application identity scopes status, history, approval and cancellation.
+- Tools using the `alex` binding execute through a separate host registry rather than MCP. The initial registry is deliberately read-only: `system.info` and `runtime.status`. Names and idempotency are checked at creation and execution.
 - State is atomically replaced and capped at 8 MiB; individual events and initial messages are capped at 1 MiB.
 - Model generation and agent events use the existing credit-based stream with cancellation and bounded buffering.

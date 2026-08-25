@@ -1102,6 +1102,21 @@ mod tests {
             Ok(())
         }
     }
+    struct NativeTools;
+    impl AgentNativeTools for NativeTools {
+        fn call(
+            &self,
+            application: &str,
+            name: &str,
+            _: &Value,
+            idempotency_key: &str,
+        ) -> Result<Value, AgentError> {
+            assert_eq!(application, "com.example.app");
+            assert_eq!(name, "system.info");
+            assert!(!idempotency_key.is_empty());
+            Ok(json!({"os":"test"}))
+        }
+    }
     fn runtime(temp: &tempfile::TempDir) -> AgentManager {
         let store = crate::model::ModelStore::open(temp.path().join("models")).unwrap();
         let blob = temp.path().join("model.bin");
@@ -1180,6 +1195,13 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+        let timeline = manager.timeline("com.example.app", &run.id, 100).unwrap();
+        assert!(
+            timeline
+                .windows(2)
+                .all(|pair| pair[0].sequence < pair[1].sequence)
+        );
+        assert!(timeline.iter().all(|entry| entry.timestamp_ms > 0));
     }
 
     #[test]
@@ -1290,5 +1312,48 @@ mod tests {
         assert_eq!(recovered.generation, run.generation + 1);
         assert!(!recovered.pending_tool.unwrap().approved);
         assert!(reopened.history("com.example.app", &run.id, 100).unwrap().iter().any(|event| matches!(event, AgentEvent::Error { code, .. } if code == "AGENT_RECOVERED")));
+    }
+
+    #[test]
+    fn declared_native_tool_executes_through_the_host_registry() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = runtime(&temp).with_native_tools(Arc::new(NativeTools));
+        let run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: vec![AgentToolSpec {
+                        binding: "alex".into(),
+                        name: "system.info".into(),
+                        idempotent: true,
+                        require_approval: false,
+                    }],
+                    budget: AgentBudget::default(),
+                },
+                vec![],
+            )
+            .unwrap();
+        let mut pending = run.clone();
+        pending.pending_tool = Some(PendingToolCall {
+            binding: "alex".into(),
+            name: "system.info".into(),
+            arguments: json!({}),
+            idempotency_key: "native-1".into(),
+            idempotent: true,
+            approved: true,
+            attempted: false,
+        });
+        manager.save(&pending).unwrap();
+        let completed = manager
+            .execute("com.example.app", &run.id, &mut |_| Ok(()))
+            .unwrap();
+        assert_eq!(completed.state, AgentState::Completed);
+        assert!(
+            completed.messages.iter().any(|message| {
+                message.get("name").and_then(Value::as_str) == Some("system.info")
+            })
+        );
     }
 }
