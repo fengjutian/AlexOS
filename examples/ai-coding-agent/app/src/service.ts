@@ -1,34 +1,20 @@
-import readline from "node:readline";
+import path from "node:path";
+import { AppController } from "./controllers/app.js";
+import { StdioRpcServer } from "./protocol/io.js";
+import { WorkspaceService } from "./services/workspace.js";
+import { logger } from "./util/logger.js";
 
-interface AlexRpcRequest {
-  protocol?: number;
-  id?: string | number;
-  type?: string;
-  method?: string;
-  params?: unknown;
-}
+const VERSION = "0.1.0";
+const workspaceRoot = path.resolve(process.env.ALEX_WORKSPACE ?? "workspace");
 
-interface AlexRpcResponse {
-  protocol: 1;
-  id?: string | number;
-  result: unknown;
-}
-
-// Application services speak Alex's JSON-lines RPC protocol. The agent,
-// model and MCP lifecycles are owned by the Runtime; this TypeScript service
-// contains application-specific backend methods only.
-const input = readline.createInterface({ input: process.stdin });
-
-input.on("line", (line: string) => {
-  const request = JSON.parse(line) as AlexRpcRequest;
-  if (request.type === "shutdown") {
-    input.close();
-    return;
-  }
-
-  const result = request.method === "app.info"
-    ? { name: "Alex Coding Agent", runtimeManaged: true, backend: "typescript" }
-    : { ok: true };
-  const response: AlexRpcResponse = { protocol: 1, id: request.id, result };
-  process.stdout.write(`${JSON.stringify(response)}\n`);
+const workspace = new WorkspaceService({
+  root: workspaceRoot,
+  startedAt: new Date(),
+  version: VERSION,
+  capabilities: ["app.info", "app.echo", "app.ping", "app.workspace.list", "app.workspace.read", "app.config.get"],
 });
+
+const controller = new AppController(workspace);
+const server = new StdioRpcServer((request) => controller.handle(request));
+
+logger.info("service ready", { version: VERSION, workspace: workspaceRoot, pid: process.pid });

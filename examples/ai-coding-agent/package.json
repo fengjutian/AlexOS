@@ -1,0 +1,36 @@
+{
+  "name": "@alex/coding-agent",
+  "version": "0.1.0",
+  "private": true,
+  "description": "Alex Coding Agent — V0.1 example app (React frontend + Node service + filesystem MCP).",
+  "type": "module",
+  "workspaces": [
+    "shared",
+    "app",
+    "mcp",
+    "frontend"
+  ],
+  "scripts": {
+    "build:shared": "npm run build -w shared",
+    "build:app": "npm run build -w app",
+    "build:mcp": "npm run build -w mcp",
+    "build:frontend": "npm run build -w frontend",
+    "build": "npm run build:shared && npm run build:app && npm run build:mcp && npm run build:frontend",
+    "clean": "node -e \"const fs=require('fs');for(const p of ['shared/dist','app/dist','mcp/dist','frontend/dist']){try{fs.rmSync(p,{recursive:true,force:true})}catch{}}\"",
+    "typecheck": "npm run typecheck -w shared && npm run typecheck -w app && npm run typecheck -w mcp && npm run typecheck -w frontend",
+    "test": "npm run test -w app && npm run test -w mcp",
+    "lint": "eslint .",
+    "lint:fix": "eslint . --fix",
+    "format": "prettier --write \"**/*.{ts,tsx,js,cjs,mjs,json,md,css,html}\"",
+    "format:check": "prettier --check \"**/*.{ts,tsx,js,cjs,mjs,json,md,css,html}\"",
+    "dev": "npm run dev -w app"
+  },
+  "devDependencies": {
+    "@eslint/js": "latest",
+    "@types/node": "latest",
+    "eslint": "latest",
+    "prettier": "latest",
+    "typescript": "latest",
+    "typescript-eslint": "latest"
+  }
+}
