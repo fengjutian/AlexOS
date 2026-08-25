@@ -95,12 +95,17 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - v2 可生成稳定的拓扑启动顺序和反向停止顺序。
 - `.alex` 包工具可对 v2 执行打包、完整性校验、CLI 安装、已安装应用枚举和安全卸载；
 - 同时包含 `manifest.json` 和 `app.yaml` 的歧义包会被拒绝，不会猜测应采用哪个清单。
+- v1/v2 已统一解析为 `ResolvedApplication`；v1 backend 映射为 `main` 服务，执行器不再维护两套模型；
+- App Manager、Daemon、Dev 和 `ApplicationSupervisor` 已消费统一模型；
+- v2 多服务能够按依赖 layer 启动、失败回滚、反向停止，并聚合应用/服务状态；
+- 每服务健康检查、watchdog、重启策略、独立日志、环境变量和端口已接线；
+- Daemon 恢复服务级 desired state 时按依赖排序，依赖未声明为 running 时拒绝恢复下游服务。
 
 限制：
 
-- App Manager、Daemon 和 `RuntimeSupervisor` 仍消费 Manifest v1；v2 尚未进入真实运行链路；
 - v2 的 Python/Native 仅完成声明和校验，尚无对应 Runtime Provider；
-- 多服务尚未实际启动、健康检查、回滚或聚合状态；
+- 服务级 CPU、内存、磁盘和子进程 resources 配额尚未接入 Manifest v2；
+- headless Agent 尚无独立产品入口和 GUI E2E；
 - 没有图标、作者、许可证、最小 Alex 版本和平台条件；
 - 没有 Manifest Schema 文件或自动代码生成。
 

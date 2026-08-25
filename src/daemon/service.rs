@@ -221,10 +221,10 @@ impl DaemonService {
             }
         };
         for service_name in order {
-            let result = manager.start_service(app_id, service_name);
+            let result = manager.start_service(app_id, &service_name);
             match result {
                 Ok(status) => {
-                    if let Err(error) = self.record_service_status(app_id, service_name, &status) {
+                    if let Err(error) = self.record_service_status(app_id, &service_name, &status) {
                         report.failed.push(RecoveryFailure {
                             app_id: app_id.to_owned(),
                             error: format!("service {service_name}: {error}"),
@@ -234,7 +234,7 @@ impl DaemonService {
                 Err(error) => {
                     let _ = self.state.set_service_observed(
                         app_id,
-                        service_name,
+                        &service_name,
                         ObservedState::Crashed,
                         Some(error.to_string()),
                         now_ms().unwrap_or_default(),
@@ -544,10 +544,10 @@ impl DaemonService {
     }
 }
 
-fn recovery_service_order<'a>(
-    declared: &'a [ServiceSummary],
+fn recovery_service_order(
+    declared: &[ServiceSummary],
     persisted: &std::collections::BTreeMap<String, super::ServiceControlState>,
-) -> Result<Vec<&'a str>, String> {
+) -> Result<Vec<String>, String> {
     use std::collections::{BTreeMap, BTreeSet};
 
     let specs: BTreeMap<&str, &ServiceSummary> = declared
@@ -560,6 +560,12 @@ fn recovery_service_order<'a>(
             (state.desired == DesiredState::Running).then_some(name.clone())
         })
         .collect();
+    // Some alternate AppManager implementations (including remote/test
+    // facades) cannot return descriptors. Preserve their legacy behaviour:
+    // the manager remains responsible for rejecting unknown services.
+    if declared.is_empty() {
+        return Ok(desired.into_iter().collect());
+    }
     for name in &desired {
         let spec = specs
             .get(name.as_str())
@@ -617,7 +623,7 @@ fn recovery_service_order<'a>(
             &mut output,
         )?;
     }
-    Ok(output)
+    Ok(output.into_iter().map(str::to_owned).collect())
 }
 
 fn now_ms() -> Option<u64> {
@@ -1073,11 +1079,13 @@ mod tests {
             report.recovered
         );
         assert!(report.failed.is_empty(), "failed: {:?}", report.failed);
-        // Two `StartService` calls, alphabetical
-        // (BTreeMap iteration).
+        // Recovery first asks the manager for the dependency graph, then
+        // starts the desired services. This stub returns no descriptors, so
+        // the compatibility fallback remains alphabetical.
         assert_eq!(
             stub.snapshot(),
             vec![
+                StubCall::ListServices("com.example.dag".into()),
                 StubCall::StartService("com.example.dag".into(), "api".into()),
                 StubCall::StartService("com.example.dag".into(), "worker".into()),
             ]

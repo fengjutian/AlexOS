@@ -3630,6 +3630,17 @@ fn application_supervisor_start_then_stop_leaves_no_orphan_slots() {
     use std::collections::BTreeMap;
 
     let supervisor = ApplicationSupervisor::new();
+    let package = tempfile::tempdir().unwrap();
+    fs::write(
+        package.path().join("alpha.js"),
+        "setInterval(() => {}, 1000);",
+    )
+    .unwrap();
+    fs::write(
+        package.path().join("beta.js"),
+        "setInterval(() => {}, 1000);",
+    )
+    .unwrap();
     let services = vec![
         ServiceDescriptor {
             name: "alpha".to_owned(),
@@ -3665,7 +3676,7 @@ fn application_supervisor_start_then_stop_leaves_no_orphan_slots() {
     // in `Healthy` even without a real `node` binary on the
     // test host.
     let start_result =
-        supervisor.start_application("com.example.cycle2", std::path::Path::new("."), &manifest);
+        supervisor.start_application("com.example.cycle2", package.path(), &manifest);
     assert!(start_result.is_ok(), "{start_result:?}");
     // Now stop. Every service must reach a terminal state,
     // and the app must roll up to `Stopped`.
@@ -3700,6 +3711,17 @@ fn application_supervisor_stop_joins_every_watchdog() {
     use alex::runtime::application_supervisor::ApplicationSupervisor;
     use std::collections::BTreeMap;
     let supervisor = ApplicationSupervisor::new();
+    let package = tempfile::tempdir().unwrap();
+    fs::write(
+        package.path().join("alpha.js"),
+        "setInterval(() => {}, 1000);",
+    )
+    .unwrap();
+    fs::write(
+        package.path().join("beta.js"),
+        "setInterval(() => {}, 1000);",
+    )
+    .unwrap();
     let services = vec![
         ServiceDescriptor {
             name: "alpha".to_owned(),
@@ -3728,11 +3750,8 @@ fn application_supervisor_stop_joins_every_watchdog() {
     ];
     let manifest = build_v2_manifest(services.clone());
     supervisor.register_application("com.example.watchdog_drain", services);
-    let start_result = supervisor.start_application(
-        "com.example.watchdog_drain",
-        std::path::Path::new("."),
-        &manifest,
-    );
+    let start_result =
+        supervisor.start_application("com.example.watchdog_drain", package.path(), &manifest);
     assert!(start_result.is_ok(), "{start_result:?}");
     // After start, the live snapshot has a JoinHandle on
     // every slot. We can only observe the `Option<...>` is

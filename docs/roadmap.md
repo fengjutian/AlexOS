@@ -33,11 +33,13 @@ nav_order: 4
 
 - [已完成模型与包层] 独立加载并严格校验 `app.yaml`（`schemaVersion: 2`）；支持 `.alex`
   打包、完整性校验、CLI 安装、枚举和卸载，现有 Manifest v1 不受影响；
-- [已完成模型层] 多服务、依赖 DAG、确定性拓扑启动和反向停止顺序；
-- 将 Manifest v2 接入 App Manager、Daemon 和 RuntimeSupervisor，并提供 v1 兼容迁移；
-- 按依赖顺序并发启动服务，失败时回滚已启动服务；
-- 每服务 health、restart、logs、env、port 和 resources；
-- 无 frontend 的后台/Agent 应用。
+- [已完成] 统一 `ApplicationManifest`/`ResolvedApplication`，v1 backend 映射为 `main` 服务；
+- [已完成] Manifest v2 接入 App Manager、Daemon、Dev 和 `ApplicationSupervisor`；
+- [已完成] 多服务依赖分层启动、失败回滚、反向停止、聚合状态和 generation 防旧任务写回；
+- [已完成] 每服务 health、restart、独立日志、env 和 port；
+- [已完成] Daemon 按服务 desired state 和依赖顺序恢复，缺失 running 依赖时安全拒绝；
+- 服务级 resources 配额；
+- 无 frontend 的后台/Agent 应用产品入口和完整 E2E。
 
 ### 0.3 受管 Runtime
 
