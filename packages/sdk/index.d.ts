@@ -334,6 +334,12 @@ export interface McpConnectionInfo {
   binding: string;
   era: "modern" | "legacy";
 }
+export interface McpSubscriptionFilter {
+  toolsListChanged?: boolean;
+  promptsListChanged?: boolean;
+  resourcesListChanged?: boolean;
+  resourceSubscriptions?: string[];
+}
 
 export interface McpTool {
   name: string;
@@ -461,6 +467,7 @@ export interface AlexClient {
     getPrompt(binding: string, name: string, input?: Record<string, unknown>, options?: InvokeOptions): Promise<{ description?: string; messages: unknown[] }>;
     complete(binding: string, reference: Record<string, unknown>, argument: Record<string, unknown>, options?: InvokeOptions): Promise<unknown>;
     ping(binding: string, options?: InvokeOptions): Promise<{ ok: boolean }>;
+    listen(binding: string, filter: McpSubscriptionFilter, options?: StreamOptions): AsyncIterable<Record<string, unknown>>;
   };
   readonly model: {
     list(options?: InvokeOptions): Promise<ModelManifest[]>;

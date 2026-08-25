@@ -196,6 +196,12 @@ pub enum ControlCommand {
         app_id: String,
         binding: String,
     },
+    McpListen {
+        app_id: String,
+        binding: String,
+        stream_id: String,
+        filter: crate::mcp::SubscriptionFilter,
+    },
     McpCallTool {
         app_id: String,
         binding: String,

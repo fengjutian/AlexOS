@@ -104,6 +104,7 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "mcp.getPrompt" => router.mcp_get_prompt(p),
         "mcp.complete" => router.mcp_complete(p),
         "mcp.ping" => router.mcp_ping(p),
+        "mcp.listen" => router.mcp_listen(&request.id, p),
         "model.list" => router.model_list(),
         "model.import" => router.model_import(p),
         "model.remove" => router.model_remove(p),

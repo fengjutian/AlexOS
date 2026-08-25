@@ -275,6 +275,12 @@ impl DaemonService {
                 .and_then(|client| client.ping())
                 .map(|_| json!({ "ok": true }))
                 .map_err(|error| error.to_string()),
+            ControlCommand::McpListen {
+                app_id,
+                binding,
+                stream_id,
+                filter,
+            } => self.mcp_listen(&app_id, &binding, &stream_id, filter),
             ControlCommand::McpCallTool {
                 app_id,
                 binding,
@@ -1229,6 +1235,73 @@ impl DaemonService {
             .recent(app_id, limit)
             .map_err(|error| error.to_string())?;
         Ok(json!({ "entries": entries }))
+    }
+
+    fn mcp_listen(
+        &self,
+        app_id: &str,
+        binding: &str,
+        stream_id: &str,
+        filter: crate::mcp::SubscriptionFilter,
+    ) -> Result<serde_json::Value, String> {
+        let client = self
+            .mcp
+            .get(app_id, binding)
+            .map_err(|error| error.to_string())?;
+        let cancellation = self
+            .streams
+            .open(app_id, stream_id)
+            .map_err(|error| error.to_string())?;
+        let streams = Arc::clone(&self.streams);
+        let worker_stream_id = stream_id.to_owned();
+        std::thread::Builder::new()
+            .name("alex-mcp-subscription".into())
+            .spawn(move || {
+                let mut emit = |notification: serde_json::Value| {
+                    let payload = serde_json::to_vec(&notification)
+                        .map_err(|error| crate::mcp::McpError::Protocol(error.to_string()))?;
+                    loop {
+                        if cancellation.is_cancelled() {
+                            return Err(crate::mcp::McpError::Transport(
+                                "subscription cancelled".into(),
+                            ));
+                        }
+                        match streams.push(&worker_stream_id, payload.clone()) {
+                            Ok(_) => return Ok(()),
+                            Err(crate::runtime::stream::StreamError::Backpressured { .. })
+                            | Err(crate::runtime::stream::StreamError::BufferFull { .. }) => {
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                            Err(error) => {
+                                return Err(crate::mcp::McpError::Transport(error.to_string()));
+                            }
+                        }
+                    }
+                };
+                let result = client.listen(filter, &mut emit);
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                let terminal = match result {
+                    Ok(()) => crate::runtime::stream::StreamTerminal::Completed,
+                    Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                        code: "MCP_SUBSCRIPTION_LOST".into(),
+                        message: error.to_string(),
+                    },
+                };
+                let _ = streams.finish(&worker_stream_id, terminal);
+            })
+            .map_err(|error| {
+                let _ = self.streams.finish(
+                    stream_id,
+                    crate::runtime::stream::StreamTerminal::Failed {
+                        code: "MCP_SUBSCRIPTION_START_FAILED".into(),
+                        message: error.to_string(),
+                    },
+                );
+                error.to_string()
+            })?;
+        Ok(json!({ "streamId": stream_id, "binding": binding }))
     }
 
     fn mcp_oauth_begin(

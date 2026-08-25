@@ -150,6 +150,7 @@
       "mcp.getPrompt",
       "mcp.complete",
       "mcp.ping",
+      "mcp.listen",
       "model.list",
       "model.import",
       "model.remove",
@@ -2453,6 +2454,27 @@
     "mcp.ping": {
       "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 } }, "required": ["binding"], "additionalProperties": false },
       "result": { "type": "object", "properties": { "ok": { "type": "boolean" } }, "required": ["ok"], "additionalProperties": false }
+    },
+    "mcp.listen": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "binding": { "type": "string", "minLength": 1 },
+          "filter": {
+            "type": "object",
+            "properties": {
+              "toolsListChanged": { "type": "boolean" },
+              "promptsListChanged": { "type": "boolean" },
+              "resourcesListChanged": { "type": "boolean" },
+              "resourceSubscriptions": { "type": "array", "maxItems": 256, "items": { "type": "string", "minLength": 1, "maxLength": 4096 } }
+            },
+            "additionalProperties": false
+          }
+        },
+        "required": ["binding", "filter"],
+        "additionalProperties": false
+      },
+      "result": { "type": "object", "properties": { "streamId": { "type": "string" }, "binding": { "type": "string" } }, "required": ["streamId", "binding"], "additionalProperties": false }
     },
     "model.list": {
       "params": { "$ref": "#/$defs/Empty" },

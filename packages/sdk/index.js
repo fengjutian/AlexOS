@@ -230,6 +230,12 @@ export function createAlexClient(transport = browserTransport()) {
       ping(binding, options) {
         return invoke("mcp.ping", { binding }, options);
       },
+      async *listen(binding, filter, options) {
+        const decoder = new TextDecoder();
+        for await (const chunk of stream("mcp.listen", { binding, filter }, options)) {
+          yield JSON.parse(decoder.decode(chunk));
+        }
+      },
     }),
     model: Object.freeze({
       async list(options) {

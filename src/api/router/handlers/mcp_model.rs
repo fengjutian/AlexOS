@@ -48,6 +48,14 @@ struct McpAuditParams {
     limit: usize,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpListenParams {
+    binding: String,
+    #[serde(default)]
+    filter: crate::mcp::SubscriptionFilter,
+}
+
 fn default_mcp_audit_limit() -> usize {
     200
 }
@@ -385,6 +393,28 @@ impl ApiRouter {
             crate::daemon::ControlCommand::McpPing {
                 app_id,
                 binding: params.binding,
+            },
+        )
+    }
+    pub(crate) fn mcp_listen(&self, request_id: &str, params: &Value) -> ApiResult {
+        let params: McpListenParams = parse_params(params)?;
+        self.mcp_scope(Some(&params.binding), None)?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?;
+        let app_id = runtime
+            .app_id()
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        let stream_id = format!("mcp:{app_id}:{}:{request_id}", params.binding);
+        self.daemon_ai(
+            "mcp-listen",
+            crate::daemon::ControlCommand::McpListen {
+                app_id,
+                binding: params.binding,
+                stream_id,
+                filter: params.filter,
             },
         )
     }

@@ -137,6 +137,7 @@ impl Permission {
             "mcp.discover" | "mcp.listTools" | "mcp.callTool" | "mcp.audit"
             | "mcp.listResources" | "mcp.readResource" | "mcp.listPrompts" | "mcp.getPrompt"
             | "mcp.complete" | "mcp.ping" => Some("mcp.use"),
+            "mcp.listen" => Some("mcp.use"),
             "model.list" | "model.generate" | "model.cancel" => Some("model.use"),
             "model.import" | "model.load" | "model.unload" | "model.remove" => Some("model.manage"),
             "media.camera" => Some("media.camera"),
