@@ -451,7 +451,10 @@ impl ApplicationManifest {
             version,
             frontend,
             services,
-            mcp_servers: self.as_v2().map(|manifest| manifest.mcp_servers.clone()).unwrap_or_default(),
+            mcp_servers: self
+                .as_v2()
+                .map(|manifest| manifest.mcp_servers.clone())
+                .unwrap_or_default(),
             permissions,
         })
     }

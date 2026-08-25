@@ -291,6 +291,7 @@ mod v2_projection_tests {
                 python: None,
             },
             services: services_map,
+            mcp_servers: BTreeMap::new(),
             storage: Vec::new(),
             permissions: Default::default(),
         };
@@ -424,6 +425,7 @@ mod v2_projection_tests {
                 python: Some("3.12".to_owned()),
             },
             services: services_map,
+            mcp_servers: BTreeMap::new(),
             storage: Vec::new(),
             permissions: Default::default(),
         };

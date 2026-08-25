@@ -4004,6 +4004,7 @@ fn build_v2_manifest(
             python: None,
         },
         services: map,
+        mcp_servers: Default::default(),
         storage: Vec::new(),
         permissions: Default::default(),
     };

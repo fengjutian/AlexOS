@@ -2069,6 +2069,7 @@ mod tests {
                 python: Some("3.12".into()),
             },
             services,
+            mcp_servers: BTreeMap::new(),
             storage: Vec::new(),
             permissions: Default::default(),
         };

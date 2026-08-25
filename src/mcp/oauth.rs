@@ -5,7 +5,11 @@
 //! then returns the code, state and issuer to the Daemon for verification and
 //! exchange. Tokens are persisted only through the platform SecretStore.
 
-use std::{io::Read, sync::Arc, time::Duration};
+use std::{
+    io::Read,
+    sync::Arc,
+    time::{Duration, SystemTime, UNIX_EPOCH},
+};
 
 use base64::{Engine as _, engine::general_purpose::URL_SAFE_NO_PAD};
 use serde::{Deserialize, Serialize};
@@ -59,6 +63,8 @@ pub struct TokenSet {
     pub token_type: Option<String>,
     #[serde(default)]
     pub expires_in: Option<u64>,
+    #[serde(default)]
+    pub obtained_at_ms: Option<u64>,
     #[serde(default)]
     pub scope: Option<String>,
     #[serde(default)]
@@ -251,7 +257,7 @@ impl OAuthClient {
             .agent
             .run(request)
             .map_err(|error| McpError::Transport(error.to_string()))?;
-        let tokens: TokenSet = read_json(response)?;
+        let mut tokens: TokenSet = read_json(response)?;
         if tokens.access_token.is_empty()
             || tokens
                 .token_type
@@ -260,6 +266,7 @@ impl OAuthClient {
         {
             return Err(McpError::Protocol("invalid OAuth token response".into()));
         }
+        tokens.obtained_at_ms = Some(now_ms());
         Ok(tokens)
     }
 }
@@ -337,10 +344,31 @@ impl VaultAccessTokenProvider {
 
 impl AccessTokenProvider for VaultAccessTokenProvider {
     fn access_token(&self) -> Result<Option<String>, McpError> {
-        let token = self
-            .vault
-            .load(&self.account)?
-            .map(|tokens| tokens.access_token);
+        let mut stored = self.vault.load(&self.account)?;
+        if stored.as_ref().is_some_and(|tokens| {
+            tokens
+                .expires_in
+                .zip(tokens.obtained_at_ms)
+                .is_some_and(|(seconds, obtained)| {
+                    now_ms().saturating_add(30_000)
+                        >= obtained.saturating_add(seconds.saturating_mul(1_000))
+                })
+        }) {
+            let rejected = stored.as_ref().map(|tokens| tokens.access_token.clone());
+            if !self.refresh_access_token(
+                &AuthChallenge {
+                    resource_metadata: None,
+                    scope: None,
+                },
+                rejected.as_deref(),
+            )? {
+                return Err(McpError::Authorization(
+                    "stored access token expired and cannot be refreshed".into(),
+                ));
+            }
+            stored = self.vault.load(&self.account)?;
+        }
+        let token = stored.map(|tokens| tokens.access_token);
         if token
             .as_deref()
             .is_some_and(|value| value.is_empty() || value.contains(['\r', '\n', '\0']))
@@ -419,6 +447,15 @@ impl TokenVault {
             .delete("com.alex.runtime.mcp.oauth", account)
             .map_err(|error| McpError::Transport(error.to_string()))
     }
+}
+
+fn now_ms() -> u64 {
+    SystemTime::now()
+        .duration_since(UNIX_EPOCH)
+        .unwrap_or_default()
+        .as_millis()
+        .try_into()
+        .unwrap_or(u64::MAX)
 }
 
 fn secure_url(value: &str, label: &str) -> Result<Url, McpError> {
@@ -639,6 +676,7 @@ mod tests {
             refresh_token: Some("refresh".into()),
             token_type: Some("Bearer".into()),
             expires_in: Some(3600),
+            obtained_at_ms: Some(now_ms()),
             scope: Some("tools:read".into()),
             token_endpoint: Some("https://auth.example.test/token".into()),
             client_id: Some("alex-desktop".into()),

@@ -197,6 +197,16 @@ impl AuditLog {
 pub trait RpcTransport: Send + Sync {
     fn request(&self, id: u64, method: &str, params: Value) -> Result<Value, McpError>;
     fn notify(&self, method: &str, params: Value) -> Result<(), McpError>;
+    fn listen(
+        &self,
+        _id: u64,
+        _params: Value,
+        _on_notification: &mut dyn FnMut(Value) -> Result<(), McpError>,
+    ) -> Result<(), McpError> {
+        Err(McpError::Protocol(
+            "transport does not support subscriptions/listen".into(),
+        ))
+    }
 }
 
 /// MCP Streamable HTTP transport. Alex accepts HTTPS endpoints and plain HTTP
@@ -437,6 +447,135 @@ impl RpcTransport for StreamableHttpTransport {
         )?;
         Ok(())
     }
+
+    fn listen(
+        &self,
+        id: u64,
+        mut params: Value,
+        on_notification: &mut dyn FnMut(Value) -> Result<(), McpError>,
+    ) -> Result<(), McpError> {
+        if self.era != ProtocolEra::Modern {
+            return Err(McpError::Protocol(
+                "subscriptions/listen requires modern MCP".into(),
+            ));
+        }
+        params.as_object_mut().ok_or_else(|| McpError::Protocol("params must be an object".into()))?
+            .insert("_meta".into(), json!({
+                "io.modelcontextprotocol/protocolVersion": MODERN_PROTOCOL_VERSION,
+                "io.modelcontextprotocol/clientInfo": {"name":"Alex Runtime","version":env!("CARGO_PKG_VERSION")}
+            }));
+        let body = serde_json::to_vec(
+            &json!({"jsonrpc":"2.0","id":id,"method":"subscriptions/listen","params":params}),
+        )
+        .map_err(|error| McpError::Protocol(error.to_string()))?;
+        for allow_refresh in [true, false] {
+            let access_token = self
+                .access_tokens
+                .as_ref()
+                .map(|provider| provider.access_token())
+                .transpose()?
+                .flatten();
+            let mut request = ureq::http::Request::builder()
+                .method(ureq::http::Method::POST)
+                .uri(self.endpoint.as_str())
+                .header("content-type", "application/json")
+                .header("accept", "text/event-stream")
+                .header("mcp-protocol-version", MODERN_PROTOCOL_VERSION)
+                .header("mcp-method", "subscriptions/listen");
+            if let Some(token) = access_token.as_deref() {
+                request = request.header("authorization", format!("Bearer {token}"));
+            }
+            let mut response = self
+                .agent
+                .run(
+                    request
+                        .body(body.clone())
+                        .map_err(|error| McpError::Transport(error.to_string()))?,
+                )
+                .map_err(|error| McpError::Transport(error.to_string()))?;
+            if response.status() == ureq::http::StatusCode::UNAUTHORIZED {
+                let challenge = response
+                    .headers()
+                    .get("www-authenticate")
+                    .and_then(|value| value.to_str().ok())
+                    .ok_or_else(|| {
+                        McpError::Authorization("401 response omitted WWW-Authenticate".into())
+                    })
+                    .and_then(oauth::parse_www_authenticate)?;
+                if allow_refresh
+                    && let Some(provider) = &self.access_tokens
+                    && provider.refresh_access_token(&challenge, access_token.as_deref())?
+                {
+                    continue;
+                }
+                return Err(McpError::Authorization(
+                    "subscription authorization is required or refresh failed".into(),
+                ));
+            }
+            let content_type = response
+                .headers()
+                .get("content-type")
+                .and_then(|value| value.to_str().ok())
+                .unwrap_or("");
+            if !content_type
+                .to_ascii_lowercase()
+                .starts_with("text/event-stream")
+            {
+                return Err(McpError::Protocol(
+                    "subscriptions/listen requires text/event-stream".into(),
+                ));
+            }
+            let mut reader = BufReader::new(response.body_mut().as_reader());
+            let mut data = String::new();
+            let mut acknowledged = false;
+            loop {
+                let mut line = String::new();
+                let count = reader
+                    .read_line(&mut line)
+                    .map_err(|error| McpError::Transport(error.to_string()))?;
+                if count == 0 {
+                    return if acknowledged {
+                        Ok(())
+                    } else {
+                        Err(McpError::Protocol(
+                            "subscription closed before acknowledgement".into(),
+                        ))
+                    };
+                }
+                if line == "\n" || line == "\r\n" {
+                    if data.is_empty() {
+                        continue;
+                    }
+                    let value: Value = serde_json::from_str(data.trim_end())
+                        .map_err(|error| McpError::Protocol(error.to_string()))?;
+                    data.clear();
+                    if !acknowledged {
+                        if value.get("method").and_then(Value::as_str)
+                            != Some("notifications/subscriptions/acknowledged")
+                        {
+                            return Err(McpError::Protocol(
+                                "first subscription event was not an acknowledgement".into(),
+                            ));
+                        }
+                        acknowledged = true;
+                    } else {
+                        on_notification(value)?;
+                    }
+                    continue;
+                }
+                if let Some(value) = line.strip_prefix("data:") {
+                    if data.len() + value.len() > MAX_MESSAGE_BYTES {
+                        return Err(McpError::Protocol(
+                            "subscription event exceeds 1 MiB".into(),
+                        ));
+                    }
+                    data.push_str(value.trim_start());
+                    data.push('\n');
+                }
+            }
+        }
+        unreachable!("subscription attempts always return or continue")
+    }
 }
 
 pub struct StdioTransport {
@@ -593,6 +732,19 @@ pub trait InputRequiredHandler: Send + Sync {
     fn handle(&self, method: &str, params: &Value) -> Result<Value, McpError>;
 }
 
+#[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct SubscriptionFilter {
+    #[serde(default)]
+    pub tools_list_changed: bool,
+    #[serde(default)]
+    pub prompts_list_changed: bool,
+    #[serde(default)]
+    pub resources_list_changed: bool,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub resource_subscriptions: Vec<String>,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct DiscoverResult {
@@ -656,7 +808,10 @@ impl McpClient {
             }
             match result.get("resultType").and_then(Value::as_str) {
                 Some("complete") => {
-                    result.as_object_mut().expect("result discriminator requires object").remove("resultType");
+                    result
+                        .as_object_mut()
+                        .expect("result discriminator requires object")
+                        .remove("resultType");
                     return Ok(result);
                 }
                 // Tolerate pre-final 2026 servers while they migrate to the
@@ -672,7 +827,9 @@ impl McpClient {
                     let requests = result
                         .get("inputRequests")
                         .and_then(Value::as_object)
-                        .ok_or_else(|| McpError::Protocol("input_required omitted inputRequests".into()))?;
+                        .ok_or_else(|| {
+                            McpError::Protocol("input_required omitted inputRequests".into())
+                        })?;
                     if requests.is_empty() {
                         return Err(McpError::Protocol("inputRequests must not be empty".into()));
                     }
@@ -684,25 +841,45 @@ impl McpClient {
                         let embedded_method = request
                             .get("method")
                             .and_then(Value::as_str)
-                            .ok_or_else(|| McpError::Protocol(format!("input request {key:?} omitted method")))?;
-                        if !matches!(embedded_method, "elicitation/create" | "sampling/createMessage" | "roots/list") {
-                            return Err(McpError::Protocol(format!("unsupported input request method {embedded_method:?}")));
+                            .ok_or_else(|| {
+                                McpError::Protocol(format!("input request {key:?} omitted method"))
+                            })?;
+                        if !matches!(
+                            embedded_method,
+                            "elicitation/create" | "sampling/createMessage" | "roots/list"
+                        ) {
+                            return Err(McpError::Protocol(format!(
+                                "unsupported input request method {embedded_method:?}"
+                            )));
                         }
                         let embedded_params = request.get("params").unwrap_or(&Value::Null);
-                        responses.insert(key.clone(), handler.handle(embedded_method, embedded_params)?);
+                        responses.insert(
+                            key.clone(),
+                            handler.handle(embedded_method, embedded_params)?,
+                        );
                     }
-                    let object = params.as_object_mut().ok_or_else(|| McpError::Protocol("params must be an object".into()))?;
+                    let object = params
+                        .as_object_mut()
+                        .ok_or_else(|| McpError::Protocol("params must be an object".into()))?;
                     object.insert("inputResponses".into(), Value::Object(responses));
                     match result.get("requestState") {
                         Some(Value::String(state)) => {
                             object.insert("requestState".into(), Value::String(state.clone()));
                         }
-                        Some(_) => return Err(McpError::Protocol("requestState must be a string".into())),
-                        None => { object.remove("requestState"); }
+                        Some(_) => {
+                            return Err(McpError::Protocol("requestState must be a string".into()));
+                        }
+                        None => {
+                            object.remove("requestState");
+                        }
                     }
                     round += 1;
                 }
-                Some(other) => return Err(McpError::Protocol(format!("unsupported resultType {other:?}"))),
+                Some(other) => {
+                    return Err(McpError::Protocol(format!(
+                        "unsupported resultType {other:?}"
+                    )));
+                }
             }
         }
     }
@@ -799,6 +976,44 @@ impl McpClient {
     }
     pub fn ping(&self) -> Result<(), McpError> {
         self.call("ping", json!({})).map(|_| ())
+    }
+    /// Opens the modern notification stream and blocks until it closes. Callers
+    /// should run this on the bounded MCP executor, and reopen after any abrupt
+    /// loss only after refetching the lists/resources they depend on.
+    pub fn listen(
+        &self,
+        filter: SubscriptionFilter,
+        on_notification: &mut dyn FnMut(Value) -> Result<(), McpError>,
+    ) -> Result<(), McpError> {
+        if self.era != ProtocolEra::Modern {
+            return Err(McpError::Protocol(
+                "subscriptions/listen requires modern MCP".into(),
+            ));
+        }
+        if !filter.tools_list_changed
+            && !filter.prompts_list_changed
+            && !filter.resources_list_changed
+            && filter.resource_subscriptions.is_empty()
+        {
+            return Err(McpError::InvalidConfig(
+                "subscription filter must request at least one notification".into(),
+            ));
+        }
+        if filter.resource_subscriptions.len() > 256
+            || filter
+                .resource_subscriptions
+                .iter()
+                .any(|uri| uri.is_empty() || uri.len() > 4096)
+        {
+            return Err(McpError::InvalidConfig(
+                "invalid resource subscription filter".into(),
+            ));
+        }
+        self.transport.listen(
+            self.next_id.fetch_add(1, Ordering::Relaxed),
+            json!({"notifications":filter}),
+            on_notification,
+        )
     }
     pub fn call_tool(&self, name: &str, arguments: Value) -> Result<ToolCallResult, McpError> {
         if name.is_empty() {
@@ -1120,7 +1335,9 @@ mod tests {
                 Ok(json!({"resultType":"complete","content":[{"type":"text","text":"done"}]}))
             }
         }
-        fn notify(&self, _: &str, _: Value) -> Result<(), McpError> { Ok(()) }
+        fn notify(&self, _: &str, _: Value) -> Result<(), McpError> {
+            Ok(())
+        }
     }
     struct MrtrHandler;
     impl InputRequiredHandler for MrtrHandler {
@@ -1333,5 +1550,51 @@ mod tests {
         assert_eq!(transport.request(9, "ping", json!({})).unwrap(), json!({}));
         assert_eq!(provider.0.load(Ordering::SeqCst), 1);
         server.join().unwrap();
+    }
+
+    #[test]
+    fn modern_http_subscription_requires_ack_and_delivers_notifications() {
+        use std::net::TcpListener;
+        let listener = TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream.try_clone().unwrap());
+            let mut headers = String::new();
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                headers.push_str(&line.to_ascii_lowercase());
+            }
+            assert!(headers.contains("mcp-method: subscriptions/listen"));
+            let events = concat!(
+                "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/subscriptions/acknowledged\",\"params\":{}}\n\n",
+                "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\",\"params\":{}}\n\n"
+            );
+            write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", events.len(), events).unwrap();
+        });
+        let client = McpClient::new(
+            Arc::new(StreamableHttpTransport::new(&endpoint, ProtocolEra::Modern).unwrap()),
+            ProtocolEra::Modern,
+        );
+        let mut received = Vec::new();
+        client
+            .listen(
+                SubscriptionFilter {
+                    tools_list_changed: true,
+                    ..Default::default()
+                },
+                &mut |value| {
+                    received.push(value);
+                    Ok(())
+                },
+            )
+            .unwrap();
+        server.join().unwrap();
+        assert_eq!(received.len(), 1);
+        assert_eq!(received[0]["method"], "notifications/tools/list_changed");
     }
 }

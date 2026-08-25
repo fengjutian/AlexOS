@@ -56,7 +56,11 @@ pub enum McpServerSpec {
     },
     StreamableHttp {
         endpoint: String,
-        #[serde(default, skip_serializing_if = "Option::is_none")]
+        #[serde(
+            default,
+            rename = "tokenAccount",
+            skip_serializing_if = "Option::is_none"
+        )]
         token_account: Option<String>,
         #[serde(default)]
         legacy: bool,
@@ -240,21 +244,34 @@ impl ApplicationManifestV2 {
             return Err(validation(format!("invalid application id {:?}", self.id)));
         }
         for (binding, server) in &self.mcp_servers {
-            if !valid_id(binding) {
+            if !valid_component(binding) {
                 return Err(validation(format!("invalid MCP binding {binding:?}")));
             }
             match server {
                 McpServerSpec::Stdio { command, .. } => {
                     validate_package_path(root, command, "MCP stdio command")?;
                 }
-                McpServerSpec::StreamableHttp { endpoint, token_account, .. } => {
+                McpServerSpec::StreamableHttp {
+                    endpoint,
+                    token_account,
+                    ..
+                } => {
                     let url = url::Url::parse(endpoint)
                         .map_err(|error| validation(format!("invalid MCP endpoint: {error}")))?;
-                    let loopback = url.host_str().is_some_and(|host| host == "localhost" || host.parse::<std::net::IpAddr>().is_ok_and(|ip| ip.is_loopback()));
+                    let loopback = url.host_str().is_some_and(|host| {
+                        host == "localhost"
+                            || host
+                                .parse::<std::net::IpAddr>()
+                                .is_ok_and(|ip| ip.is_loopback())
+                    });
                     if url.scheme() != "https" && !(url.scheme() == "http" && loopback) {
-                        return Err(validation("MCP endpoint must use HTTPS (HTTP is loopback-only)"));
+                        return Err(validation(
+                            "MCP endpoint must use HTTPS (HTTP is loopback-only)",
+                        ));
                     }
-                    if token_account.as_deref().is_some_and(|value| value.is_empty() || value.len() > 255 || value.contains(['\r', '\n', '\0'])) {
+                    if token_account.as_deref().is_some_and(|value| {
+                        value.is_empty() || value.len() > 255 || value.contains(['\r', '\n', '\0'])
+                    }) {
                         return Err(validation("invalid MCP token account"));
                     }
                 }
@@ -451,6 +468,31 @@ services:
         );
         assert_eq!(manifest.start_order().unwrap(), ["worker", "api"]);
         assert_eq!(manifest.stop_order().unwrap(), ["api", "worker"]);
+    }
+
+    #[test]
+    fn loads_and_validates_mcp_bindings() {
+        let (temp, manifest) = fixture(
+            r#"
+schemaVersion: 2
+id: com.example.mcp
+name: mcp
+version: 1.0.0
+runtime: { node: "22" }
+services:
+  app: { runtime: node, command: server/index.js }
+mcpServers:
+  local:
+    transport: stdio
+    command: server/index.js
+  remote:
+    transport: streamable-http
+    endpoint: https://mcp.example.test/v1
+    tokenAccount: com.example.mcp/remote
+"#,
+        );
+        assert_eq!(manifest.mcp_servers.len(), 2);
+        manifest.validate(temp.path()).unwrap();
     }
 
     #[test]

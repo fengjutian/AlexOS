@@ -174,14 +174,23 @@ impl DaemonService {
             ControlCommand::StreamCancel { stream_id, reason } => {
                 self.stream_cancel(&stream_id, &reason)
             }
-            ControlCommand::McpConnections { app_id } => serde_json::to_value(
-                self.mcp
-                    .list()
-                    .into_iter()
-                    .filter(|connection| connection.application == app_id)
-                    .collect::<Vec<_>>(),
-            )
-            .map_err(|error| error.to_string()),
+            ControlCommand::McpConnections { app_id } => {
+                let reconciled = if self.manager.is_some() {
+                    self.reconcile_manifest_mcp(&app_id)
+                } else {
+                    Ok(())
+                };
+                reconciled.and_then(|_| {
+                    serde_json::to_value(
+                        self.mcp
+                            .list()
+                            .into_iter()
+                            .filter(|connection| connection.application == app_id)
+                            .collect::<Vec<_>>(),
+                    )
+                    .map_err(|error| error.to_string())
+                })
+            }
             ControlCommand::McpConnectStdio {
                 app_id,
                 binding,
@@ -509,6 +518,7 @@ impl DaemonService {
     fn start(&self, app_id: &str) -> Result<serde_json::Value, String> {
         if let Some(manager) = &self.manager {
             manager.get_app(app_id).map_err(|error| error.to_string())?;
+            self.reconcile_manifest_mcp(app_id)?;
             let status = manager.launch(app_id).map_err(|error| error.to_string())?;
             self.set_desired(app_id, DesiredState::Running)?;
             self.record_status(app_id, &status)?;
@@ -532,6 +542,7 @@ impl DaemonService {
         if let Some(manager) = &self.manager {
             manager.get_app(app_id).map_err(|error| error.to_string())?;
             manager.stop(app_id).map_err(|error| error.to_string())?;
+            self.reconcile_manifest_mcp(app_id)?;
             let status = manager.launch(app_id).map_err(|error| error.to_string())?;
             self.set_desired(app_id, DesiredState::Running)?;
             self.record_status(app_id, &status)?;
@@ -944,6 +955,74 @@ impl DaemonService {
             "era": era,
             "server": server,
         }))
+    }
+
+    fn reconcile_manifest_mcp(&self, app_id: &str) -> Result<(), String> {
+        let manager = self.manager.as_ref().ok_or("app manager is unavailable")?;
+        let details = manager.get_app(app_id).map_err(|error| error.to_string())?;
+        let manifest = crate::core::application_manifest::load_application(&details.install_path)
+            .map_err(|error| error.to_string())?;
+        let resolved = manifest.resolve().map_err(|error| error.to_string())?;
+        let connected = self
+            .mcp
+            .list()
+            .into_iter()
+            .filter(|connection| connection.application == app_id)
+            .map(|connection| connection.binding)
+            .collect::<std::collections::BTreeSet<_>>();
+        for (binding, spec) in resolved.mcp_servers {
+            if connected.contains(&binding) {
+                if self
+                    .mcp
+                    .get(app_id, &binding)
+                    .and_then(|client| client.ping())
+                    .is_ok()
+                {
+                    continue;
+                }
+                // A declared binding that no longer answers health probes is
+                // replaced from its manifest configuration. This also updates
+                // persisted configuration after endpoint/command changes.
+                self.mcp_disconnect(app_id, &binding)?;
+            }
+            match spec {
+                crate::core::manifest_v2::McpServerSpec::Stdio {
+                    command,
+                    args,
+                    legacy,
+                } => {
+                    self.mcp_connect_stdio(
+                        app_id,
+                        &binding,
+                        &command,
+                        &args,
+                        if legacy {
+                            crate::mcp::ProtocolEra::Legacy
+                        } else {
+                            crate::mcp::ProtocolEra::Modern
+                        },
+                    )?;
+                }
+                crate::core::manifest_v2::McpServerSpec::StreamableHttp {
+                    endpoint,
+                    token_account,
+                    legacy,
+                } => {
+                    self.mcp_connect_http(
+                        app_id,
+                        &binding,
+                        &endpoint,
+                        if legacy {
+                            crate::mcp::ProtocolEra::Legacy
+                        } else {
+                            crate::mcp::ProtocolEra::Modern
+                        },
+                        token_account.as_deref(),
+                    )?;
+                }
+            }
+        }
+        Ok(())
     }
 
     fn mcp_connect_http(
