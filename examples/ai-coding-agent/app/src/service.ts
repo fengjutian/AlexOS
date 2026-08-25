@@ -15,6 +15,6 @@ const workspace = new WorkspaceService({
 });
 
 const controller = new AppController(workspace);
-const server = new StdioRpcServer((request) => controller.handle(request));
+new StdioRpcServer((request) => controller.handle(request));
 
 logger.info("service ready", { version: VERSION, workspace: workspaceRoot, pid: process.pid });

@@ -12,6 +12,6 @@ const workspace = new WorkspaceService({
     capabilities: ["app.info", "app.echo", "app.ping", "app.workspace.list", "app.workspace.read", "app.config.get"],
 });
 const controller = new AppController(workspace);
-const server = new StdioRpcServer((request) => controller.handle(request));
+new StdioRpcServer((request) => controller.handle(request));
 logger.info("service ready", { version: VERSION, workspace: workspaceRoot, pid: process.pid });
 //# sourceMappingURL=service.js.map

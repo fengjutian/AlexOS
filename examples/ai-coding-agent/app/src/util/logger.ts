@@ -11,7 +11,6 @@ const minLevel = LEVELS[(process.env["LOG_LEVEL"] as Level) ?? "info"];
 function emit(level: Level, args: unknown[]): void {
   if (LEVELS[level] < minLevel) return;
   const prefix = `[${new Date().toISOString()}] [${level.toUpperCase()}]`;
-  // eslint-disable-next-line no-console
   console.error(prefix, ...args);
 }
 
