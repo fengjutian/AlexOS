@@ -734,6 +734,9 @@ mod tests {
         fn stop(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
             unimplemented!()
         }
+        fn restart(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+            unimplemented!()
+        }
         fn runtime_status(
             &self,
             _id: &str,
@@ -989,6 +992,7 @@ mod tests {
             fn uninstall(&self, _id: &str, _o: UninstallOptions) -> Result<(), ManagerError> { unimplemented!() }
             fn launch(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
             fn stop(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
+            fn restart(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
             fn runtime_status(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
                 Ok(crate::runtime::RuntimeStatus::default())
             }

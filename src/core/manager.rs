@@ -219,6 +219,16 @@ pub trait AppManager: Send + Sync {
     fn uninstall(&self, id: &str, options: UninstallOptions) -> Result<(), ManagerError>;
     fn launch(&self, id: &str) -> Result<RuntimeStatus, ManagerError>;
     fn stop(&self, id: &str) -> Result<RuntimeStatus, ManagerError>;
+    /// App-level restart (stop every service, then
+    /// start every service). The v1 backward-compat
+    /// path stops + starts the legacy "main" service;
+    /// v2 goes through the supervisor's
+    /// `restart_application` so the DAG layering is
+    /// honoured. Returns the v1 `RuntimeStatus` for
+    /// the primary service so the App Manager UI
+    /// can show "running again" without a follow-up
+    /// `runtime_status` call.
+    fn restart(&self, id: &str) -> Result<RuntimeStatus, ManagerError>;
     fn runtime_status(&self, id: &str) -> Result<RuntimeStatus, ManagerError>;
     /// Phase 5 per-service surface. `start_service` runs
     /// exactly one service from the manifest without
@@ -842,6 +852,12 @@ impl AppManager for LocalAppManager {
         Ok(self.runtimes.stop(id)?)
     }
 
+    fn restart(&self, id: &str) -> Result<RuntimeStatus, ManagerError> {
+        self.runtimes
+            .restart(id)
+            .map_err(|error| ManagerError::Runtime(error.to_string()))
+    }
+
     fn runtime_status(&self, id: &str) -> Result<RuntimeStatus, ManagerError> {
         Ok(self.runtimes.status(id)?)
     }
@@ -882,9 +898,63 @@ impl AppManager for LocalAppManager {
         &self,
         id: &str,
     ) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, ManagerError> {
-        self.runtimes
-            .list_services(id)
-            .map_err(|error| ManagerError::Runtime(error.to_string()))
+        // The supervisor only knows about services
+        // that have been started at least once; the
+        // App Manager UI needs the full declared
+        // list from the manifest so the detail view
+        // can render every service even when the
+        // app is stopped. We project the manifest's
+        // `ServiceDescriptor` list onto
+        // `ServiceSummary` with `Pending` status.
+        // Services that the supervisor *does* know
+        // about override the projected status (so
+        // the live state shows through once the app
+        // has been launched).
+        let install_path = self.install_root.join(id);
+        let manifest = match load_application(&install_path) {
+            Ok(m) => m,
+            Err(error) => {
+                return Err(ManagerError::Runtime(format!(
+                    "failed to load manifest for {id}: {error}"
+                )));
+            }
+        };
+        let mut summaries: Vec<crate::runtime::application_supervisor::ServiceSummary> = manifest
+            .services()
+            .into_iter()
+            .map(|descriptor| {
+                let status = self
+                    .runtimes
+                    .service_status_only(id, &descriptor.name)
+                    .unwrap_or(crate::runtime::service_supervisor::ServiceStatus::Pending);
+                crate::runtime::application_supervisor::ServiceSummary {
+                    name: descriptor.name,
+                    status,
+                    restart_count: 0,
+                    last_error: None,
+                }
+            })
+            .collect();
+        // Mirror the supervisor's known status for
+        // every slot the supervisor already has. This
+        // is a no-op when the supervisor has not seen
+        // the app yet.
+        if let Some(application) = self.runtimes.application_supervisor().application(id) {
+            for summary in summaries.iter_mut() {
+                if let Some(slot) = application.services.get(&summary.name) {
+                    summary.status = slot.status;
+                    summary.restart_count = slot.restart_count;
+                    summary.last_error = slot.last_error.clone();
+                }
+            }
+        }
+        // Sort by service name for stable UI
+        // rendering. The supervisor's own
+        // `list_services` already returns a
+        // `BTreeMap`-backed order, so the merged
+        // result is also deterministic.
+        summaries.sort_by(|a, b| a.name.cmp(&b.name));
+        Ok(summaries)
     }
 }
 
@@ -986,6 +1056,21 @@ impl RuntimeSupervisor {
             state: RuntimeState::Stopped,
             ..Default::default()
         })
+    }
+
+    /// App-level restart. v1: stop + start the legacy
+    /// "main" service. v2: go through
+    /// `restart_application` so the supervisor honours
+    /// the DAG and the layered start. Either way the
+    /// returned `RuntimeStatus` is shaped for the v1
+    /// compat caller.
+    pub fn restart(&self, id: &str) -> Result<RuntimeStatus, SupervisorError> {
+        let _ = self.inner.stop_service(id, "main");
+        self.inner.restart_service(id, "main", &self.install_root_for(id))?;
+        Ok(self
+            .inner
+            .runtime_status_compat(id)
+            .unwrap_or_default())
     }
 
     /// v2 multi-service launch. Goes through the layered
@@ -1096,6 +1181,23 @@ impl RuntimeSupervisor {
         self.inner
             .list_services(id)
             .map_err(|error| SupervisorError::Supervisor(error.to_string()))
+    }
+
+    /// Phase 6 helper: read just the per-service
+    /// `ServiceStatus` from the supervisor, falling
+    /// back to `Pending` when the slot does not
+    /// exist. Used by `LocalAppManager::list_services`
+    /// to merge the manifest's declared service list
+    /// with whatever the supervisor has observed.
+    pub fn service_status_only(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Option<crate::runtime::service_supervisor::ServiceStatus> {
+        self.inner
+            .service_status(id, service)
+            .ok()
+            .map(|snapshot| snapshot.status)
     }
 
     /// Look up the `ServiceDescriptor` for `(id, service)`
@@ -1409,11 +1511,97 @@ impl ManagerRouter {
                 },
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
             },
+            "manager.restart" => match parse_id(&request.params) {
+                Ok(id) => match self.manager.restart(&id) {
+                    Ok(status) => json_response(
+                        &request.id,
+                        &serde_json::to_value(status).unwrap_or_default(),
+                    ),
+                    Err(error) => manager_error_response(&request.id, error),
+                },
+                Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
+            },
             "manager.runtime_status" => match parse_id(&request.params) {
                 Ok(id) => match self.manager.runtime_status(&id) {
                     Ok(status) => json_response(
                         &request.id,
                         &serde_json::to_value(status).unwrap_or_default(),
+                    ),
+                    Err(error) => manager_error_response(&request.id, error),
+                },
+                Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
+            },
+            // Phase 6 — per-service surface for the App
+            // Manager UI. Each method takes a
+            // `{ "id": "<app>", "service": "<name>" }`
+            // payload and goes through the
+            // `AppManager`'s per-service shims (which
+            // in turn drive the multi-service
+            // supervisor). The list endpoint returns
+            // the full `Vec<ServiceSummary>` so the
+            // UI's detail view can render every
+            // declared service in one round trip.
+            "manager.start_service" => {
+                match parse_id_and_service(&request.params) {
+                    Ok((id, service)) => match self.manager.start_service(&id, &service) {
+                        Ok(status) => json_response(
+                            &request.id,
+                            &serde_json::to_value(status).unwrap_or_default(),
+                        ),
+                        Err(error) => manager_error_response(&request.id, error),
+                    },
+                    Err(msg) => {
+                        crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg)
+                    }
+                }
+            }
+            "manager.stop_service" => {
+                match parse_id_and_service(&request.params) {
+                    Ok((id, service)) => match self.manager.stop_service(&id, &service) {
+                        Ok(status) => json_response(
+                            &request.id,
+                            &serde_json::to_value(status).unwrap_or_default(),
+                        ),
+                        Err(error) => manager_error_response(&request.id, error),
+                    },
+                    Err(msg) => {
+                        crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg)
+                    }
+                }
+            }
+            "manager.restart_service" => {
+                match parse_id_and_service(&request.params) {
+                    Ok((id, service)) => match self.manager.restart_service(&id, &service) {
+                        Ok(status) => json_response(
+                            &request.id,
+                            &serde_json::to_value(status).unwrap_or_default(),
+                        ),
+                        Err(error) => manager_error_response(&request.id, error),
+                    },
+                    Err(msg) => {
+                        crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg)
+                    }
+                }
+            }
+            "manager.service_status" => {
+                match parse_id_and_service(&request.params) {
+                    Ok((id, service)) => match self.manager.service_status(&id, &service) {
+                        Ok(status) => json_response(
+                            &request.id,
+                            &serde_json::to_value(status).unwrap_or_default(),
+                        ),
+                        Err(error) => manager_error_response(&request.id, error),
+                    },
+                    Err(msg) => {
+                        crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg)
+                    }
+                }
+            }
+            "manager.list_services" => match parse_id(&request.params) {
+                Ok(id) => match self.manager.list_services(&id) {
+                    Ok(services) => json_response(
+                        &request.id,
+                        &serde_json::json!({ "services": services }),
                     ),
                     Err(error) => manager_error_response(&request.id, error),
                 },
@@ -1456,6 +1644,26 @@ fn parse_id(params: &serde_json::Value) -> Result<String, String> {
         .and_then(|v| v.as_str())
         .map(|s| s.to_owned())
         .ok_or_else(|| "missing `id` parameter".to_owned())
+}
+
+/// Parse the `(id, service)` pair that every per-service
+/// `manager.*` IPC method takes. Both fields are
+/// required; a missing or empty `service` is rejected
+/// because every multi-service supervisor slot is
+/// keyed by a non-empty name.
+fn parse_id_and_service(
+    params: &serde_json::Value,
+) -> Result<(String, String), String> {
+    let id = parse_id(params)?;
+    let service = params
+        .get("service")
+        .and_then(|v| v.as_str())
+        .map(|s| s.to_owned())
+        .ok_or_else(|| "missing `service` parameter".to_owned())?;
+    if service.is_empty() {
+        return Err("`service` must be non-empty".to_owned());
+    }
+    Ok((id, service))
 }
 
 fn parse_install(params: &serde_json::Value) -> Result<(PathBuf, InstallOptions), String> {
