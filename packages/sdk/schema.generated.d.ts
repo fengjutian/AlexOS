@@ -71,9 +71,16 @@ export type AlexCapability =
   | "stream.read"
   | "stream.cancel"
   | "mcp.connections"
+  | "mcp.discover"
   | "mcp.listTools"
   | "mcp.callTool"
   | "mcp.audit"
+  | "mcp.listResources"
+  | "mcp.readResource"
+  | "mcp.listPrompts"
+  | "mcp.getPrompt"
+  | "mcp.complete"
+  | "mcp.ping"
   | "model.list"
   | "model.import"
   | "model.remove"
@@ -172,9 +179,16 @@ export interface AlexMethodMap {
   "stream.read": { params: { "streamId": string; "waitMs"?: number }; result: { "streamId": string; "sequence"?: number; "bytes"?: number; "dataBase64"?: string; "pending"?: boolean; "terminal"?: null | { [key: string]: unknown } } };
   "stream.cancel": { params: { "streamId": string; "reason"?: string }; result: { "streamId": string; "cancelled": boolean } };
   "mcp.connections": { params: Empty; result: Array<{ "application": string; "binding": string; "era": "modern" | "legacy" }> };
+  "mcp.discover": { params: { "binding": string }; result: { "supportedVersions": Array<string>; "capabilities": JsonValue; "instructions"?: string; "ttlMs"?: number; "cacheScope"?: string; "_meta"?: JsonValue } };
   "mcp.listTools": { params: { "binding": string; "cursor"?: string }; result: { "tools": Array<{ "name": string; "description"?: string; "inputSchema": JsonValue }>; "nextCursor": string | null } };
   "mcp.callTool": { params: { "binding": string; "name": string; "arguments"?: JsonValue }; result: { "content": Array<JsonValue>; "isError": boolean; "structuredContent"?: JsonValue } };
   "mcp.audit": { params: { "limit"?: number }; result: { "entries": Array<{ "timestampMs": number; "callId": string; "application": string; "binding": string; "tool": string; "phase": "started" | "finished"; "outcome"?: "success" | "failure"; "durationMs"?: number; "errorKind"?: string }> } };
+  "mcp.listResources": { params: { "binding": string; "cursor"?: string }; result: { "resources": Array<JsonValue>; "nextCursor"?: string | null; "ttlMs"?: number; "cacheScope"?: string; [key: string]: unknown } };
+  "mcp.readResource": { params: { "binding": string; "uri": string }; result: { "contents": Array<JsonValue>; "ttlMs"?: number; "cacheScope"?: string; [key: string]: unknown } };
+  "mcp.listPrompts": { params: { "binding": string; "cursor"?: string }; result: { "prompts": Array<JsonValue>; "nextCursor"?: string | null; "ttlMs"?: number; "cacheScope"?: string; [key: string]: unknown } };
+  "mcp.getPrompt": { params: { "binding": string; "name": string; "arguments"?: JsonValue }; result: { "description"?: string; "messages": Array<JsonValue>; "ttlMs"?: number; "cacheScope"?: string; [key: string]: unknown } };
+  "mcp.complete": { params: { "binding": string; "reference": JsonValue; "argument": JsonValue }; result: JsonValue };
+  "mcp.ping": { params: { "binding": string }; result: { "ok": boolean } };
   "model.list": { params: Empty; result: { "models": Array<ModelManifest> } };
   "model.import": { params: { "source": string; "manifest": ModelManifest }; result: ModelManifest };
   "model.remove": { params: ModelId; result: { "modelId": string; "removed": boolean } };
