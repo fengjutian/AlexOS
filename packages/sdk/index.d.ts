@@ -148,6 +148,11 @@ export interface NetFetchInput {
   maxBytes?: number;
 }
 
+export interface StreamOptions extends InvokeOptions {
+  /** Initial consumer credit. The host clamps this to its configured maximum. */
+  creditBytes?: number;
+}
+
 export interface NetFetchResponse {
   status: number;
   /** Effective response URL. Redirects are disabled by the host. */
@@ -222,6 +227,7 @@ export interface AlexTransport {
   invoke<K extends AlexMethodName>(method: K, params: AlexMethodMap[K]["params"], options?: InvokeOptions): Promise<AlexMethodMap[K]["result"]>;
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
   on?<T = unknown>(event: string, listener: (data: T) => void): () => void;
+  stream?<T = Uint8Array>(method: string, params?: unknown, options?: StreamOptions): AsyncIterable<T>;
 }
 
 export interface AlexEventMap {
@@ -326,6 +332,7 @@ export class AlexError extends Error {
 export interface AlexClient {
   invoke<K extends AlexMethodName>(method: K, params: AlexMethodMap[K]["params"], options?: InvokeOptions): Promise<AlexMethodMap[K]["result"]>;
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
+  stream(method: string, params?: unknown, options?: StreamOptions): AsyncIterable<Uint8Array>;
   readonly events: {
     on<K extends keyof AlexEventMap>(
       event: K,

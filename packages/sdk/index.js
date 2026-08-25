@@ -12,9 +12,12 @@ export class AlexError extends Error {
 export function createAlexClient(transport = browserTransport()) {
   const invoke = (method, params, options) =>
     invokeWithControls(transport, method, params, options);
+  const stream = (method, params, options) =>
+    streamWithControls(transport, method, params, options);
 
   return Object.freeze({
     invoke,
+    stream,
     events: Object.freeze({
       on(event, listener) {
         if (typeof transport.on !== "function") {
@@ -187,6 +190,9 @@ export function createAlexClient(transport = browserTransport()) {
       },
       async cancel(requestId, options) {
         return invoke("runtime.cancel", { requestId }, options);
+      },
+      stream(method, params = {}, options) {
+        return stream("runtime.invoke", { method, params }, options);
       },
     }),
     window: Object.freeze({
@@ -413,6 +419,37 @@ async function invokeWithControls(transport, method, params = {}, options = {}) 
     clearTimeout(timer);
     if (abortHandler) options.signal.removeEventListener("abort", abortHandler);
   }
+}
+
+function streamWithControls(transport, method, params = {}, options = {}) {
+  if (typeof transport.stream !== "function") {
+    throw new AlexError("STREAMS_UNAVAILABLE", "Alex stream transport is unavailable");
+  }
+  if (options.signal?.aborted) throw abortedError(options.signal.reason);
+  const source = transport.stream(method, params, options);
+  if (!source || typeof source[Symbol.asyncIterator] !== "function") {
+    throw new AlexError("INVALID_RESPONSE", "Alex stream transport did not return AsyncIterable");
+  }
+  return {
+    async *[Symbol.asyncIterator]() {
+      const iterator = source[Symbol.asyncIterator]();
+      const abort = () => iterator.return?.();
+      options.signal?.addEventListener("abort", abort, { once: true });
+      try {
+        while (true) {
+          if (options.signal?.aborted) throw abortedError(options.signal.reason);
+          const next = await iterator.next();
+          if (next.done) return;
+          yield next.value instanceof Uint8Array ? next.value : base64ToBytes(next.value);
+        }
+      } catch (error) {
+        normalizeError(error);
+      } finally {
+        options.signal?.removeEventListener("abort", abort);
+        await iterator.return?.();
+      }
+    },
+  };
 }
 
 function browserTransport() {
