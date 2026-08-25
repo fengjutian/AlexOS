@@ -19,6 +19,8 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::core::manifest::{Backend, BackendMode, RuntimeKind};
+use crate::container::isolation::IsolationHandle;
+use crate::container::model::ResourceLimits;
 
 const MAX_LOG_LINES: usize = 200;
 /// Private TCP range the host allocates service-mode backends from.
@@ -165,6 +167,8 @@ pub enum RuntimeError {
     Backend { code: String, message: String },
     #[error("runtime request timed out after {0:?}")]
     Timeout(Duration),
+    #[error("failed to apply runtime isolation: {0}")]
+    Isolation(String),
     #[error("service backend did not report ready within {0:?}")]
     ServiceReadyTimeout(Duration),
     #[error("no free port available in service range 28000-28999")]
@@ -244,6 +248,11 @@ pub struct RuntimeSpec {
     /// from the `ServiceDescriptor` so each service
     /// gets its own file.
     pub service_name: String,
+    /// Optional resource quotas to enforce via a Windows Job Object
+    /// (`memoryMb` / `processes` / `cpuPercent`). `None` applies no
+    /// host-imposed limit. Populated by the v2 `ApplicationSupervisor`
+    /// from the service's `resources` block.
+    pub limits: Option<ResourceLimits>,
 }
 
 fn default_service_name() -> String {
@@ -338,6 +347,12 @@ pub struct RuntimeProcess {
     stdout: Option<BufReader<ChildStdout>>,
     rpc: Option<RpcChannel>,
     service: Option<ServiceState>,
+    /// Job Object boundary, present when the launch declared resource
+    /// limits. Intentionally never read — its only job is to keep the
+    /// kernel handle alive so `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`
+    /// terminates the tree on drop.
+    #[allow(dead_code)]
+    isolation: Option<IsolationHandle>,
 }
 
 type PendingResponse = mpsc::SyncSender<Result<Value, String>>;
@@ -424,6 +439,7 @@ impl RuntimeHandle {
             service_name: default_service_name(),
             data_dir: None,
             cache_dir: None,
+            limits: None,
         })
     }
 
@@ -821,6 +837,7 @@ impl RuntimeProcess {
             service_name: default_service_name(),
             data_dir: None,
             cache_dir: None,
+            limits: None,
         };
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         Self::start_with_spec(&spec, None, None, None, Arc::clone(&logs)).map(|(p, _)| p)
@@ -865,7 +882,7 @@ impl RuntimeProcess {
         // untrusted executables via the Phase 8 executable
         // allow-list — that is layered above this dispatch.
         let (executable, allow_native_entry) = match spec.backend.runtime {
-            RuntimeKind::Node => (discover_node().ok_or(RuntimeError::NodeNotFound)?, false),
+            RuntimeKind::Node => (resolve_node_executable()?, false),
             RuntimeKind::Python => return Err(RuntimeError::PythonNotManaged),
             RuntimeKind::Native => (PathBuf::from(&spec.backend.entry), true),
         };
@@ -956,6 +973,18 @@ impl RuntimeProcess {
             .stderr(Stdio::piped())
             .spawn()
             .map_err(|source| RuntimeError::Start { executable, source })?;
+        // If the service declared resource quotas, confine the freshly
+        // spawned process in a Job Object now. The handle is retained on
+        // the `RuntimeProcess` so `KILL_ON_JOB_CLOSE` reaps the whole
+        // tree on drop, and the memory / process-count / CPU caps apply
+        // for the process's lifetime.
+        let isolation = match &spec.limits {
+            Some(limits) => Some(
+                crate::container::isolation::confine_process(limits, child.id())
+                    .map_err(|error| RuntimeError::Isolation(error.to_string()))?,
+            ),
+            None => None,
+        };
         let stderr = child
             .stderr
             .take()
@@ -1053,6 +1082,7 @@ impl RuntimeProcess {
                 stdout,
                 rpc: None,
                 service,
+                isolation,
             },
             endpoint,
         ))
@@ -1617,6 +1647,30 @@ pub fn discover_node() -> Option<PathBuf> {
     find_on_path(if cfg!(windows) { "node.exe" } else { "node" })
 }
 
+/// Resolve the Node.js executable through the managed runtime provider:
+/// a versioned runtime from the managed cache is preferred, falling back
+/// to the ambient `ALEX_NODE` / `PATH` discovery. This is the seam that
+/// lets an operator later flip a service to `require_managed` so it stops
+/// depending on the user's PATH. `None`-version requests select the newest
+/// cached Node; version pinning from `runtime.node` is threaded in a
+/// follow-up slice.
+fn resolve_node_executable() -> Result<PathBuf, RuntimeError> {
+    let provider = crate::runtime_provider::RuntimeProvider::system(Arc::new(discover_node));
+    let request = crate::runtime_provider::RuntimeRequest {
+        kind: crate::core::manifest_v2::ServiceRuntime::Node,
+        version_req: None,
+        triple: crate::runtime_provider::TargetTriple::host(),
+        require_managed: false,
+    };
+    match provider.resolve(&request) {
+        Ok(resolved) => Ok(resolved.executable),
+        Err(crate::runtime_provider::RuntimeProviderError::NotAvailable { .. }) => {
+            Err(RuntimeError::NodeNotFound)
+        }
+        Err(error) => Err(RuntimeError::Protocol(error.to_string())),
+    }
+}
+
 /// Build a process command for a Node ecosystem tool. For npm, prefer the
 /// npm-cli.js shipped beside Alex's discovered Node runtime so callers do not
 /// depend on a global `npm`/`npm.cmd` entry in PATH.
@@ -1727,6 +1781,7 @@ mod lifecycle_tests {
             },
             data_dir: None,
             cache_dir: None,
+            limits: None,
         };
         let policy = effective_policy(&spec);
         assert_eq!(policy.policy, "on-failure");
@@ -2051,6 +2106,7 @@ mod service_runtime_tests {
             service_name: default_service_name(),
             data_dir: None,
             cache_dir: None,
+            limits: None,
         };
         let handle = RuntimeHandle::start_with_spec(spec).expect("service runtime starts");
         let status = handle
@@ -2170,6 +2226,7 @@ mod service_runtime_tests {
             service_name: default_service_name(),
             data_dir: None,
             cache_dir: None,
+            limits: None,
         };
         let handle = RuntimeHandle::start_with_spec(spec).expect("RPC runtime starts");
         let original_pid = handle
@@ -2263,6 +2320,7 @@ mod service_runtime_tests {
             service_name: default_service_name(),
             data_dir: Some(data_dir.clone()),
             cache_dir: None,
+            limits: None,
         };
         let handle = RuntimeHandle::start_with_spec(spec).expect("notes runtime starts");
         let status = handle

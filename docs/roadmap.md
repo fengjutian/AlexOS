@@ -42,15 +42,20 @@ nav_order: 4
 - [已完成] Daemon 按服务 desired state 和依赖顺序恢复，缺失 running 依赖时安全拒绝；
 - [已完成] 服务级 resources 配额（`memoryMb` / `cpuPercent` / `processes` / `dataQuotaMb`）接入
   Manifest v2 schema、校验并投影到统一 `ServiceDescriptor`；
-- 服务级 resources 配额的硬性 enforcement（Job Object 内存/进程数、磁盘配额）——属 0.3 受管 Runtime；
+- [已完成] 服务级 `memoryMb` / `processes` / `cpuPercent` 经 `confine_process` 在启动路径用
+  Windows Job Object 强制；`dataQuotaMb` 磁盘配额硬性 enforcement 仍属 0.3 volume/ACL 层；
 - 无 frontend 的后台/Agent 应用产品入口和完整 E2E。
 
 ### 0.3 受管 Runtime
 
-- Node/Python Runtime Provider；
-- 版本解析、下载、签名/哈希校验、缓存和回收；
-- 应用默认不依赖用户 PATH；
-- 离线 Runtime 包和架构匹配。
+- [已完成基础] Node/Python Runtime Provider 模型（`src/runtime_provider/`）：`resolve` / `install` /
+  `installed` / `evict`，按 `<kind>/<version>/<triple>` 缓存；
+- [已完成基础] 版本解析（`semver::VersionReq`，含 `"22"` → 22.x 简写）、HTTPS 下载（https-only）、
+  SHA-256 校验、ZIP 解包（路径穿越 + 大小上限）、LRU 回收（保留最新 N 版本）、架构匹配（`TargetTriple`）；
+- [已部分] 应用默认不依赖用户 PATH：`require_managed` 已建模；Node 启动路径改为经 provider 解析
+  （受管缓存优先、系统回退保留）；
+- [未做] `runtime.node` 版本钉定线程化到启动路径；Python 服务 dispatch；离线 Runtime 包导入 CLI；
+  `dataQuotaMb` 磁盘配额硬性 enforcement（需 0.3 volume/ACL 层）。
 
 ### 0.4 Backend 安全边界
 

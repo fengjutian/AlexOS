@@ -239,11 +239,14 @@ pub struct RuntimeProvider {
 
 impl RuntimeProvider {
     /// The production provider: managed cache under the Alex data root,
-    /// system Node via `ALEX_NODE` / `PATH`, real HTTPS downloads.
-    pub fn system() -> Self {
+    /// a caller-supplied system-Node resolver (the host's
+    /// `ALEX_NODE` / `PATH` lookup), and real HTTPS downloads. The
+    /// resolver is injected rather than referenced directly so this
+    /// module stays independent of the runtime supervisor.
+    pub fn system(system_node: Arc<dyn Fn() -> Option<PathBuf> + Send + Sync>) -> Self {
         Self {
             cache_root: default_cache_root(),
-            system_node: Arc::new(crate::runtime::discover_node),
+            system_node,
             downloader: Arc::new(HttpDownloader::new()),
             max_versions: 4,
         }

@@ -40,7 +40,10 @@ use thiserror::Error;
 
 use crate::{
     core::{
-        application_manifest::{ResolvedApplication, ServiceDescriptor, ServiceRestartPolicy},
+        application_manifest::{
+            ResolvedApplication, ServiceDescriptor, ServiceResourcesDescriptor,
+            ServiceRestartPolicy,
+        },
         manifest::{Backend, BackendMode, HealthCheck, RestartPolicy, RuntimeKind},
     },
     runtime::{
@@ -775,6 +778,7 @@ impl ApplicationSupervisor {
             service_name: service_name.to_owned(),
             data_dir: None,
             cache_dir: None,
+            limits: spec.resources.as_ref().map(resources_to_limits),
         };
         drop(guard);
         let handle = match RuntimeHandle::start_with_spec(spec_for_launch) {
@@ -1812,6 +1816,20 @@ pub(crate) fn service_descriptor_to_backend(name: &str, spec: &ServiceDescriptor
     }
 }
 
+/// Project a service's declared resource quotas onto the container
+/// [`ResourceLimits`] shape the isolation layer enforces. The two
+/// types carry the same four fields, so this is a straight copy; the
+/// split exists because the unified manifest view must not depend on
+/// the container module's launch-time model.
+fn resources_to_limits(resources: &ServiceResourcesDescriptor) -> crate::container::ResourceLimits {
+    crate::container::ResourceLimits {
+        memory_mb: resources.memory_mb,
+        cpu_percent: resources.cpu_percent,
+        processes: resources.processes,
+        data_quota_mb: resources.data_quota_mb,
+    }
+}
+
 #[cfg(test)]
 #[allow(dead_code)] // helper functions only used by some tests in the module
 mod tests {
@@ -1871,6 +1889,22 @@ mod tests {
         let restart = backend.restart.expect("restart projected");
         assert_eq!(restart.policy, "always");
         assert_eq!(restart.max_retries, 9);
+    }
+
+    #[test]
+    fn resources_to_limits_carries_quotas_through() {
+        use crate::core::application_manifest::ServiceResourcesDescriptor;
+        let resources = ServiceResourcesDescriptor {
+            memory_mb: Some(512),
+            cpu_percent: Some(50),
+            processes: Some(4),
+            data_quota_mb: Some(1024),
+        };
+        let limits = resources_to_limits(&resources);
+        assert_eq!(limits.memory_mb, Some(512));
+        assert_eq!(limits.cpu_percent, Some(50));
+        assert_eq!(limits.processes, Some(4));
+        assert_eq!(limits.data_quota_mb, Some(1024));
     }
 
     #[test]

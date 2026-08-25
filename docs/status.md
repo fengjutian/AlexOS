@@ -113,13 +113,14 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - 每服务健康检查、watchdog、重启策略、独立日志、环境变量和端口已接线；
 - Daemon 恢复服务级 desired state 时按依赖排序，依赖未声明为 running 时拒绝恢复下游服务；
 - 服务级 resources 配额已接入 Manifest v2（`resources.memoryMb` / `cpuPercent` / `processes` /
-  `dataQuotaMb`），含校验并投影到统一 `ServiceDescriptor`；硬性 enforcement 仍属 0.3 受管 Runtime。
+  `dataQuotaMb`），含校验并投影到统一 `ServiceDescriptor`；`memoryMb` / `processes` / `cpuPercent`
+  已在 service 启动路径经 Windows Job Object 强制（`confine_process`），`dataQuotaMb` 磁盘配额
+  仍为 reporting-only（属 0.3 volume/ACL 层）。
 
 限制：
 
 - v2 的 Python/Native 仅完成声明和校验，尚无对应 Runtime Provider；
-- 服务级 CPU、内存、磁盘和子进程配额当前仅「声明 + 校验 + 投影」，尚未在
-  service 启动路径强制（Job Object 内存/进程数与磁盘配额属 0.3）；
+- 服务级磁盘（`dataQuotaMb`）配额尚未强制（需 0.3 volume/ACL 层）；
 - headless Agent 尚无独立产品入口和 GUI E2E；
 - 没有图标、作者、许可证、最小 Alex 版本和平台条件；
 - 没有 Manifest Schema 文件或自动代码生成。
@@ -187,8 +188,9 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 
 限制：
 
-- Node 不随 Alex OS 分发；host 不锁定 Node 版本；
-- 没有 CPU、内存、句柄或磁盘配额；
+- Node 默认仍回退到系统 `ALEX_NODE` / `PATH`；受管 Runtime Provider（§2.11）已存在且
+  启动路径经其解析（受管缓存优先），但 `runtime.node` 版本钉定尚未线程化到启动路径；
+- 没有磁盘配额（`dataQuotaMb` reporting-only）；CPU/内存/进程数配额经 Job Object 强制；
 - 取消粒度是终止整个 Runtime，不是单请求取消；
 - stdout 被协议独占（RPC 模式）；service 模式 stdout 留作应用日志，但 host 不读；
 - Node 可以绕过 Alex 权限直接访问本机能力；
@@ -342,6 +344,28 @@ RuntimeStatus 报告 `Crashed` 不再启动。
   - `<details>` 折叠的 logs tail；
   - 按 state 染色（ready/running 绿、starting 黄、crashed 红、offline 灰）；
 - 2 个 unit test 验序列化形态（present / absent 两种 + tail 顺序）。
+
+### 2.11 受管 Runtime Provider 与资源配额强制
+
+已实现（0.3 受管 Runtime 切片 1）：
+
+- `src/runtime_provider/` 提供 `RuntimeProvider`：`resolve` / `install` / `installed` / `evict`；
+- 缓存布局 `<root>/runtimes/<kind>/<version>/<target-triple>/` + `.alex-runtime.json` 清单；
+- 版本解析（`semver::VersionReq`，含 `"22"` → 22.x 简写）；`TargetTriple`（OS/arch）架构匹配；
+- HTTPS 下载（`ureq` https-only）、SHA-256 校验、ZIP 解包（`enclosed_name` 路径穿越防护 + 文件/总量上限）、
+  LRU 回收（保留最新 N 个版本）；
+- `RuntimeRequest.require_managed`：受管运行时缺失时拒绝系统回退（"应用不依赖用户 PATH" 的开关）；
+- Node 启动路径改为经 provider 解析（受管缓存优先、系统 `ALEX_NODE`/`PATH` 回退保留）；
+- 服务级 `resources.memoryMb` / `cpuPercent` / `processes` 在启动时经 `container::isolation::confine_process`
+  包装进 Windows Job Object（`JOB_OBJECT_LIMIT_PROCESS_MEMORY` / `ACTIVE_PROCESS` / CPU 率控制 + `KILL_ON_JOB_CLOSE`）。
+
+限制：
+
+- `runtime.node` 版本钉定尚未线程化到启动路径（当前 `version_req: None`，选最新受管缓存）；
+- Python 服务启动仍返回 `PythonNotManaged`（provider 已支持 Python 缓存布局与可执行文件探测，但未接 dispatch）；
+- 离线 Runtime 包导入 CLI 未做；
+- `dataQuotaMb` 磁盘配额仍为 reporting-only（需 0.3 volume/ACL 层）；
+- 受管运行时下载无真实 catalog/服务端集成测试（下载/校验/解包/回收经内存 downloader + 合成 ZIP 单测覆盖）。
 
 ## 关联文档
 

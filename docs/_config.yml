@@ -17,3 +17,8 @@ permalink: /:title
 # Search
 search_enabled: true
 search.heading_level: 2
+
+# Custom head include: load AlexOS theme overrides (assets/css/custom.css).
+# The custom theme recolors the brand purple, tweaks typography for CJK,
+# styles code blocks/tables/blockquotes, and ships a print-friendly layout.
+head_include: custom-head.html

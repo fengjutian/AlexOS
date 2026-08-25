@@ -1,0 +1,165 @@
+/* AlexOS docs custom theme overrides.
+   基于 just-the-docs v0.7.0;以 CSS variable 覆盖 + 必要选择器补丁为主。
+   设计目标:和 README 排版风格统一、强调"代码可读"、保留侧边栏结构。 */
+
+/* -------- 1. 品牌主色:从默认蓝紫改成 AlexOS 紫 -------- */
+:root,
+:root[data-theme="light"] {
+  --color-scheme: light;
+  --brand-primary: #5e2ca5;        /* 站点头部紫 */
+  --brand-secondary: #7c3aed;      /* hover / 强调 */
+  --link-color: #5e2ca5;
+  --link-hover-color: #7c3aed;
+  --btn-primary-color: #5e2ca5;
+  --base-color: #1f2330;           /* 正文文字色 */
+  --base-background: #ffffff;
+  --code-background: #f5f3fb;      /* 淡紫底色,区隔代码块 */
+  --code-text: #2a1b4d;
+  --search-background: #ffffff;
+  --search-result-keyword-bg: #f5f3fb;
+  --table-border: #e5e0f0;
+  --border-color: #e5e0f0;
+}
+
+:root[data-theme="dark"] {
+  --color-scheme: dark;
+  --brand-primary: #a78bfa;
+  --brand-secondary: #c4b5fd;
+  --link-color: #a78bfa;
+  --link-hover-color: #c4b5fd;
+  --btn-primary-color: #a78bfa;
+  --base-color: #e6e3ee;
+  --base-background: #14121b;
+  --code-background: #1f1a2e;
+  --code-text: #d6cfee;
+  --search-background: #1c1827;
+  --search-result-keyword-bg: #2a2240;
+  --table-border: #2a2240;
+  --border-color: #2a2240;
+}
+
+/* -------- 2. 顶部导航条:加深品牌色 + 留出 logo 位置 -------- */
+.site-header,
+.site-footer {
+  background-color: var(--brand-primary);
+  border-color: var(--brand-primary);
+}
+.site-title,
+.site-title:visited,
+.site-title:hover {
+  color: #ffffff;
+  font-weight: 600;
+  letter-spacing: 0.5px;
+}
+
+/* -------- 3. 排版:中文字号、行距优化 -------- */
+html {
+  font-size: 16px;
+}
+body {
+  font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", "PingFang SC",
+    "Hiragino Sans GB", "Microsoft YaHei", "Helvetica Neue", Helvetica, Arial,
+    sans-serif;
+  line-height: 1.7;
+  color: var(--base-color);
+  background: var(--base-background);
+}
+h1, h2, h3, h4, h5, h6 {
+  color: var(--base-color);
+  font-weight: 600;
+  margin-top: 1.6em;
+}
+h1 { font-size: 2rem; border-bottom: 2px solid var(--brand-primary); padding-bottom: 0.3em; }
+h2 { font-size: 1.5rem; border-bottom: 1px solid var(--table-border); padding-bottom: 0.25em; }
+h3 { font-size: 1.2rem; }
+
+/* -------- 4. 代码块:浅紫底 + 等宽字体强化 -------- */
+code,
+pre,
+pre code,
+.highlight {
+  font-family: "JetBrains Mono", "Fira Code", "Cascadia Code", Consolas,
+    "Source Code Pro", monospace;
+  font-size: 0.92em;
+}
+pre,
+.highlight {
+  background: var(--code-background);
+  color: var(--code-text);
+  border: 1px solid var(--border-color);
+  border-radius: 6px;
+  padding: 0.85em 1em;
+}
+:not(pre) > code {
+  background: var(--code-background);
+  color: var(--code-text);
+  padding: 0.1em 0.35em;
+  border-radius: 3px;
+}
+
+/* -------- 5. 链接:统一色 + hover 下划线 -------- */
+a,
+a:visited {
+  color: var(--link-color);
+  text-decoration: none;
+  transition: color 120ms ease;
+}
+a:hover {
+  color: var(--link-hover-color);
+  text-decoration: underline;
+}
+
+/* -------- 6. 表格:淡边框 + hover 高亮 -------- */
+table {
+  border-collapse: collapse;
+  width: 100%;
+  margin: 1em 0;
+}
+th, td {
+  border: 1px solid var(--table-border);
+  padding: 0.5em 0.8em;
+  text-align: left;
+}
+th {
+  background: var(--code-background);
+  font-weight: 600;
+}
+tbody tr:hover {
+  background: rgba(94, 44, 165, 0.04);
+}
+
+/* -------- 7. 引用块:左侧紫色条 -------- */
+blockquote {
+  border-left: 4px solid var(--brand-primary);
+  background: var(--code-background);
+  margin: 1em 0;
+  padding: 0.6em 1em;
+  color: var(--base-color);
+  border-radius: 0 4px 4px 0;
+}
+
+/* -------- 8. 侧边栏导航:当前页高亮更明显 -------- */
+.nav-list .nav-list-item > a.active,
+.nav-list .nav-list-item > a:focus {
+  background: var(--code-background);
+  color: var(--brand-primary);
+  font-weight: 600;
+}
+.nav-list .nav-list-item > a:hover {
+  color: var(--brand-secondary);
+}
+
+/* -------- 9. 阅读宽度:中文略宽一点 -------- */
+.main-content-wrap {
+  max-width: 920px;
+}
+.main-content {
+  padding: 1.5rem 2rem;
+}
+
+/* -------- 10. 打印:去掉导航/页脚,只留正文 -------- */
+@media print {
+  .site-header, .site-footer, .side-bar, .navigation, .nav-toggle { display: none !important; }
+  .main-content { max-width: 100%; padding: 0; }
+  a { color: inherit; text-decoration: underline; }
+}

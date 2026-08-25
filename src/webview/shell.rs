@@ -403,6 +403,7 @@ pub mod windows {
                     data_dir: None,
                     cache_dir: None,
                     service_name: "main".to_owned(),
+                    limits: None,
                 };
                 let handle = RuntimeHandle::start_with_spec(spec)?;
                 let status = handle.status(Duration::from_secs(20))?;

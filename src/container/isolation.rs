@@ -378,6 +378,39 @@ impl IsolationProvider for WindowsJobProvider {
     }
 }
 
+/// Wrap an already-spawned process (by PID) in a Windows Job Object
+/// that enforces `limits` and kills the whole process tree when the
+/// returned handle is dropped (`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`).
+///
+/// This is the "confine in place" entry point for launch paths that
+/// manage their own stdio — the 0.1 supervisor pipes stdin/stdout for
+/// the JSON Lines RPC and log collection, so it cannot use
+/// [`WindowsJobProvider::spawn`], which nulls all stdio. The caller
+/// must keep the returned [`IsolationHandle`] alive for as long as the
+/// process should be confined; dropping it terminates the tree.
+///
+/// On non-Windows hosts this returns [`IsolationHandle::none`] and
+/// confines nothing.
+pub fn confine_process(
+    limits: &ResourceLimits,
+    pid: u32,
+) -> Result<IsolationHandle, IsolationError> {
+    #[cfg(windows)]
+    {
+        let job = Arc::new(JobHandle::new(limits)?);
+        job.assign(pid)?;
+        Ok(IsolationHandle {
+            boundary: Some(BoundaryKind::Job(job)),
+            accounting: None,
+        })
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = (limits, pid);
+        Ok(IsolationHandle::none())
+    }
+}
+
 pub fn provider_for(level: IsolationLevel) -> Result<Box<dyn IsolationProvider>, IsolationError> {
     match level {
         IsolationLevel::Process => Ok(Box::new(ProcessIsolationProvider)),
