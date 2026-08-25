@@ -101,7 +101,7 @@ test("MCP subscription and MRTR APIs decode stream events and route responses", 
       if (method === "mcp.listen") {
         yield new TextEncoder().encode(JSON.stringify({ method: "notifications/tools/list_changed" }));
       } else {
-        yield new TextEncoder().encode(JSON.stringify({ type: "inputRequired", inputId: "input-1", method: "elicitation/create", params: {} }));
+        yield new TextEncoder().encode(JSON.stringify({ type: "inputRequired", inputId: "input-1", method: "elicitation/create", params: { message: "Continue?" } }));
         yield new TextEncoder().encode(JSON.stringify({ type: "result", result: { content: [], isError: false } }));
       }
     },
