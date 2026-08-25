@@ -9,7 +9,8 @@ import type { ActionGroupSpec } from "../types/desktop.js";
 interface ActionGroupProps {
   group: ActionGroupSpec;
   pending: boolean;
-  onRun: (action: { label: string; run: () => Promise<unknown> }) => void;
+  /** Receives the action's label and its runner. Signature matches the `run` returned by `useActionRunner`. */
+  onRun: (label: string, fn: () => Promise<unknown>) => void;
 }
 
 export function ActionGroup({ group, pending, onRun }: ActionGroupProps): React.ReactElement {
@@ -29,7 +30,7 @@ export function ActionGroup({ group, pending, onRun }: ActionGroupProps): React.
               type="button"
               title={action.description}
               disabled={pending}
-              onClick={() => onRun(action)}
+              onClick={() => onRun(action.label, action.run)}
             >
               {action.label}
             </button>

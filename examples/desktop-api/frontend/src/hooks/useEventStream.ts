@@ -15,14 +15,22 @@ import type { EventEntry } from "../types/desktop.js";
 const DEFAULT_CAP = 80;
 const clock = () => new Date().toLocaleTimeString();
 
-export function useEventStream(events: readonly string[], cap = DEFAULT_CAP): EventEntry[] {
-  const [entries, setEntries] = useState<EventEntry[]>([]);
+export interface UseEventStreamResult {
+  events: EventEntry[];
+  clear: () => void;
+}
+
+export function useEventStream(
+  watched: readonly string[],
+  cap = DEFAULT_CAP,
+): UseEventStreamResult {
+  const [events, setEvents] = useState<EventEntry[]>([]);
 
   useEffect(() => {
-    if (events.length === 0) return undefined;
-    const disposers = events.map((name) =>
+    if (watched.length === 0) return undefined;
+    const disposers = watched.map((name) =>
       alex.events.on(name, (payload) => {
-        setEntries((current) => {
+        setEvents((current) => {
           const next: EventEntry = { at: clock(), name, payload };
           return [next, ...current].slice(0, cap);
         });
@@ -33,7 +41,7 @@ export function useEventStream(events: readonly string[], cap = DEFAULT_CAP): Ev
     };
     // The set of subscribed events is allowed to change at runtime; the
     // hook re-subscribes whenever the caller asks for a different set.
-  }, [events, cap]);
+  }, [watched, cap]);
 
-  return entries;
+  return { events, clear: () => setEvents([]) };
 }

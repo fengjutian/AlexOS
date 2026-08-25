@@ -36,7 +36,7 @@ const DEFAULT_MESSAGE = "Hello from Alex Runtime";
 export function App(): React.ReactElement {
   const { status, capabilities } = useHostStatus();
   const { state, run, clear } = useActionRunner();
-  const [events, setEvents] = useEventStream(WATCHED_EVENTS);
+  const { events, clear: clearEvents } = useEventStream(WATCHED_EVENTS);
   const [message, setMessage] = useState(DEFAULT_MESSAGE);
   const [watchId, setWatchId] = useState<string | null>(null);
   const [childWindowId, setChildWindowId] = useState<number | null>(null);
@@ -65,7 +65,7 @@ export function App(): React.ReactElement {
         </div>
         <div className="results">
           <ResultPanel state={state} onClear={clear} />
-          <EventStream events={events} onClear={() => setEvents([])} />
+          <EventStream events={events} onClear={clearEvents} />
         </div>
       </div>
     </main>
@@ -229,7 +229,7 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
                 setWatchId(null);
                 return desktop.fs.unwatch(id);
               }
-            : () => ({ skipped: "请先点击「监听 data/」" }),
+            : () => Promise.resolve({ skipped: "请先点击「监听 data/」" }),
         },
       ],
     };
@@ -275,28 +275,28 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
           label: "移动子窗口",
           description: "window.setBounds — 需先有子窗口。",
           run: childWindowId === null
-            ? () => ({ skipped: "请先创建子窗口" })
+            ? () => Promise.resolve({ skipped: "请先创建子窗口" })
             : () => desktop.window.setBounds(childWindowId, { x: 120, y: 120, width: 760, height: 560 }),
         },
         {
           label: "最小化子窗口",
           description: "window.minimize — 需先有子窗口。",
           run: childWindowId === null
-            ? () => ({ skipped: "请先创建子窗口" })
+            ? () => Promise.resolve({ skipped: "请先创建子窗口" })
             : () => desktop.window.minimize(childWindowId),
         },
         {
           label: "最大化子窗口",
           description: "window.maximize — 需先有子窗口。",
           run: childWindowId === null
-            ? () => ({ skipped: "请先创建子窗口" })
+            ? () => Promise.resolve({ skipped: "请先创建子窗口" })
             : () => desktop.window.maximize(childWindowId),
         },
         {
           label: "关闭子窗口",
           description: "window.close — 优雅关闭，host 仍会发出 close 事件。",
           run: childWindowId === null
-            ? () => ({ skipped: "请先创建子窗口" })
+            ? () => Promise.resolve({ skipped: "请先创建子窗口" })
             : async () => {
                 const result = await desktop.window.close(childWindowId);
                 setChildWindowId(null);
@@ -307,7 +307,7 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
           label: "强制销毁",
           description: "window.destroy — 不走 close 流程，常用于异常回收。",
           run: childWindowId === null
-            ? () => ({ skipped: "请先创建子窗口" })
+            ? () => Promise.resolve({ skipped: "请先创建子窗口" })
             : async () => {
                 const result = await desktop.window.destroy(childWindowId);
                 setChildWindowId(null);

@@ -1,6 +1,5 @@
 import { defineConfig } from "vite";
 import react from "@vitejs/plugin-react";
-import { fileURLToPath, URL } from "node:url";
 
 /**
  * Vite config for the desktop API demo.
@@ -14,6 +13,7 @@ import { fileURLToPath, URL } from "node:url";
  *    loudly instead of silently drifting to the next free port.
  *  - The `@` alias mirrors the TS path mapping in `tsconfig.json` so
  *    component imports survive a rename without search-and-replace.
+ *    The string path is resolved relative to the config file by Vite.
  */
 export default defineConfig({
   plugins: [react()],
@@ -24,7 +24,7 @@ export default defineConfig({
   },
   resolve: {
     alias: {
-      "@": fileURLToPath(new URL("./src", import.meta.url)),
+      "@": "./src",
     },
   },
   server: {
