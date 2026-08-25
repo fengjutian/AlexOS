@@ -66,7 +66,8 @@ pub fn is_ignored(matcher: &Option<&Gitignore>, package_root: &Path, path: &Path
 
 #[cfg(windows)]
 pub fn run(package_root: &Path, manifest: AppManifest) -> Result<(), AlexError> {
-    crate::shell::run_development(package_root, manifest)
+    windows::run(package_root, manifest, None)
+        .map_err(|error| AlexError::Validation(format!("dev shell failed: {error}")))
 }
 
 #[cfg(not(windows))]
@@ -85,11 +86,24 @@ pub fn run(_package_root: &Path, _manifest: AppManifest) -> Result<(), AlexError
 /// services so the developer knows only the first one is being
 /// hot-reloaded; multi-service dev mode is a future enhancement.
 pub fn run_unified(package_root: &Path, manifest: ApplicationManifest) -> Result<(), AlexError> {
+    let frontend_dev = manifest
+        .as_v2()
+        .and_then(|v2| v2.frontend.as_ref())
+        .and_then(|frontend| frontend.dev.clone());
     let v1 = match manifest {
         ApplicationManifest::V1(m) => m,
         ApplicationManifest::V2(_) => project_v2_for_dev(manifest),
     };
-    run(package_root, v1)
+    #[cfg(windows)]
+    {
+        windows::run(package_root, v1, frontend_dev)
+            .map_err(|error| AlexError::Validation(format!("dev shell failed: {error}")))
+    }
+    #[cfg(not(windows))]
+    {
+        let _ = frontend_dev;
+        run(package_root, v1)
+    }
 }
 
 /// Project a v2 [`ApplicationManifest`] onto a v1 [`AppManifest`]
@@ -285,6 +299,7 @@ mod v2_projection_tests {
             version: "0.1.0".to_owned(),
             frontend: frontend.map(|entry| FrontendV2 {
                 entry: entry.to_owned(),
+                dev: None,
             }),
             runtime: RuntimeRequirements {
                 node: Some("22".to_owned()),
@@ -420,6 +435,7 @@ mod v2_projection_tests {
             version: "0.1.0".to_owned(),
             frontend: Some(FrontendV2 {
                 entry: "index.html".to_owned(),
+                dev: None,
             }),
             runtime: RuntimeRequirements {
                 node: Some("22".to_owned()),

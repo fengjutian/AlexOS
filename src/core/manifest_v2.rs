@@ -73,6 +73,23 @@ pub enum McpServerSpec {
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct FrontendV2 {
     pub entry: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev: Option<FrontendDev>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct FrontendDev {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default = "default_frontend_dev_cwd")]
+    pub cwd: String,
+    pub url: String,
+}
+
+fn default_frontend_dev_cwd() -> String {
+    "frontend".into()
 }
 
 #[derive(Debug, Clone, Default, Serialize, Deserialize, PartialEq, Eq)]
@@ -292,6 +309,31 @@ impl ApplicationManifestV2 {
         }
         if let Some(frontend) = &self.frontend {
             validate_package_path(root, &frontend.entry, "frontend entry")?;
+            if let Some(dev) = &frontend.dev {
+                if dev.command.trim().is_empty() || dev.command.contains(['\r', '\n', '\0']) {
+                    return Err(validation("frontend dev command is invalid"));
+                }
+                validate_relative_path(&dev.cwd, "frontend dev cwd")?;
+                if !root.join(&dev.cwd).is_dir() {
+                    return Err(validation(format!(
+                        "frontend dev cwd does not exist: {}",
+                        dev.cwd
+                    )));
+                }
+                let url = url::Url::parse(&dev.url)
+                    .map_err(|error| validation(format!("invalid frontend dev URL: {error}")))?;
+                let loopback = url.host_str().is_some_and(|host| {
+                    host == "localhost"
+                        || host
+                            .parse::<std::net::IpAddr>()
+                            .is_ok_and(|ip| ip.is_loopback())
+                });
+                if url.scheme() != "http" || !loopback {
+                    return Err(validation(
+                        "frontend dev URL must use HTTP on a loopback host",
+                    ));
+                }
+            }
         }
         for (name, service) in &self.services {
             if !valid_component(name) {

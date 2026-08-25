@@ -5,6 +5,11 @@ version: 0.1.0
 
 frontend:
   entry: frontend/dist/index.html
+  dev:
+    command: npm
+    args: [run, dev, "--", "--host", "127.0.0.1", "--port", "5173", "--strictPort"]
+    cwd: frontend
+    url: http://127.0.0.1:5173
 
 runtime:
   node: "22"
