@@ -139,6 +139,49 @@ struct ModelGenerateParams {
     options: Value,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelEmbedParams {
+    model: String,
+    input: Vec<String>,
+    #[serde(default)]
+    options: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelProviderUpsertParams {
+    config: crate::model::remote::RemoteProviderConfig,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelProviderIdParams {
+    provider_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelProviderHealthParams {
+    #[serde(default)]
+    provider_id: Option<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelSecretSetParams {
+    service: String,
+    account: String,
+    secret: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelSecretParams {
+    service: String,
+    account: String,
+}
+
 impl ApiRouter {
     fn daemon_ai(&self, operation: &str, command: crate::daemon::ControlCommand) -> ApiResult {
         self.runtime
@@ -728,6 +771,95 @@ impl ApiRouter {
                     messages: params.messages,
                     options: params.options,
                 },
+            },
+        )
+    }
+
+    pub(crate) fn model_embed(&self, request_id: &str, params: &Value) -> ApiResult {
+        let params: ModelEmbedParams = parse_params(params)?;
+        self.model_use_scope(Some(&params.model))?;
+        self.daemon_ai(
+            "model-embed",
+            crate::daemon::ControlCommand::ModelEmbed {
+                request: crate::model::EmbedRequest {
+                    request_id: request_id.into(),
+                    model: params.model,
+                    input: params.input,
+                    options: params.options,
+                },
+            },
+        )
+    }
+
+    pub(crate) fn model_providers(&self) -> ApiResult {
+        self.require_model_manage()?;
+        self.daemon_ai("model-providers", crate::daemon::ControlCommand::ModelProviders)
+    }
+
+    pub(crate) fn model_provider_upsert(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelProviderUpsertParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-provider-upsert",
+            crate::daemon::ControlCommand::ModelProviderUpsert { config: p.config },
+        )
+    }
+
+    pub(crate) fn model_provider_remove(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelProviderIdParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-provider-remove",
+            crate::daemon::ControlCommand::ModelProviderRemove {
+                provider_id: p.provider_id,
+            },
+        )
+    }
+
+    pub(crate) fn model_provider_health(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelProviderHealthParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-provider-health",
+            crate::daemon::ControlCommand::ModelProviderHealth {
+                provider_id: p.provider_id,
+            },
+        )
+    }
+
+    pub(crate) fn model_secret_set(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelSecretSetParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-secret-set",
+            crate::daemon::ControlCommand::ModelSecretSet {
+                service: p.service,
+                account: p.account,
+                secret: crate::model::remote::SecretValue(p.secret),
+            },
+        )
+    }
+
+    pub(crate) fn model_secret_delete(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelSecretParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-secret-delete",
+            crate::daemon::ControlCommand::ModelSecretDelete {
+                service: p.service,
+                account: p.account,
+            },
+        )
+    }
+
+    pub(crate) fn model_secret_exists(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelSecretParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-secret-exists",
+            crate::daemon::ControlCommand::ModelSecretExists {
+                service: p.service,
+                account: p.account,
             },
         )
     }

@@ -526,6 +526,59 @@ impl ModelManager {
             .clone()
             .ok_or_else(|| ModelError::Worker("remote providers are not configured".into()))
     }
+
+    pub fn list_providers(&self) -> Result<Vec<remote::RemoteProviderConfig>, ModelError> {
+        self.remote_router()?
+            .list()
+            .map_err(|e| ModelError::Worker(e.to_string()))
+    }
+
+    pub fn upsert_provider(&self, config: remote::RemoteProviderConfig) -> Result<(), ModelError> {
+        self.remote_router()?
+            .upsert(config)
+            .map_err(|e| ModelError::Worker(e.to_string()))
+    }
+
+    pub fn remove_provider(&self, id: &str) -> Result<bool, ModelError> {
+        self.remote_router()?
+            .remove(id)
+            .map_err(|e| ModelError::Worker(e.to_string()))
+    }
+
+    pub fn provider_health(
+        &self,
+        id: Option<&str>,
+    ) -> Result<Vec<remote::ProviderHealth>, ModelError> {
+        let router = self.remote_router()?;
+        let health = match id {
+            Some(id) => vec![router.health(id)],
+            None => router.health_all(),
+        };
+        Ok(health)
+    }
+
+    pub fn secret_set(
+        &self,
+        reference: &remote::SecretRef,
+        secret: &[u8],
+    ) -> Result<(), ModelError> {
+        self.remote_router()?
+            .secret_set(reference, secret)
+            .map_err(|e| ModelError::Worker(e.to_string()))
+    }
+
+    pub fn secret_delete(&self, reference: &remote::SecretRef) -> Result<bool, ModelError> {
+        self.remote_router()?
+            .secret_delete(reference)
+            .map_err(|e| ModelError::Worker(e.to_string()))
+    }
+
+    pub fn secret_exists(&self, reference: &remote::SecretRef) -> Result<bool, ModelError> {
+        self.remote_router()?
+            .secret_exists(reference)
+            .map_err(|e| ModelError::Worker(e.to_string()))
+    }
+
     pub fn register_worker(&self, worker: Arc<dyn InferenceWorker>) -> Result<(), ModelError> {
         let kind = worker.kind().to_owned();
         if kind.is_empty() {

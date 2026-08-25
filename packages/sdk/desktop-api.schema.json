@@ -169,6 +169,14 @@
       "model.unload",
       "model.cancel",
       "model.generate",
+      "model.embed",
+      "model.providers",
+      "model.providerUpsert",
+      "model.providerRemove",
+      "model.providerHealth",
+      "model.secretSet",
+      "model.secretDelete",
+      "model.secretExists",
       "agent.create",
       "agent.start",
       "agent.pause",
@@ -320,6 +328,31 @@
       "additionalProperties": false
     },
     "JsonValue": {},
+    "SecretRef": {
+      "type": "object",
+      "properties": {
+        "service": { "type": "string", "minLength": 1, "maxLength": 255 },
+        "account": { "type": "string", "minLength": 1, "maxLength": 255 }
+      },
+      "required": ["service", "account"],
+      "additionalProperties": false
+    },
+    "ProviderConfig": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1, "maxLength": 64 },
+        "kind": { "enum": ["open-ai-compatible", "anthropic", "gemini"] },
+        "endpoint": { "type": "string", "minLength": 1, "format": "uri" },
+        "secretRef": { "$ref": "#/$defs/SecretRef" },
+        "defaultModel": { "type": ["string", "null"] },
+        "organization": { "type": ["string", "null"] },
+        "timeoutMs": { "type": "integer", "minimum": 1, "maximum": 600000 },
+        "maxRetries": { "type": "integer", "minimum": 0, "maximum": 10 },
+        "enabled": { "type": "boolean" }
+      },
+      "required": ["id", "kind", "endpoint", "secretRef"],
+      "additionalProperties": false
+    },
     "PathInput": {
       "type": "object",
       "properties": {
@@ -2570,6 +2603,38 @@
     "model.generate": {
       "params": { "type": "object", "properties": { "model": { "type": "string", "minLength": 1 }, "messages": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "options": { "$ref": "#/$defs/JsonValue" } }, "required": ["model", "messages"], "additionalProperties": false },
       "result": { "type": "object", "properties": { "streamId": { "type": "string" }, "requestId": { "type": "string" } }, "required": ["streamId", "requestId"], "additionalProperties": false }
+    },
+    "model.embed": {
+      "params": { "type": "object", "properties": { "model": { "type": "string", "minLength": 1 }, "input": { "type": "array", "maxItems": 2048, "items": { "type": "string", "minLength": 1 } }, "options": { "$ref": "#/$defs/JsonValue" } }, "required": ["model", "input"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/JsonValue" }
+    },
+    "model.providers": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": { "type": "object", "properties": { "providers": { "type": "array", "items": { "$ref": "#/$defs/ProviderConfig" } } }, "required": ["providers"], "additionalProperties": false }
+    },
+    "model.providerUpsert": {
+      "params": { "type": "object", "properties": { "config": { "$ref": "#/$defs/ProviderConfig" } }, "required": ["config"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/ProviderConfig" }
+    },
+    "model.providerRemove": {
+      "params": { "type": "object", "properties": { "providerId": { "type": "string", "minLength": 1 } }, "required": ["providerId"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "providerId": { "type": "string" }, "removed": { "type": "boolean" } }, "required": ["providerId", "removed"], "additionalProperties": false }
+    },
+    "model.providerHealth": {
+      "params": { "type": "object", "properties": { "providerId": { "type": "string", "minLength": 1 } }, "additionalProperties": false },
+      "result": { "type": "object", "properties": { "providers": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["providers"], "additionalProperties": false }
+    },
+    "model.secretSet": {
+      "params": { "type": "object", "properties": { "service": { "type": "string", "minLength": 1, "maxLength": 255 }, "account": { "type": "string", "minLength": 1, "maxLength": 255 }, "secret": { "type": "string", "minLength": 1 } }, "required": ["service", "account", "secret"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "configured": { "type": "boolean" } }, "required": ["configured"], "additionalProperties": false }
+    },
+    "model.secretDelete": {
+      "params": { "$ref": "#/$defs/SecretRef" },
+      "result": { "type": "object", "properties": { "deleted": { "type": "boolean" } }, "required": ["deleted"], "additionalProperties": false }
+    },
+    "model.secretExists": {
+      "params": { "$ref": "#/$defs/SecretRef" },
+      "result": { "type": "object", "properties": { "exists": { "type": "boolean" } }, "required": ["exists"], "additionalProperties": false }
     },
     "agent.create": {
       "params": { "type": "object", "properties": { "spec": { "$ref": "#/$defs/AgentSpec" }, "messages": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["spec"], "additionalProperties": false },

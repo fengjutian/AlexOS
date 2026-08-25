@@ -404,6 +404,39 @@ export type ModelGenerateEvent =
   | { type: "usage"; inputTokens: number; outputTokens: number }
   | { type: "finish"; reason: string };
 
+export type ProviderKind = "open-ai-compatible" | "anthropic" | "gemini";
+export interface SecretRef { service: string; account: string; }
+export interface RemoteProviderConfig {
+  id: string;
+  kind: ProviderKind;
+  endpoint: string;
+  secretRef: SecretRef;
+  defaultModel?: string;
+  organization?: string;
+  timeoutMs?: number;
+  maxRetries?: number;
+  enabled?: boolean;
+}
+export type ProviderStatus = "healthy" | "degraded" | "credentials-missing" | "disabled" | "unreachable";
+export type CircuitState = "closed" | "open" | "half-open";
+export interface ProviderHealth {
+  id: string;
+  kind: ProviderKind;
+  status: ProviderStatus;
+  circuit: CircuitState;
+  consecutiveFailures: number;
+  latencyMs?: number;
+  lastError?: string;
+  secretConfigured: boolean;
+}
+export interface Embedding { index: number; values: number[]; }
+export interface EmbeddingResponse {
+  requestId: string;
+  model: string;
+  embeddings: Embedding[];
+  usage: { inputTokens: number };
+}
+
 export interface AgentBudget { maxSteps?: number; maxTokens?: number; maxToolCalls?: number; maxWallTimeMs?: number; }
 export interface AgentToolSpec { binding: string; name: string; idempotent?: boolean; requireApproval?: boolean; }
 export interface AgentSpec { model: string; systemPrompt?: string; tools?: AgentToolSpec[]; budget?: AgentBudget; }
@@ -521,6 +554,14 @@ export interface AlexClient {
       request: { model: string; messages: unknown[]; options?: Record<string, unknown> },
       options?: StreamOptions,
     ): AsyncIterable<ModelGenerateEvent>;
+    embed(model: string, input: string[], options?: InvokeOptions): Promise<EmbeddingResponse>;
+    providers(options?: InvokeOptions): Promise<RemoteProviderConfig[]>;
+    providerUpsert(config: RemoteProviderConfig, options?: InvokeOptions): Promise<RemoteProviderConfig>;
+    providerRemove(providerId: string, options?: InvokeOptions): Promise<{ providerId: string; removed: boolean }>;
+    providerHealth(providerId?: string, options?: InvokeOptions): Promise<ProviderHealth[]>;
+    secretSet(service: string, account: string, secret: string, options?: InvokeOptions): Promise<{ configured: boolean }>;
+    secretDelete(service: string, account: string, options?: InvokeOptions): Promise<{ deleted: boolean }>;
+    secretExists(service: string, account: string, options?: InvokeOptions): Promise<{ exists: boolean }>;
   };
   readonly agent: {
     create(spec: AgentSpec, messages?: unknown[], options?: InvokeOptions): Promise<AgentRun>;

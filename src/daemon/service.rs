@@ -528,6 +528,25 @@ impl DaemonService {
                 request,
             } => self.model_generate(&app_id, &stream_id, request),
             ControlCommand::ModelEmbed { request } => self.model_embed(request),
+            ControlCommand::ModelProviders => self.model_providers(),
+            ControlCommand::ModelProviderUpsert { config } => self.model_provider_upsert(config),
+            ControlCommand::ModelProviderRemove { provider_id } => {
+                self.model_provider_remove(&provider_id)
+            }
+            ControlCommand::ModelProviderHealth { provider_id } => {
+                self.model_provider_health(provider_id.as_deref())
+            }
+            ControlCommand::ModelSecretSet {
+                service,
+                account,
+                secret,
+            } => self.model_secret_set(&service, &account, &secret),
+            ControlCommand::ModelSecretDelete { service, account } => {
+                self.model_secret_delete(&service, &account)
+            }
+            ControlCommand::ModelSecretExists { service, account } => {
+                self.model_secret_exists(&service, &account)
+            }
             ControlCommand::AgentCreate {
                 app_id,
                 spec,
@@ -2167,6 +2186,83 @@ impl DaemonService {
                     .map_err(|error| crate::model::ModelError::Worker(error.to_string()))
             })
             .map_err(|error| error.to_string())
+    }
+
+    fn model_providers(&self) -> Result<serde_json::Value, String> {
+        let providers = self
+            .model_manager()?
+            .list_providers()
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "providers": providers }))
+    }
+
+    fn model_provider_upsert(
+        &self,
+        config: crate::model::remote::RemoteProviderConfig,
+    ) -> Result<serde_json::Value, String> {
+        self.model_manager()?
+            .upsert_provider(config.clone())
+            .map_err(|error| error.to_string())?;
+        serde_json::to_value(config).map_err(|error| error.to_string())
+    }
+
+    fn model_provider_remove(&self, provider_id: &str) -> Result<serde_json::Value, String> {
+        let removed = self
+            .model_manager()?
+            .remove_provider(provider_id)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "providerId": provider_id, "removed": removed }))
+    }
+
+    fn model_provider_health(
+        &self,
+        provider_id: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let health = self
+            .model_manager()?
+            .provider_health(provider_id)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "providers": health }))
+    }
+
+    fn model_secret_set(
+        &self,
+        service: &str,
+        account: &str,
+        secret: &crate::model::remote::SecretValue,
+    ) -> Result<serde_json::Value, String> {
+        let reference = crate::model::remote::SecretRef {
+            service: service.to_string(),
+            account: account.to_string(),
+        };
+        self.model_manager()?
+            .secret_set(&reference, secret.as_bytes())
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "configured": true }))
+    }
+
+    fn model_secret_delete(&self, service: &str, account: &str) -> Result<serde_json::Value, String> {
+        let reference = crate::model::remote::SecretRef {
+            service: service.to_string(),
+            account: account.to_string(),
+        };
+        let deleted = self
+            .model_manager()?
+            .secret_delete(&reference)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "deleted": deleted }))
+    }
+
+    fn model_secret_exists(&self, service: &str, account: &str) -> Result<serde_json::Value, String> {
+        let reference = crate::model::remote::SecretRef {
+            service: service.to_string(),
+            account: account.to_string(),
+        };
+        let exists = self
+            .model_manager()?
+            .secret_exists(&reference)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "exists": exists }))
     }
 
     fn agent_manager(&self) -> Result<&crate::agent::AgentManager, String> {

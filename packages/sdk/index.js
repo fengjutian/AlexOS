@@ -300,6 +300,32 @@ export function createAlexClient(transport = browserTransport()) {
           yield JSON.parse(decoder.decode(chunk));
         }
       },
+      embed(model, input, options) {
+        return invoke("model.embed", { model, input }, options);
+      },
+      async providers(options) {
+        const result = await invoke("model.providers", {}, options);
+        return result.providers ?? [];
+      },
+      providerUpsert(config, options) {
+        return invoke("model.providerUpsert", { config }, options);
+      },
+      providerRemove(providerId, options) {
+        return invoke("model.providerRemove", { providerId }, options);
+      },
+      async providerHealth(providerId, options) {
+        const result = await invoke("model.providerHealth", providerId ? { providerId } : {}, options);
+        return result.providers ?? [];
+      },
+      secretSet(service, account, secret, options) {
+        return invoke("model.secretSet", { service, account, secret }, options);
+      },
+      secretDelete(service, account, options) {
+        return invoke("model.secretDelete", { service, account }, options);
+      },
+      secretExists(service, account, options) {
+        return invoke("model.secretExists", { service, account }, options);
+      },
     }),
     agent: Object.freeze({
       create(spec, messages = [], options) { return invoke("agent.create", { spec, messages }, options); },
