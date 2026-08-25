@@ -358,6 +358,8 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - Node/Python 启动路径均经 provider 解析：Node 受管缓存优先 + 系统回退；Python managed-only；
   `runtime.node` / `runtime.python` 版本钉定已线程化到启动路径；
 - 离线 Runtime 包导入 CLI：`alex runtime import`（SHA-256 校验 + 解包 + 发布 + 回收）与 `alex runtime list`；
+- 无 frontend 的后台/Agent 应用产品入口：`alex agent run <path>`（`src/headless.rs`）——校验
+  headless（无 frontend、有 agent、有服务）后经 `ApplicationSupervisor` 启动并优雅停止；
 - 服务级 `resources.memoryMb` / `cpuPercent` / `processes` 在启动时经 `container::isolation::confine_process`
   包装进 Windows Job Object（`JOB_OBJECT_LIMIT_PROCESS_MEMORY` / `ACTIVE_PROCESS` / CPU 率控制 + `KILL_ON_JOB_CLOSE`）。
 

@@ -46,7 +46,10 @@ nav_order: 4
   Manifest v2 schema、校验并投影到统一 `ServiceDescriptor`；
 - [已完成] 服务级 `memoryMb` / `processes` / `cpuPercent` 经 `confine_process` 在启动路径用
   Windows Job Object 强制；`dataQuotaMb` 磁盘配额硬性 enforcement 仍属 0.3 volume/ACL 层；
-- 无 frontend 的后台/Agent 应用产品入口和完整 E2E。
+- [已完成] 无 frontend 的后台/Agent 应用产品入口：`alex agent run <path>`（`src/headless.rs`，
+  复用 `ApplicationSupervisor`，headless 校验 + 服务启动 + Ctrl+C 优雅停止）；E2E
+  `tests/headless_agent.rs`（无 Node 时自动 skip），并修复 `start_service` 误 bump
+  application generation 导致 observed 停在 Starting 的问题。
 
 ### 0.3 受管 Runtime
 
