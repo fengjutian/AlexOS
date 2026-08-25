@@ -149,6 +149,8 @@
       "mcp.callTool",
       "mcp.callToolInteractive",
       "mcp.respondInput",
+      "mcp.oauthBegin",
+      "mcp.oauthComplete",
       "mcp.audit",
       "mcp.listResources",
       "mcp.readResource",
@@ -2467,6 +2469,14 @@
     "mcp.respondInput": {
       "params": { "type": "object", "properties": { "inputId": { "type": "string", "minLength": 1 }, "response": { "$ref": "#/$defs/JsonValue" } }, "required": ["inputId", "response"], "additionalProperties": false },
       "result": { "type": "object", "properties": { "inputId": { "type": "string" }, "accepted": { "type": "boolean" } }, "required": ["inputId", "accepted"], "additionalProperties": false }
+    },
+    "mcp.oauthBegin": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "clientId": { "type": "string", "minLength": 1 }, "redirectUri": { "type": "string", "format": "uri" }, "scopes": { "type": "array", "maxItems": 64, "items": { "type": "string", "minLength": 1, "maxLength": 256 } } }, "required": ["binding", "clientId", "redirectUri"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "authorizationUrl": { "type": "string", "format": "uri" }, "state": { "type": "string" }, "expiresInMs": { "type": "integer", "minimum": 1 } }, "required": ["authorizationUrl", "state", "expiresInMs"], "additionalProperties": false }
+    },
+    "mcp.oauthComplete": {
+      "params": { "type": "object", "properties": { "state": { "type": "string", "minLength": 1 }, "code": { "type": "string", "minLength": 1 }, "issuer": { "type": "string", "format": "uri" } }, "required": ["state", "code", "issuer"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "application": { "type": "string" }, "binding": { "type": "string" }, "authorized": { "type": "boolean" } }, "required": ["application", "binding", "authorized"], "additionalProperties": false }
     },
     "mcp.audit": {
       "params": { "type": "object", "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 } }, "additionalProperties": false },

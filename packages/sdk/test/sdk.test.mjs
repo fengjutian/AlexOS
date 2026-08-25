@@ -111,9 +111,17 @@ test("MCP subscription and MRTR APIs decode stream events and route responses", 
   const interactions = [];
   for await (const event of client.mcp.callToolInteractive("tools", "confirm")) interactions.push(event);
   await client.mcp.respondInput("input-1", { action: "accept", content: {} });
+  await client.mcp.oauthBegin("tools", "client-1", "http://127.0.0.1:49152/callback", ["tools:read"]);
+  await client.mcp.oauthComplete("state-1", "code-1", "https://issuer.example");
   assert.equal(notices[0].method, "notifications/tools/list_changed");
   assert.equal(interactions[0].type, "inputRequired");
-  assert.deepEqual(calls.map(({ method }) => method), ["mcp.listen", "mcp.callToolInteractive", "mcp.respondInput"]);
+  assert.deepEqual(calls.map(({ method }) => method), [
+    "mcp.listen",
+    "mcp.callToolInteractive",
+    "mcp.respondInput",
+    "mcp.oauthBegin",
+    "mcp.oauthComplete",
+  ]);
 });
 
 test("Agent Runtime SDK creates, streams, controls, and reads persistent runs", async () => {

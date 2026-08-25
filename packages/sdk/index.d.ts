@@ -371,6 +371,12 @@ export interface McpDiscoverResult {
   _meta?: Record<string, unknown>;
 }
 
+export interface McpOAuthAuthorization {
+  authorizationUrl: string;
+  state: string;
+  expiresInMs: number;
+}
+
 export interface ModelManifest {
   id: string;
   digest: `sha256:${string}`;
@@ -479,6 +485,8 @@ export interface AlexClient {
     ): Promise<{ content: unknown[]; isError: boolean; structuredContent?: unknown }>;
     callToolInteractive(binding: string, name: string, input?: Record<string, unknown>, options?: StreamOptions): AsyncIterable<McpInteractiveEvent>;
     respondInput(inputId: string, response: unknown, options?: InvokeOptions): Promise<{ inputId: string; accepted: boolean }>;
+    oauthBegin(binding: string, clientId: string, redirectUri: string, scopes?: string[], options?: InvokeOptions): Promise<McpOAuthAuthorization>;
+    oauthComplete(state: string, code: string, issuer: string, options?: InvokeOptions): Promise<{ application: string; binding: string; authorized: boolean }>;
     audit(limit?: number, options?: InvokeOptions): Promise<McpAuditEntry[]>;
     listResources(binding: string, cursor?: string, options?: InvokeOptions): Promise<{ resources: unknown[]; nextCursor?: string }>;
     readResource(binding: string, uri: string, options?: InvokeOptions): Promise<{ contents: unknown[] }>;

@@ -415,10 +415,11 @@ impl DaemonService {
                 scopes,
             } => self.mcp_oauth_begin(&app_id, &binding, &client_id, &redirect_uri, &scopes),
             ControlCommand::McpOAuthComplete {
+                app_id,
                 state,
                 code,
                 issuer,
-            } => self.mcp_oauth_complete(&state, &code, &issuer),
+            } => self.mcp_oauth_complete(&app_id, &state, &code, &issuer),
             ControlCommand::ModelList => self.model_list(),
             ControlCommand::ModelImport { source, manifest } => {
                 self.model_import(&source, manifest)
@@ -1698,6 +1699,7 @@ impl DaemonService {
 
     fn mcp_oauth_complete(
         &self,
+        app_id: &str,
         state: &str,
         code: &str,
         issuer: &str,
@@ -1708,6 +1710,13 @@ impl DaemonService {
             .map_err(|_| "MCP OAuth pending-state lock poisoned".to_owned())?
             .remove(state)
             .ok_or_else(|| "MCP OAuth state is unknown or already consumed".to_owned())?;
+        if pending.application != app_id {
+            self.mcp_oauth_pending
+                .lock()
+                .map_err(|_| "MCP OAuth pending-state lock poisoned".to_owned())?
+                .insert(state.to_owned(), pending);
+            return Err("MCP OAuth state belongs to another application".into());
+        }
         if pending.created_at.elapsed() >= std::time::Duration::from_secs(600) {
             return Err("MCP OAuth state expired".into());
         }

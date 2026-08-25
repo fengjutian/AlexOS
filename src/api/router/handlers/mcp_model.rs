@@ -26,6 +26,24 @@ struct McpInputResponseParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpOAuthBeginParams {
+    binding: String,
+    client_id: String,
+    redirect_uri: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpOAuthCompleteParams {
+    state: String,
+    code: String,
+    issuer: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct McpResourceParams {
     binding: String,
     uri: String,
@@ -327,6 +345,47 @@ impl ApiRouter {
                 app_id,
                 input_id: params.input_id,
                 response: params.response,
+            },
+        )
+    }
+
+    pub(crate) fn mcp_oauth_begin(&self, params: &Value) -> ApiResult {
+        let params: McpOAuthBeginParams = parse_params(params)?;
+        self.mcp_scope(Some(&params.binding), None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-oauth-begin",
+            crate::daemon::ControlCommand::McpOAuthBegin {
+                app_id,
+                binding: params.binding,
+                client_id: params.client_id,
+                redirect_uri: params.redirect_uri,
+                scopes: params.scopes,
+            },
+        )
+    }
+
+    pub(crate) fn mcp_oauth_complete(&self, params: &Value) -> ApiResult {
+        let params: McpOAuthCompleteParams = parse_params(params)?;
+        self.mcp_scope(None, None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-oauth-complete",
+            crate::daemon::ControlCommand::McpOAuthComplete {
+                app_id,
+                state: params.state,
+                code: params.code,
+                issuer: params.issuer,
             },
         )
     }

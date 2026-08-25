@@ -99,6 +99,8 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "mcp.callTool" => router.mcp_call_tool(p),
         "mcp.callToolInteractive" => router.mcp_call_tool_interactive(&request.id, p),
         "mcp.respondInput" => router.mcp_respond_input(p),
+        "mcp.oauthBegin" => router.mcp_oauth_begin(p),
+        "mcp.oauthComplete" => router.mcp_oauth_complete(p),
         "mcp.audit" => router.mcp_audit(p),
         "mcp.listResources" => router.mcp_list_resources(p),
         "mcp.readResource" => router.mcp_read_resource(p),

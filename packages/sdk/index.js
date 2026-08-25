@@ -217,6 +217,12 @@ export function createAlexClient(transport = browserTransport()) {
       respondInput(inputId, response, options) {
         return invoke("mcp.respondInput", { inputId, response }, options);
       },
+      oauthBegin(binding, clientId, redirectUri, scopes = [], options) {
+        return invoke("mcp.oauthBegin", { binding, clientId, redirectUri, scopes }, options);
+      },
+      oauthComplete(state, code, issuer, options) {
+        return invoke("mcp.oauthComplete", { state, code, issuer }, options);
+      },
       async audit(limit = 200, options) {
         const result = await invoke("mcp.audit", { limit }, options);
         return result.entries ?? [];

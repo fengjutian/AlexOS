@@ -237,6 +237,7 @@ pub enum ControlCommand {
         scopes: Vec<String>,
     },
     McpOAuthComplete {
+        app_id: String,
         state: String,
         code: String,
         issuer: String,
