@@ -161,6 +161,11 @@ pub enum ControlCommand {
         #[serde(default)]
         arguments: Value,
     },
+    McpAudit {
+        app_id: String,
+        #[serde(default = "default_audit_limit")]
+        limit: usize,
+    },
     ModelList,
     ModelImport {
         source: String,
@@ -204,6 +209,10 @@ fn default_service_name() -> String {
 
 fn default_invoke_timeout_ms() -> u64 {
     30_000
+}
+
+fn default_audit_limit() -> usize {
+    200
 }
 
 /// Stable response envelope. Domain results remain JSON until the daemon

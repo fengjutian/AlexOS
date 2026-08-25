@@ -2,14 +2,16 @@
 
 use std::{
     collections::BTreeMap,
+    fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
-    path::Path,
+    path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
     time::Duration,
+    time::{SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
@@ -63,6 +65,125 @@ pub struct ToolCallResult {
     pub is_error: bool,
     #[serde(default, rename = "structuredContent")]
     pub structured_content: Option<Value>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct AuditEntry {
+    pub timestamp_ms: u64,
+    pub call_id: String,
+    pub application: String,
+    pub binding: String,
+    pub tool: String,
+    pub phase: String,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub outcome: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub duration_ms: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error_kind: Option<String>,
+}
+
+#[derive(Clone)]
+pub struct AuditLog {
+    path: PathBuf,
+    gate: Arc<Mutex<()>>,
+}
+
+impl AuditLog {
+    const MAX_BYTES: u64 = 1024 * 1024;
+
+    pub fn open(path: impl Into<PathBuf>) -> Result<Self, McpError> {
+        let path = path.into();
+        fs::create_dir_all(
+            path.parent()
+                .ok_or_else(|| McpError::InvalidConfig("MCP audit path has no parent".into()))?,
+        )
+        .map_err(|error| McpError::Transport(error.to_string()))?;
+        Ok(Self {
+            path,
+            gate: Arc::new(Mutex::new(())),
+        })
+    }
+
+    pub fn append(&self, entry: &AuditEntry) -> Result<(), McpError> {
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| McpError::Transport("MCP audit lock poisoned".into()))?;
+        if fs::metadata(&self.path).is_ok_and(|metadata| metadata.len() >= Self::MAX_BYTES) {
+            let rotated = self.path.with_extension("jsonl.1");
+            if rotated.exists() {
+                fs::remove_file(&rotated)
+                    .map_err(|error| McpError::Transport(error.to_string()))?;
+            }
+            fs::rename(&self.path, rotated)
+                .map_err(|error| McpError::Transport(error.to_string()))?;
+        }
+        let mut output = OpenOptions::new()
+            .create(true)
+            .append(true)
+            .open(&self.path)
+            .map_err(|error| McpError::Transport(error.to_string()))?;
+        serde_json::to_writer(&mut output, entry)
+            .map_err(|error| McpError::Protocol(error.to_string()))?;
+        output
+            .write_all(b"\n")
+            .and_then(|_| output.flush())
+            .map_err(|error| McpError::Transport(error.to_string()))
+    }
+
+    pub fn recent(&self, application: &str, limit: usize) -> Result<Vec<AuditEntry>, McpError> {
+        if limit == 0 || limit > 1_000 {
+            return Err(McpError::InvalidConfig(
+                "MCP audit limit must be between 1 and 1000".into(),
+            ));
+        }
+        let _gate = self
+            .gate
+            .lock()
+            .map_err(|_| McpError::Transport("MCP audit lock poisoned".into()))?;
+        if !self.path.is_file() {
+            return Ok(Vec::new());
+        }
+        let input = fs::read_to_string(&self.path)
+            .map_err(|error| McpError::Transport(error.to_string()))?;
+        let mut entries = input
+            .lines()
+            .filter_map(|line| serde_json::from_str::<AuditEntry>(line).ok())
+            .filter(|entry| entry.application == application)
+            .collect::<Vec<_>>();
+        if entries.len() > limit {
+            entries.drain(..entries.len() - limit);
+        }
+        entries.reverse();
+        Ok(entries)
+    }
+
+    pub fn entry(
+        call_id: &str,
+        application: &str,
+        binding: &str,
+        tool: &str,
+        phase: &str,
+    ) -> AuditEntry {
+        AuditEntry {
+            timestamp_ms: SystemTime::now()
+                .duration_since(UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+            call_id: call_id.into(),
+            application: application.into(),
+            binding: binding.into(),
+            tool: tool.into(),
+            phase: phase.into(),
+            outcome: None,
+            duration_ms: None,
+            error_kind: None,
+        }
+    }
 }
 
 pub trait RpcTransport: Send + Sync {

@@ -35,6 +35,7 @@ pub struct DaemonService {
     websocket_tunnels: Arc<Mutex<BTreeMap<String, crate::proxy::WebSocketTunnel>>>,
     streams: Arc<crate::runtime::stream::StreamManager>,
     mcp: crate::mcp::ConnectionManager,
+    mcp_audit: Option<crate::mcp::AuditLog>,
     models: Option<crate::model::ModelManager>,
 }
 
@@ -48,6 +49,7 @@ impl DaemonService {
                 crate::runtime::stream::StreamLimits::default(),
             )),
             mcp: crate::mcp::ConnectionManager::default(),
+            mcp_audit: None,
             models: None,
         }
     }
@@ -60,6 +62,10 @@ impl DaemonService {
             .register_process_workers(&root.join("runtimes"))
             .map_err(|error| error.to_string())?;
         self.models = Some(models);
+        self.mcp_audit = Some(
+            crate::mcp::AuditLog::open(root.join("audit").join("mcp.jsonl"))
+                .map_err(|error| error.to_string())?,
+        );
         Ok(self)
     }
 
@@ -173,7 +179,8 @@ impl DaemonService {
                 binding,
                 name,
                 arguments,
-            } => self.mcp_call_tool(&app_id, &binding, &name, arguments),
+            } => self.mcp_call_tool(&id, &app_id, &binding, &name, arguments),
+            ControlCommand::McpAudit { app_id, limit } => self.mcp_audit(&app_id, limit),
             ControlCommand::ModelList => self.model_list(),
             ControlCommand::ModelImport { source, manifest } => {
                 self.model_import(&source, manifest)
@@ -867,19 +874,75 @@ impl DaemonService {
 
     fn mcp_call_tool(
         &self,
+        call_id: &str,
         app_id: &str,
         binding: &str,
         name: &str,
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
-        self.mcp
+        let mut started = crate::mcp::AuditLog::entry(call_id, app_id, binding, name, "started");
+        if let Some(audit) = &self.mcp_audit {
+            audit
+                .append(&started)
+                .map_err(|error| format!("MCP audit unavailable; tool was not invoked: {error}"))?;
+        }
+        let start = std::time::Instant::now();
+        let result = self
+            .mcp
             .get(app_id, binding)
             .and_then(|client| client.call_tool(name, arguments))
             .and_then(|result| {
                 serde_json::to_value(result)
                     .map_err(|error| crate::mcp::McpError::Protocol(error.to_string()))
-            })
-            .map_err(|error| error.to_string())
+            });
+        started.timestamp_ms = now_ms().unwrap_or_default();
+        started.phase = "finished".into();
+        started.duration_ms = Some(start.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
+        match result {
+            Ok(value) => {
+                started.outcome = Some("success".into());
+                if let Some(audit) = &self.mcp_audit {
+                    audit.append(&started).map_err(|error| {
+                        format!(
+                            "MCP tool completed, but its audit outcome could not be persisted; do not retry automatically: {error}"
+                        )
+                    })?;
+                }
+                Ok(value)
+            }
+            Err(error) => {
+                started.outcome = Some("failure".into());
+                started.error_kind = Some(
+                    match &error {
+                        crate::mcp::McpError::NotFound(_) => "not-found",
+                        crate::mcp::McpError::Duplicate(_) => "duplicate",
+                        crate::mcp::McpError::InvalidConfig(_) => "invalid-config",
+                        crate::mcp::McpError::Transport(_) => "transport",
+                        crate::mcp::McpError::Protocol(_) => "protocol",
+                        crate::mcp::McpError::Server { .. } => "server",
+                    }
+                    .into(),
+                );
+                if let Some(audit) = &self.mcp_audit
+                    && let Err(audit_error) = audit.append(&started)
+                {
+                    return Err(format!(
+                        "{error}; additionally failed to persist MCP audit outcome: {audit_error}"
+                    ));
+                }
+                Err(error.to_string())
+            }
+        }
+    }
+
+    fn mcp_audit(&self, app_id: &str, limit: usize) -> Result<serde_json::Value, String> {
+        let entries = self
+            .mcp_audit
+            .as_ref()
+            .ok_or_else(|| "MCP audit is unavailable".to_owned())?
+            .recent(app_id, limit)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "entries": entries }))
     }
 
     fn model_manager(&self) -> Result<&crate::model::ModelManager, String> {
@@ -1262,7 +1325,9 @@ mod tests {
     #[test]
     fn daemon_owns_mcp_connections_and_tool_calls() {
         let temp = tempfile::tempdir().unwrap();
-        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")));
+        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")))
+            .with_ai_root(temp.path())
+            .unwrap();
         service
             .mcp
             .connect(
@@ -1288,6 +1353,17 @@ mod tests {
             arguments: json!({"text":"hello"}),
         }));
         assert!(called.ok);
+        let audit = std::fs::read_to_string(temp.path().join("audit").join("mcp.jsonl"))
+            .unwrap();
+        let entries = audit
+            .lines()
+            .map(|line| serde_json::from_str::<crate::mcp::AuditEntry>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert_eq!(entries.len(), 2);
+        assert_eq!(entries[0].phase, "started");
+        assert_eq!(entries[1].outcome.as_deref(), Some("success"));
+        assert_eq!(entries[1].tool, "echo");
+        assert!(!audit.contains("hello"), "tool arguments must not be audited");
     }
 
     #[test]
