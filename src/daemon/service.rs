@@ -1532,6 +1532,9 @@ impl DaemonService {
         arguments: serde_json::Value,
     ) -> Result<serde_json::Value, String> {
         let mut started = crate::mcp::AuditLog::entry(call_id, app_id, binding, name, "started");
+        started.argument_hash = Some(
+            crate::mcp::audit_argument_hash(&arguments).map_err(|error| error.to_string())?,
+        );
         if let Some(audit) = &self.mcp_audit {
             audit
                 .append(&started)
@@ -1629,6 +1632,9 @@ impl DaemonService {
             .map_err(|error| error.to_string())?;
         let mut audit_entry =
             crate::mcp::AuditLog::entry(stream_id, app_id, binding, name, "started");
+        audit_entry.argument_hash = Some(
+            crate::mcp::audit_argument_hash(&arguments).map_err(|error| error.to_string())?,
+        );
         if let Some(audit) = &self.mcp_audit {
             audit.append(&audit_entry).map_err(|error| {
                 format!("MCP audit unavailable; interactive tool was not invoked: {error}")

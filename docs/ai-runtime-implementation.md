@@ -19,12 +19,12 @@ Agent Runtime 和 MCP 市场。产品范围以 [`product-requirements.md`](./pro
 > | 阶段二 多服务编排 | 已落地 | `src/runtime/application_supervisor.rs` 按 DAG layer 启动、失败回滚、反向停止；generation 防旧任务写回 |
 > | 阶段三 Daemon 唯一控制面 | 部分落地 | `src/daemon/` Named Pipe + 共享 supervisor + desired/observed 原子持久化已 wired；跨账户 CI 拒绝、孤儿回收显式 E2E 待补 |
 > | 阶段四 流式 IPC / 取消 / 背压 | 部分落地 | `runtime_handle_multiplexes_and_cancels_without_killing_backend` 验证 service 后端多请求并发；流式 envelope / credit window / Event 通道未做 |
-> | 阶段五 Secret Store | 未开始 | `src/` 当前无 `secrets/` 模块；model.secretSet/secretDelete/secretExists 已有 API 形状，未接 DPAPI |
-> | 阶段六 远程 Model Provider | 部分落地 | `src/model/remote.rs` + `src/api/router/handlers/mcp_model.rs`；`model.list / generate / embed / cancel` 已 wired；`providers` 注册 CRUD 部分实现 |
+> | 阶段五 Secret Store | 已落地 | `src/platform/secret.rs`：Windows Credential Manager、macOS Keychain、其他平台 fail-closed；Model 与 MCP OAuth 只保存 opaque account 引用，不把凭据写入配置 |
+> | 阶段六 远程 Model Provider | 已落地基础闭环 | `src/model/remote.rs` + daemon/API：Provider CRUD/health、Secret 引用、generate/embed/cancel、流式、限流/重试/熔断已 wired；真实供应商兼容矩阵仍待扩展 |
 > | 阶段七 MCP Client / ConnectionManager | 已落地 | `src/mcp/`（mod.rs + oauth.rs）：initialize / ping / tools / resources / prompts / notifications / subscribe / health / presentInput / OAuth loopback / token refresh |
-> | 阶段八 MCP 权限与审计 | 部分落地 | Manifest 声明 + `mcp.use` 权限 + `mcp.audit` 已 wired；always-ask 工具调用哈希与运行时撤销未做 |
-> | 阶段九 本地模型管理与推理 Worker | 未开始 | `src/model/` 当前以 remote 为主；本地 worker 协议见 [`model-worker-protocol.md`](./model-worker-protocol.md) 但 Runtime Provider 未实现 |
-> | 阶段十 Agent Runtime | 部分落地 | `src/agent/`：create/start/pause/resume/cancel/approve/deny/status/list/history/timeline + checkpoint + 恢复 + agent_checkpoints 测试；预算、幂等键、tool 注入防护未做 |
+> | 阶段八 MCP 权限与审计 | 部分落地 | Manifest + `mcp.use` + audit 已 wired；审计现绑定参数 SHA-256 并使用跨轮转 hash chain；always-ask 批准令牌与运行时撤销仍待完成 |
+> | 阶段九 本地模型管理与推理 Worker | 已落地基础闭环 | `src/model/` 已有内容寻址 ModelStore、摘要校验、Worker descriptor 发现和独立 JSONL `ProcessInferenceWorker`；GPU/NPU 枚举与具体引擎发行包仍待完成 |
+> | 阶段十 Agent Runtime | 已落地基础闭环 | `src/agent/` 已有完整生命周期、checkpoint/恢复、预算强制、幂等键、非幂等重审批、声明式原生工具白名单与注入防护；更完整的对抗性 eval 仍待补 |
 > | 阶段十一 Alex MCP Server + Registry | 未开始 | 无 `src/registry/` 模块 |
 
 ## 1. 设计原则
@@ -513,4 +513,3 @@ M6–M8 形成首个可用 AI Runtime，M9–M10 形成可恢复的本地 Agent 
 6. 所有外部包、模型和 MCP Server 都经过来源、哈希、签名与权限验证。
 7. Windows 安全和 GUI E2E 在 CI/VM 中真实执行，不使用“跳过但成功”代替验收。
 8. 状态、协议、SDK 和文档由版本化 Schema/IDL 约束并具备迁移测试。
-

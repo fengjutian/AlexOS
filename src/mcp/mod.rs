@@ -19,6 +19,7 @@ use std::{
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
 use url::Url;
 
@@ -85,12 +86,20 @@ pub struct AuditEntry {
     pub binding: String,
     pub tool: String,
     pub phase: String,
+    /// SHA-256 of the canonical JSON tool arguments. The arguments
+    /// themselves are deliberately never persisted.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub argument_hash: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub outcome: Option<String>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub duration_ms: Option<u64>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error_kind: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub previous_hash: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub record_hash: Option<String>,
 }
 
 #[derive(Clone)]
@@ -120,6 +129,7 @@ impl AuditLog {
             .gate
             .lock()
             .map_err(|_| McpError::Transport("MCP audit lock poisoned".into()))?;
+        let previous_hash = last_audit_hash(&self.path)?;
         if fs::metadata(&self.path).is_ok_and(|metadata| metadata.len() >= Self::MAX_BYTES) {
             let rotated = self.path.with_extension("jsonl.1");
             if rotated.exists() {
@@ -134,7 +144,13 @@ impl AuditLog {
             .append(true)
             .open(&self.path)
             .map_err(|error| McpError::Transport(error.to_string()))?;
-        serde_json::to_writer(&mut output, entry)
+        let mut chained = entry.clone();
+        chained.previous_hash = previous_hash;
+        chained.record_hash = None;
+        let encoded = serde_json::to_vec(&chained)
+            .map_err(|error| McpError::Protocol(error.to_string()))?;
+        chained.record_hash = Some(format!("sha256:{:x}", Sha256::digest(&encoded)));
+        serde_json::to_writer(&mut output, &chained)
             .map_err(|error| McpError::Protocol(error.to_string()))?;
         output
             .write_all(b"\n")
@@ -188,11 +204,36 @@ impl AuditLog {
             binding: binding.into(),
             tool: tool.into(),
             phase: phase.into(),
+            argument_hash: None,
             outcome: None,
             duration_ms: None,
             error_kind: None,
+            previous_hash: None,
+            record_hash: None,
         }
     }
+}
+
+/// Hash a tool argument object without retaining its sensitive contents.
+/// `serde_json::Map` is deterministically ordered in this build, so logically
+/// equivalent decoded objects produce the same approval/audit fingerprint.
+pub fn audit_argument_hash(arguments: &Value) -> Result<String, McpError> {
+    let encoded = serde_json::to_vec(arguments)
+        .map_err(|error| McpError::Protocol(error.to_string()))?;
+    Ok(format!("sha256:{:x}", Sha256::digest(encoded)))
+}
+
+fn last_audit_hash(path: &Path) -> Result<Option<String>, McpError> {
+    if !path.is_file() {
+        return Ok(None);
+    }
+    let input = fs::read_to_string(path)
+        .map_err(|error| McpError::Transport(error.to_string()))?;
+    Ok(input
+        .lines()
+        .rev()
+        .find_map(|line| serde_json::from_str::<AuditEntry>(line).ok())
+        .and_then(|entry| entry.record_hash))
 }
 
 pub trait RpcTransport: Send + Sync {
@@ -1761,5 +1802,28 @@ mod tests {
         server.join().unwrap();
         assert_eq!(received.len(), 1);
         assert_eq!(received[0]["method"], "notifications/tools/list_changed");
+    }
+
+    #[test]
+    fn audit_log_hashes_arguments_without_persisting_them_and_chains_records() {
+        let temp = tempfile::tempdir().unwrap();
+        let path = temp.path().join("mcp.jsonl");
+        let audit = AuditLog::open(&path).unwrap();
+        let arguments = json!({"password":"never-write-me","count":2});
+        let mut first = AuditLog::entry("call-1", "app", "local", "write", "started");
+        first.argument_hash = Some(audit_argument_hash(&arguments).unwrap());
+        audit.append(&first).unwrap();
+        let second = AuditLog::entry("call-1", "app", "local", "write", "finished");
+        audit.append(&second).unwrap();
+
+        let raw = fs::read_to_string(&path).unwrap();
+        assert!(!raw.contains("never-write-me"));
+        let entries = raw
+            .lines()
+            .map(|line| serde_json::from_str::<AuditEntry>(line).unwrap())
+            .collect::<Vec<_>>();
+        assert!(entries[0].argument_hash.as_deref().is_some_and(|v| v.starts_with("sha256:")));
+        assert_eq!(entries[1].previous_hash, entries[0].record_hash);
+        assert!(entries[1].record_hash.is_some());
     }
 }
