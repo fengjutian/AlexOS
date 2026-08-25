@@ -1474,11 +1474,20 @@ const MAX_IPC_MESSAGE_BYTES: usize = 1024 * 1024;
 /// 普通 app 的 dispatch 不会触发这条路径;系统 WebView 直接使用。
 pub struct ManagerRouter {
     manager: Arc<dyn AppManager>,
+    daemon_pipe: Option<String>,
 }
 
 impl ManagerRouter {
     pub fn new(manager: Arc<dyn AppManager>) -> Self {
-        Self { manager }
+        Self {
+            manager,
+            daemon_pipe: None,
+        }
+    }
+
+    pub fn with_daemon_pipe(mut self, pipe: impl Into<String>) -> Self {
+        self.daemon_pipe = Some(pipe.into());
+        self
     }
 
     /// Parse a JSON request body and dispatch it. Mirrors `ApiRouter::dispatch_json`.
@@ -1519,6 +1528,14 @@ impl ManagerRouter {
             );
         }
         match method {
+            "manager.ai_overview" => match self.ai_overview() {
+                Ok(value) => json_response(&request.id, &value),
+                Err(error) => crate::ipc::Response::error(
+                    &request.id,
+                    "DAEMON_UNAVAILABLE",
+                    error,
+                ),
+            },
             "manager.list_apps" => match self.manager.list_apps() {
                 Ok(apps) => json_response(&request.id, &serde_json::json!({ "apps": apps })),
                 Err(error) => manager_error_response(&request.id, error),
@@ -1691,6 +1708,74 @@ impl ManagerRouter {
                 format!("no such manager method: {method}"),
             ),
         }
+    }
+
+    fn daemon_command(
+        &self,
+        operation: &str,
+        command: crate::daemon::ControlCommand,
+    ) -> Result<serde_json::Value, String> {
+        let pipe = self
+            .daemon_pipe
+            .as_deref()
+            .ok_or_else(|| "AI Runtime control is not configured".to_owned())?;
+        let request = crate::daemon::ControlRequest {
+            protocol: crate::daemon::PROTOCOL_VERSION,
+            id: format!("manager-{}-{operation}", std::process::id()),
+            command,
+        };
+        let response = crate::daemon::send_request(pipe, &request)
+            .map_err(|error| format!("failed to contact alexd: {error}"))?;
+        if response.protocol != crate::daemon::PROTOCOL_VERSION || response.id != request.id {
+            return Err("alexd returned a mismatched response".into());
+        }
+        if !response.ok {
+            return Err(response.error.unwrap_or_else(|| "alexd rejected request".into()));
+        }
+        response
+            .result
+            .ok_or_else(|| "alexd response omitted result".into())
+    }
+
+    fn ai_overview(&self) -> Result<serde_json::Value, String> {
+        let providers = self.daemon_command(
+            "model-providers",
+            crate::daemon::ControlCommand::ModelProviders,
+        )?;
+        let provider_health = self.daemon_command(
+            "model-provider-health",
+            crate::daemon::ControlCommand::ModelProviderHealth { provider_id: None },
+        )?;
+        let mut applications = Vec::new();
+        for app in self.manager.list_apps().map_err(|error| error.to_string())? {
+            let mcp = self
+                .daemon_command(
+                    &format!("mcp-{}", app.id),
+                    crate::daemon::ControlCommand::McpConnections {
+                        app_id: app.id.clone(),
+                    },
+                )
+                .unwrap_or_else(|error| serde_json::json!({ "error": error }));
+            let agents = self
+                .daemon_command(
+                    &format!("agents-{}", app.id),
+                    crate::daemon::ControlCommand::AgentList {
+                        app_id: app.id.clone(),
+                    },
+                )
+                .unwrap_or_else(|error| serde_json::json!({ "error": error }));
+            applications.push(serde_json::json!({
+                "id": app.id,
+                "name": app.name,
+                "mcp": mcp,
+                "agents": agents
+            }));
+        }
+        Ok(serde_json::json!({
+            "providers": providers.get("providers").cloned().unwrap_or_default(),
+            "providerHealth": provider_health.get("providers").cloned().unwrap_or_default(),
+            "applications": applications
+        }))
     }
 }
 

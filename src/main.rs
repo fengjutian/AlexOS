@@ -151,6 +151,9 @@ enum Commands {
         /// publisher fingerprint is in this store.
         #[arg(long)]
         trust_root: Option<PathBuf>,
+        /// Runtime daemon endpoint used by the MCP/Model/Agent management view.
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
     },
     /// Run an installed plugin. Default opens a WebView so the
     /// plugin behaves like an app (frontend + backend + system
@@ -621,6 +624,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         Commands::Manager {
             install_root,
             trust_root,
+            pipe,
         } => {
             require_webview2()?;
             // Self-hosting path: if `com.alex.manager` is installed as a
@@ -663,7 +667,9 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_else(|| install_root.clone());
                 let manager =
                     LocalAppManager::open_with_trust(&install_root, permissions_root, trust_root)?;
-                let router = Arc::new(ManagerRouter::new(Arc::new(manager)));
+                let router = Arc::new(
+                    ManagerRouter::new(Arc::new(manager)).with_daemon_pipe(pipe),
+                );
                 manager_webview::run(router)?;
             }
         }

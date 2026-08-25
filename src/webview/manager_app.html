@@ -9,6 +9,8 @@
     <header class="topbar">
       <h1>App Manager</h1>
       <div class="topbar-actions">
+        <button id="apps-view-btn" type="button">Applications</button>
+        <button id="ai-view-btn" type="button">AI Runtime</button>
         <input
           type="search"
           id="search"
@@ -95,6 +97,29 @@
         <section class="panel" aria-labelledby="logs-heading">
           <h2 id="logs-heading">Recent logs (tail)</h2>
           <pre id="logs" class="logs" aria-live="polite"></pre>
+        </section>
+      </section>
+
+      <section id="ai-view" hidden>
+        <header class="detail-header">
+          <div>
+            <h2>AI Runtime</h2>
+            <p class="muted">Daemon-owned MCP connections, model providers, and Agent runs.</p>
+          </div>
+          <button id="ai-refresh-btn" type="button">Refresh</button>
+        </header>
+        <div id="ai-error" class="error" hidden></div>
+        <section class="panel" aria-labelledby="model-providers-heading">
+          <h2 id="model-providers-heading">Remote model providers</h2>
+          <div id="ai-providers" class="services-list"></div>
+        </section>
+        <section class="panel" aria-labelledby="mcp-connections-heading">
+          <h2 id="mcp-connections-heading">MCP connections</h2>
+          <div id="ai-mcp" class="services-list"></div>
+        </section>
+        <section class="panel" aria-labelledby="agent-runs-heading">
+          <h2 id="agent-runs-heading">Agent runs</h2>
+          <div id="ai-agents" class="services-list"></div>
         </section>
       </section>
     </main>

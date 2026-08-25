@@ -28,6 +28,7 @@
   const $ = (id) => document.getElementById(id);
   const listView = $("list-view");
   const detailView = $("detail-view");
+  const aiView = $("ai-view");
   const appTable = $("app-table");
   const appTbody = $("app-tbody");
   const emptyState = $("empty-state");
@@ -41,6 +42,59 @@
   const modalMessageEl = $("modal-message");
   const modalCancelEl = $("modal-cancel");
   const modalConfirmEl = $("modal-confirm");
+
+  function showApplicationsView() {
+    aiView.hidden = true;
+    detailView.hidden = true;
+    listView.hidden = false;
+  }
+
+  async function showAiView() {
+    listView.hidden = true;
+    detailView.hidden = true;
+    aiView.hidden = false;
+    await loadAiOverview();
+  }
+
+  async function loadAiOverview() {
+    const error = $("ai-error");
+    error.hidden = true;
+    try {
+      const overview = await call("manager.ai_overview");
+      renderAiOverview(overview ?? {});
+    } catch (cause) {
+      error.textContent = `AI Runtime is unavailable: ${cause?.message ?? cause}`;
+      error.hidden = false;
+      $("ai-providers").textContent = "";
+      $("ai-mcp").textContent = "";
+      $("ai-agents").textContent = "";
+    }
+  }
+
+  function renderAiOverview(overview) {
+    const health = new Map((overview.providerHealth ?? []).map((item) => [item.id, item]));
+    const providers = overview.providers ?? [];
+    $("ai-providers").innerHTML = providers.length
+      ? providers.map((provider) => {
+          const state = health.get(provider.id)?.status ?? (provider.enabled ? "unknown" : "disabled");
+          return `<div class="service-row"><div><div class="name">${escapeText(provider.id)}</div><div class="meta">${escapeText(provider.kind)} · ${escapeText(provider.endpoint)}</div></div><div class="meta">secret: ${health.get(provider.id)?.secretConfigured ? "configured" : "missing"}</div><span class="badge ${stateClass(state)}">${escapeText(formatState(state))}</span></div>`;
+        }).join("")
+      : '<p class="muted">No remote model providers configured.</p>';
+
+    const applications = overview.applications ?? [];
+    const connections = applications.flatMap((app) => {
+      const values = Array.isArray(app.mcp) ? app.mcp : (app.mcp?.connections ?? []);
+      return values.map((connection) => ({ ...connection, appName: app.name }));
+    });
+    $("ai-mcp").innerHTML = connections.length
+      ? connections.map((connection) => `<div class="service-row"><div><div class="name">${escapeText(connection.binding)}</div><div class="meta">${escapeText(connection.appName ?? connection.application)}</div></div><span class="badge">${escapeText(connection.era ?? "modern")}</span></div>`).join("")
+      : '<p class="muted">No live MCP connections.</p>';
+
+    const runs = applications.flatMap((app) => (app.agents?.runs ?? []).map((run) => ({ ...run, appName: app.name })));
+    $("ai-agents").innerHTML = runs.length
+      ? runs.map((run) => `<div class="service-row"><div><div class="name">${escapeText(run.id)}</div><div class="meta">${escapeText(run.appName)} · step ${Number(run.step ?? 0)}</div></div><span class="badge ${stateClass(run.state)}">${escapeText(formatState(run.state))}</span></div>`).join("")
+      : '<p class="muted">No Agent runs.</p>';
+  }
 
   // -- IPC helper -----------------------------------------------------------
   // `window.alex.invoke(method, params)` already returns a promise that
