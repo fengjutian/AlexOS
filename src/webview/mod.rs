@@ -3,5 +3,7 @@
 pub mod dev;
 pub mod manager_webview;
 pub mod native;
+#[cfg(windows)]
+pub mod secondary_windows;
 pub mod shell;
 pub mod webview2;

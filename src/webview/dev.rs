@@ -558,9 +558,10 @@ mod windows {
         dev::{is_ignored, load_alexignore},
         manifest::AppManifest,
         manifest_v2::{FrontendDev, ServiceDev},
-        native::HostCommand,
+        native::{HostCommand, NativeError},
         runtime::RuntimeHandle,
         shell::windows::{BRIDGE, UserEvent, WindowHost, asset_response, emit_event},
+        webview::secondary_windows::SecondaryWindows,
     };
 
     const DEV_POLL_INTERVAL: Duration = Duration::from_millis(100);
@@ -650,7 +651,7 @@ mod windows {
             .with_permission_logging(true) // dev mode = permission call panel on
             .with_native_host(Arc::new(WindowHost {
                 proxy: proxy.clone(),
-                secondary_windows: false,
+                secondary_windows: true,
             }));
         if let Some(backend) = &manifest.backend {
             router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
@@ -670,7 +671,7 @@ mod windows {
             .unwrap_or_else(|| "alex://app/".into());
         let allowed_dev_origin = frontend_dev.as_ref().map(|dev| dev.url.clone());
         let webview = WebViewBuilder::new()
-            .with_initialization_script(init_script)
+            .with_initialization_script(init_script.clone())
             // `alex dev` IS the dev mode: DevTools are always
             // on (debug build) without needing ALEX_DEVTOOLS.
             // Production shells (src/shell.rs,
@@ -756,51 +757,155 @@ mod windows {
                 .unwrap_or_else(|| "(no backend)".to_string())
         );
 
+        let child_proxy = event_loop.create_proxy();
+        let child_router = Arc::clone(&router);
+        let child_root = package_root.to_path_buf();
+        let child_frontend = manifest.frontend.entry.clone();
+        let child_init_script = init_script.clone();
+        let child_dev_url = frontend_dev.as_ref().map(|dev| dev.url.clone());
+        let mut secondary_windows = SecondaryWindows::new();
         let mut last_poll = Instant::now();
-        event_loop.run(move |event, _, control_flow| {
+        event_loop.run(move |event, event_loop_target, control_flow| {
             *control_flow = ControlFlow::WaitUntil(Instant::now() + Duration::from_millis(50));
             match event {
-                Event::UserEvent(UserEvent::IpcResponse(_, json)) => {
+                Event::UserEvent(UserEvent::IpcResponse(target, json)) => {
                     let script = format!("window.__alexResolve({json})");
-                    let _ = webview.evaluate_script(&script);
+                    if let Some(id) = target {
+                        if let Some(child) = secondary_windows.webview(id) {
+                            let _ = child.evaluate_script(&script);
+                        }
+                    } else {
+                        let _ = webview.evaluate_script(&script);
+                    }
                 }
                 Event::UserEvent(UserEvent::Host(command, reply)) => {
-                    match command {
-                    HostCommand::SetWindowTitle(title) => window.set_title(&title),
-                    HostCommand::MinimizeWindow => window.set_minimized(true),
-                    HostCommand::MaximizeWindow => window.set_maximized(true),
-                    HostCommand::CloseWindow => *control_flow = ControlFlow::Exit,
-                    HostCommand::CreateWindow(_)
-                    | HostCommand::SetWindowBounds(_, _)
-                    | HostCommand::SetWindowFullscreen(_, _)
-                    | HostCommand::DestroyWindow(_)
-                    | HostCommand::SetApplicationMenu(_)
-                    | HostCommand::SetContextMenu(_)
-                    | HostCommand::CreateTray(_, _, _)
-                    | HostCommand::DestroyTray(_)
-                    | HostCommand::RegisterShortcut(_)
-                    | HostCommand::UnregisterShortcut(_) => {
-                        eprintln!(
-                            "alex dev: native shell command is unavailable in the development host"
-                        );
-                    }
-                    }
-                    let _ = reply.send(Ok(()));
+                    let result = match command {
+                        HostCommand::SetWindowTitle(title) => {
+                            window.set_title(&title);
+                            Ok(())
+                        }
+                        HostCommand::MinimizeWindow => {
+                            window.set_minimized(true);
+                            Ok(())
+                        }
+                        HostCommand::MaximizeWindow => {
+                            window.set_maximized(true);
+                            Ok(())
+                        }
+                        HostCommand::CloseWindow => {
+                            *control_flow = ControlFlow::Exit;
+                            Ok(())
+                        }
+                        HostCommand::CreateWindow(info) => {
+                            let child_id = info.id.raw();
+                            secondary_windows.create(event_loop_target, &info, |child_window| {
+                                let ipc_router = Arc::clone(&child_router);
+                                let ipc_proxy = child_proxy.clone();
+                                let drop_router = Arc::clone(&child_router);
+                                let asset_root = child_root.clone();
+                                let frontend = child_frontend.clone();
+                                let allowed_origin = child_dev_url.clone();
+                                let url = if let Some(base) = child_dev_url.as_ref() {
+                                    url::Url::parse(base)
+                                        .and_then(|base| {
+                                            base.join(info.url.trim_start_matches('/'))
+                                        })
+                                        .map(|url| url.to_string())
+                                        .unwrap_or_else(|_| base.clone())
+                                } else if info.url.starts_with("alex://app/") {
+                                    info.url.clone()
+                                } else {
+                                    format!("alex://app/{}", info.url.trim_start_matches('/'))
+                                };
+                                WebViewBuilder::new()
+                                    .with_initialization_script(child_init_script.clone())
+                                    .with_devtools(cfg!(debug_assertions))
+                                    .with_incognito(true)
+                                    .with_clipboard(false)
+                                    .with_navigation_handler(move |url| {
+                                        crate::is_internal_webview_url(&url, "app")
+                                            || allowed_origin.as_ref().is_some_and(|allowed| {
+                                                same_origin(url.as_str(), allowed)
+                                            })
+                                    })
+                                    .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
+                                    .with_download_started_handler(|_, _| false)
+                                    .with_drag_drop_handler(move |event| match event {
+                                        wry::DragDropEvent::Drop { paths, position } => drop_router
+                                            .deliver_file_drop(paths, position.0, position.1),
+                                        _ => false,
+                                    })
+                                    .with_ipc_handler(move |request| {
+                                        let router = Arc::clone(&ipc_router);
+                                        let proxy = ipc_proxy.clone();
+                                        let body = request.body().clone();
+                                        let _ = crate::runtime::task_executor::ipc_executor()
+                                            .submit(move || {
+                                                let response = router.dispatch_json_for_window(
+                                                    &body,
+                                                    Some(child_id),
+                                                );
+                                                if let Ok(json) = serde_json::to_string(&response) {
+                                                    let _ =
+                                                        proxy.send_event(UserEvent::IpcResponse(
+                                                            Some(child_id),
+                                                            json,
+                                                        ));
+                                                }
+                                            });
+                                    })
+                                    .with_custom_protocol("alex".into(), move |_id, request| {
+                                        asset_response(&asset_root, &frontend, request.uri().path())
+                                    })
+                                    .with_url(&url)
+                                    .build(child_window)
+                                    .map_err(|error| error.to_string())
+                            })
+                        }
+                        HostCommand::SetWindowBounds(id, bounds) => {
+                            secondary_windows.set_bounds(id, &bounds)
+                        }
+                        HostCommand::SetWindowFullscreen(id, fullscreen) => {
+                            secondary_windows.set_fullscreen(id, fullscreen)
+                        }
+                        HostCommand::DestroyWindow(id) => secondary_windows.destroy(id),
+                        HostCommand::SetApplicationMenu(_)
+                        | HostCommand::SetContextMenu(_)
+                        | HostCommand::CreateTray(_, _, _)
+                        | HostCommand::DestroyTray(_)
+                        | HostCommand::RegisterShortcut(_)
+                        | HostCommand::UnregisterShortcut(_) => Err(NativeError::Unsupported),
+                    };
+                    let _ = reply.send(result);
                 }
-                Event::WindowEvent { event, .. } => match event {
-                    WindowEvent::CloseRequested => *control_flow = ControlFlow::Exit,
+                Event::WindowEvent {
+                    window_id, event, ..
+                } => match event {
+                    WindowEvent::CloseRequested => {
+                        if window_id == window.id() {
+                            *control_flow = ControlFlow::Exit;
+                        } else if let Some(id) = secondary_windows.close_native(window_id) {
+                            router.native_window_closed(id);
+                        }
+                    }
                     WindowEvent::Focused(focused) => emit_event(
-                        &webview,
+                        secondary_windows
+                            .webview_for_native(window_id)
+                            .unwrap_or(&webview),
                         "window.focusChanged",
                         serde_json::json!({ "focused": focused }),
                     ),
                     WindowEvent::Resized(size) => emit_event(
-                        &webview,
+                        secondary_windows
+                            .webview_for_native(window_id)
+                            .unwrap_or(&webview),
                         "window.resized",
                         serde_json::json!({ "width": size.width, "height": size.height }),
                     ),
                     WindowEvent::Moved(position) => emit_event(
-                        &webview,
+                        secondary_windows
+                            .webview_for_native(window_id)
+                            .unwrap_or(&webview),
                         "window.moved",
                         serde_json::json!({ "x": position.x, "y": position.y }),
                     ),
@@ -835,6 +940,11 @@ mod windows {
                 while let Ok(command) = dev_rx.try_recv() {
                     if handle_dev_command(&webview, &router, command) {
                         *control_flow = ControlFlow::Exit;
+                    }
+                    if command == DevCommand::ReloadFrontend {
+                        for child in secondary_windows.webviews() {
+                            let _ = child.evaluate_script("window.location.reload()");
+                        }
                     }
                 }
             }
@@ -971,9 +1081,7 @@ mod windows {
                 if let Some(process) = child.as_mut() {
                     let _ = process.kill();
                 }
-                return Err(
-                    format!("frontend dev server did not become ready at {url}").into(),
-                );
+                return Err(format!("frontend dev server did not become ready at {url}").into());
             }
             thread::sleep(Duration::from_millis(100));
         }

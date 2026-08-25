@@ -52,7 +52,6 @@ pub mod windows {
     };
     use tao::platform::windows::WindowExtWindows;
     use tao::{
-        dpi::{PhysicalPosition, PhysicalSize},
         event::{Event, WindowEvent},
         event_loop::{ControlFlow, EventLoopBuilder},
         window::WindowBuilder,
@@ -70,6 +69,7 @@ pub mod windows {
         menu_tray::{MenuItem, MenuTemplate},
         native::{HostCommand, NativeError, NativeHost},
         runtime::RuntimeHandle,
+        webview::secondary_windows::SecondaryWindows,
     };
 
     pub const BRIDGE: &str = r#"
@@ -506,9 +506,7 @@ pub mod windows {
         let child_service_endpoint = service_endpoint.clone();
         let child_daemon_pipe = daemon_pipe.clone();
         let child_app_id = manifest.id.clone();
-        let mut child_windows: HashMap<u64, tao::window::Window> = HashMap::new();
-        let mut child_webviews: HashMap<u64, wry::WebView> = HashMap::new();
-        let mut native_child_ids: HashMap<tao::window::WindowId, u64> = HashMap::new();
+        let mut secondary_windows = SecondaryWindows::new();
         let mut application_menu: Option<Menu> = None;
         let mut context_menu: Option<Menu> = None;
         let mut tray_icons: HashMap<String, TrayIcon> = HashMap::new();
@@ -547,7 +545,7 @@ pub mod windows {
                 Event::UserEvent(UserEvent::IpcResponse(target, json)) => {
                     let script = format!("window.__alexResolve({json})");
                     if let Some(id) = target {
-                        if let Some(child) = child_webviews.get(&id) {
+                        if let Some(child) = secondary_windows.webview(id) {
                             let _ = child.evaluate_script(&script);
                         }
                     } else {
@@ -572,15 +570,10 @@ pub mod windows {
                         HostCommand::MaximizeWindow => window.set_maximized(true),
                         HostCommand::CloseWindow => *control_flow = ControlFlow::Exit,
                         HostCommand::CreateWindow(info) => {
-                            let mut builder = WindowBuilder::new()
-                                .with_title(&info.title)
-                                .with_inner_size(PhysicalSize::new(info.width, info.height));
-                            if let (Some(x), Some(y)) = (info.x, info.y) {
-                                builder = builder.with_position(PhysicalPosition::new(x, y));
-                            }
-                            match builder.build(event_loop_target) {
-                                Ok(child_window) => {
-                                    let native_id = child_window.id();
+                            host_result = secondary_windows.create(
+                                event_loop_target,
+                                &info,
+                                |child_window| {
                                     let ipc_router = Arc::clone(&child_router);
                                     let ipc_proxy = child_proxy.clone();
                                     let child_id = info.id.raw();
@@ -595,7 +588,7 @@ pub mod windows {
                                     } else {
                                         format!("alex://app/{}", info.url.trim_start_matches('/'))
                                     };
-                                    let built = WebViewBuilder::new()
+                                    WebViewBuilder::new()
                                         .with_initialization_script(child_init_script.clone())
                                         .with_incognito(true)
                                         .with_clipboard(false)
@@ -658,58 +651,19 @@ pub mod windows {
                                             asset_response(&asset_root, &frontend, path)
                                         })
                                         .with_url(&url)
-                                        .build(&child_window);
-                                    match built {
-                                        Ok(child_webview) => {
-                                            native_child_ids.insert(native_id, info.id.raw());
-                                            child_windows.insert(info.id.raw(), child_window);
-                                            child_webviews.insert(info.id.raw(), child_webview);
-                                        }
-                                        Err(error) => {
-                                            host_result = Err(NativeError::Failed(format!(
-                                                "failed to create child webview: {error}"
-                                            )))
-                                        }
-                                    }
-                                }
-                                Err(error) => {
-                                    host_result = Err(NativeError::Failed(format!(
-                                        "failed to create child window: {error}"
-                                    )))
-                                }
-                            }
+                                        .build(child_window)
+                                        .map_err(|error| error.to_string())
+                                },
+                            );
                         }
                         HostCommand::SetWindowBounds(id, bounds) => {
-                            if let Some(child) = child_windows.get(&id) {
-                                if let (Some(x), Some(y)) = (bounds.x, bounds.y) {
-                                    child.set_outer_position(PhysicalPosition::new(x, y));
-                                }
-                                if let (Some(width), Some(height)) = (bounds.width, bounds.height) {
-                                    child.set_inner_size(PhysicalSize::new(width, height));
-                                }
-                            } else {
-                                host_result =
-                                    Err(NativeError::Failed(format!("unknown child window {id}")));
-                            }
+                            host_result = secondary_windows.set_bounds(id, &bounds);
                         }
                         HostCommand::SetWindowFullscreen(id, fullscreen) => {
-                            if let Some(child) = child_windows.get(&id) {
-                                child.set_fullscreen(
-                                    fullscreen.then_some(tao::window::Fullscreen::Borderless(None)),
-                                );
-                            } else {
-                                host_result =
-                                    Err(NativeError::Failed(format!("unknown child window {id}")));
-                            }
+                            host_result = secondary_windows.set_fullscreen(id, fullscreen);
                         }
                         HostCommand::DestroyWindow(id) => {
-                            child_webviews.remove(&id);
-                            if let Some(child) = child_windows.remove(&id) {
-                                native_child_ids.remove(&child.id());
-                            } else {
-                                host_result =
-                                    Err(NativeError::Failed(format!("unknown child window {id}")));
-                            }
+                            host_result = secondary_windows.destroy(id);
                         }
                         HostCommand::SetApplicationMenu(template) => match build_menu(&template) {
                             Ok(menu) => {
@@ -830,16 +784,12 @@ pub mod windows {
                     WindowEvent::CloseRequested => {
                         if window_id == window.id() {
                             *control_flow = ControlFlow::Exit;
-                        } else if let Some(id) = native_child_ids.remove(&window_id) {
-                            child_webviews.remove(&id);
-                            child_windows.remove(&id);
+                        } else if let Some(id) = secondary_windows.close_native(window_id) {
                             router.native_window_closed(id);
                         }
                     }
                     WindowEvent::Focused(focused) => {
-                        let target = native_child_ids
-                            .get(&window_id)
-                            .and_then(|id| child_webviews.get(id));
+                        let target = secondary_windows.webview_for_native(window_id);
                         emit_event(
                             target.unwrap_or(&webview),
                             "window.focusChanged",
@@ -847,9 +797,7 @@ pub mod windows {
                         )
                     }
                     WindowEvent::Resized(size) => {
-                        let target = native_child_ids
-                            .get(&window_id)
-                            .and_then(|id| child_webviews.get(id));
+                        let target = secondary_windows.webview_for_native(window_id);
                         emit_event(
                             target.unwrap_or(&webview),
                             "window.resized",
@@ -857,9 +805,7 @@ pub mod windows {
                         )
                     }
                     WindowEvent::Moved(position) => {
-                        let target = native_child_ids
-                            .get(&window_id)
-                            .and_then(|id| child_webviews.get(id));
+                        let target = secondary_windows.webview_for_native(window_id);
                         emit_event(
                             target.unwrap_or(&webview),
                             "window.moved",
@@ -875,9 +821,8 @@ pub mod windows {
                             let hwnd = if window_id == window.id() {
                                 Some(window.hwnd() as isize)
                             } else {
-                                native_child_ids
-                                    .get(&window_id)
-                                    .and_then(|id| child_windows.get(id))
+                                secondary_windows
+                                    .window_for_native(window_id)
                                     .map(|child| child.hwnd())
                             };
                             if let Some(hwnd) = hwnd {
@@ -916,7 +861,7 @@ pub mod windows {
                     match command {
                         ShellDevCommand::Reload => {
                             let _ = webview.evaluate_script("location.reload()");
-                            for child in child_webviews.values() {
+                            for child in secondary_windows.webviews() {
                                 let _ = child.evaluate_script("location.reload()");
                             }
                             eprintln!("alex dev: reloaded frontend");
@@ -935,7 +880,7 @@ pub mod windows {
             }
             for (event, delivered) in router.event_bus().drain_pending() {
                 if let Some(window_id) = delivered.window_id {
-                    if let Some(child) = child_webviews.get(&window_id) {
+                    if let Some(child) = secondary_windows.webview(window_id) {
                         emit_subscribed(
                             child,
                             &event,
