@@ -66,6 +66,37 @@ test("requests support timeout and cancellation", async () => {
   await assert.rejects(request, { code: "ABORTED" });
 });
 
+test("stream transport exposes an AsyncIterable of bytes", async () => {
+  const calls = [];
+  const client = createAlexClient({
+    invoke: async () => ({}),
+    async *stream(method, params, options) {
+      calls.push({ method, params, creditBytes: options.creditBytes });
+      yield "aGVsbG8=";
+      yield new Uint8Array([32, 65, 108, 101, 120]);
+    },
+  });
+  const chunks = [];
+  for await (const chunk of client.runtime.stream(
+    "model.generate",
+    { prompt: "hi" },
+    { creditBytes: 65536 },
+  )) {
+    chunks.push(chunk);
+  }
+  assert.equal(Buffer.concat(chunks).toString(), "hello Alex");
+  assert.deepEqual(calls, [{
+    method: "runtime.invoke",
+    params: { method: "model.generate", params: { prompt: "hi" } },
+    creditBytes: 65536,
+  }]);
+});
+
+test("stream API rejects transports without streaming support", () => {
+  const client = createAlexClient({ invoke: async () => ({}) });
+  assert.throws(() => client.stream("model.generate"), { code: "STREAMS_UNAVAILABLE" });
+});
+
 test("event subscriptions can be removed", () => {
   const listeners = new Map();
   const client = createAlexClient({

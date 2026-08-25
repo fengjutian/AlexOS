@@ -384,6 +384,7 @@ export interface AlexClient {
   };
   readonly runtime: {
     invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
+    stream(method: string, params?: unknown, options?: StreamOptions): AsyncIterable<Uint8Array>;
     status(options?: InvokeOptions): Promise<RuntimeStatus>;
     restart(options?: InvokeOptions): Promise<RuntimeStatus>;
     cancel(requestId: string, options?: InvokeOptions): Promise<{ cancelled: boolean }>;

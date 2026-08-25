@@ -9,4 +9,5 @@ mod filesystem;
 mod process_net;
 mod runtime;
 mod storage;
+mod stream;
 mod system;

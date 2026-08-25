@@ -127,6 +127,54 @@ pub mod windows {
               window.ipc.postMessage(JSON.stringify(request));
             });
           },
+          stream(method, params = {}, options = {}) {
+            const creditBytes = options.creditBytes ?? 65536;
+            if (!Number.isSafeInteger(creditBytes) || creditBytes <= 0) {
+              throw new TypeError("creditBytes must be a positive safe integer");
+            }
+            return {
+              async *[Symbol.asyncIterator]() {
+                const opened = await window.alex.invoke(method, params, options);
+                const streamId = opened?.streamId;
+                if (typeof streamId !== "string" || streamId.length === 0) {
+                  throw { code: "INVALID_RESPONSE", message: "stream method omitted streamId" };
+                }
+                let terminal = false;
+                const abort = () => window.alex.invoke("stream.cancel", {
+                  streamId,
+                  reason: "aborted"
+                }).catch(() => {});
+                options.signal?.addEventListener("abort", abort, { once: true });
+                try {
+                  await window.alex.invoke("stream.credit", { streamId, bytes: creditBytes });
+                  while (true) {
+                    if (options.signal?.aborted) throw { code: "ABORTED", message: "stream aborted" };
+                    const next = await window.alex.invoke("stream.read", { streamId });
+                    if (typeof next.dataBase64 === "string") {
+                      yield next.dataBase64;
+                      await window.alex.invoke("stream.credit", { streamId, bytes: next.bytes });
+                      continue;
+                    }
+                    if (next.terminal) {
+                      terminal = true;
+                      if (next.terminal.kind === "failed") throw next.terminal.error;
+                      if (next.terminal.kind === "cancelled") {
+                        throw { code: "ABORTED", message: next.terminal.reason || "stream cancelled" };
+                      }
+                      return;
+                    }
+                    await new Promise(resolve => setTimeout(resolve, 10));
+                  }
+                } finally {
+                  options.signal?.removeEventListener("abort", abort);
+                  if (!terminal) await window.alex.invoke("stream.cancel", {
+                    streamId,
+                    reason: "consumer-closed"
+                  }).catch(() => {});
+                }
+              }
+            };
+          },
           on(event, listener) {
             if (typeof event !== "string" || typeof listener !== "function") {
               throw new TypeError("alex.on requires an event name and listener");

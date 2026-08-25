@@ -83,6 +83,52 @@ impl RuntimeClient {
             ),
         }
     }
+
+    pub(crate) fn stream_credit(
+        &self,
+        stream_id: &str,
+        bytes: usize,
+    ) -> Option<Result<Value, RuntimeError>> {
+        match self {
+            Self::Local(_) => None,
+            Self::Daemon(client) => Some(client.command(
+                &client.next_request_id("stream-credit"),
+                ControlCommand::StreamCredit {
+                    stream_id: stream_id.into(),
+                    bytes,
+                },
+            )),
+        }
+    }
+
+    pub(crate) fn stream_read(&self, stream_id: &str) -> Option<Result<Value, RuntimeError>> {
+        match self {
+            Self::Local(_) => None,
+            Self::Daemon(client) => Some(client.command(
+                &client.next_request_id("stream-read"),
+                ControlCommand::StreamRead {
+                    stream_id: stream_id.into(),
+                },
+            )),
+        }
+    }
+
+    pub(crate) fn stream_cancel(
+        &self,
+        stream_id: &str,
+        reason: &str,
+    ) -> Option<Result<Value, RuntimeError>> {
+        match self {
+            Self::Local(_) => None,
+            Self::Daemon(client) => Some(client.command(
+                &client.next_request_id("stream-cancel"),
+                ControlCommand::StreamCancel {
+                    stream_id: stream_id.into(),
+                    reason: reason.into(),
+                },
+            )),
+        }
+    }
 }
 
 pub(crate) struct DaemonRuntimeClient {
