@@ -77,8 +77,9 @@ nav_order: 4
 - [已完成基础] Restricted Token 原语（`create_restricted_token`：`CreateRestrictedToken` +
   `DISABLE_MAX_PRIVILEGE` + `WinRestrictedCodeSid`）与保留 stdio 的受管 spawn
   （`spawn_restricted_with_stdio`：匿名管道 + `STARTF_USESTDHANDLES` + `CreateProcessAsUserW`，
-  测试证明受限令牌子进程可正常产出 stdout）；接入 0.1 supervisor 的 `RuntimeProcess` I/O 重构仍待做；
-- [未做] Restricted Token + Job Object + ACL 三者在 0.1 service 启动路径的最终接线；
+  真实 Windows 测试证明受限令牌子进程可正常产出 stdout）；
+- [未做] `RuntimeProcess` I/O 重构（`Child` → `ManagedChild` raw-handle 抽象）与
+  `ALEX_RESTRICT_BACKENDS` 接线——受限 spawn 已就绪，缺 supervisor 侧适配；
 - [未做] backend 文件、进程和网络策略强制执行（当前为「声明即拒绝」，未到「声明即强制」）；
 - [未做] 权限撤销与审计覆盖实际服务进程。
 

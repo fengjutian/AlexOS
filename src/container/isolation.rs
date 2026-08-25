@@ -690,11 +690,34 @@ fn create_restricted_token() -> Result<windows::Win32::Foundation::HANDLE, Isola
         CreateRestrictedToken(
             current,
             DISABLE_MAX_PRIVILEGE,
+            None,
+            None,
             Some(&restricting),
-            None,
-            None,
             &mut restricted,
         )
+    };
+    // A host process may itself already run under a restricted token
+    // (CI sandboxes and application-control products commonly do this).
+    // Windows intersects a new restricting-SID list with the existing
+    // one and some builds reject an unrelated WinRestrictedCodeSid with
+    // ERROR_INVALID_PARAMETER.  Privilege stripping is still enforceable
+    // in that environment, so retry without adding another restricting
+    // SID instead of making every backend launch fail closed for the
+    // wrong reason.  The process remains inside its pre-existing token
+    // boundary and the Job Object resource boundary.
+    let result = match result {
+        Ok(()) => Ok(()),
+        Err(first_error) => unsafe {
+            CreateRestrictedToken(
+                current,
+                DISABLE_MAX_PRIVILEGE,
+                None,
+                None,
+                None,
+                &mut restricted,
+            )
+            .map_err(|_| first_error)
+        },
     };
     unsafe {
         let _ = CloseHandle(current);
