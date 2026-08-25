@@ -30,6 +30,7 @@
     "@types/node": "latest",
     "eslint": "latest",
     "prettier": "latest",
+    "tsx": "latest",
     "typescript": "latest",
     "typescript-eslint": "latest"
   }
