@@ -11,6 +11,22 @@ nav_order: 5
 Agent Runtime 和 MCP 市场。产品范围以 [`product-requirements.md`](./product-requirements.md) 为准，
 当前事实以 [`status.md`](./status.md) 为准；本文描述目标实现、迁移顺序和验收门禁。
 
+> **2026-08-25 实施进度快照**（不替换阶段描述，仅反映代码现状；细节以 [`status.md`](./status.md) 为准）：
+>
+> | 阶段 | 状态 | 备注 |
+> | --- | --- | --- |
+> | 阶段一 统一 Manifest v1/v2 | 已落地 | `src/core/manifest.rs` + `manifest_v2.rs` + `application_manifest.rs`；`ResolvedApplication` 统一执行模型 |
+> | 阶段二 多服务编排 | 已落地 | `src/runtime/application_supervisor.rs` 按 DAG layer 启动、失败回滚、反向停止；generation 防旧任务写回 |
+> | 阶段三 Daemon 唯一控制面 | 部分落地 | `src/daemon/` Named Pipe + 共享 supervisor + desired/observed 原子持久化已 wired；跨账户 CI 拒绝、孤儿回收显式 E2E 待补 |
+> | 阶段四 流式 IPC / 取消 / 背压 | 部分落地 | `runtime_handle_multiplexes_and_cancels_without_killing_backend` 验证 service 后端多请求并发；流式 envelope / credit window / Event 通道未做 |
+> | 阶段五 Secret Store | 未开始 | `src/` 当前无 `secrets/` 模块；model.secretSet/secretDelete/secretExists 已有 API 形状，未接 DPAPI |
+> | 阶段六 远程 Model Provider | 部分落地 | `src/model/remote.rs` + `src/api/router/handlers/mcp_model.rs`；`model.list / generate / embed / cancel` 已 wired；`providers` 注册 CRUD 部分实现 |
+> | 阶段七 MCP Client / ConnectionManager | 已落地 | `src/mcp/`（mod.rs + oauth.rs）：initialize / ping / tools / resources / prompts / notifications / subscribe / health / presentInput / OAuth loopback / token refresh |
+> | 阶段八 MCP 权限与审计 | 部分落地 | Manifest 声明 + `mcp.use` 权限 + `mcp.audit` 已 wired；always-ask 工具调用哈希与运行时撤销未做 |
+> | 阶段九 本地模型管理与推理 Worker | 未开始 | `src/model/` 当前以 remote 为主；本地 worker 协议见 [`model-worker-protocol.md`](./model-worker-protocol.md) 但 Runtime Provider 未实现 |
+> | 阶段十 Agent Runtime | 部分落地 | `src/agent/`：create/start/pause/resume/cancel/approve/deny/status/list/history/timeline + checkpoint + 恢复 + agent_checkpoints 测试；预算、幂等键、tool 注入防护未做 |
+> | 阶段十一 Alex MCP Server + Registry | 未开始 | 无 `src/registry/` 模块 |
+
 ## 1. 设计原则
 
 1. `alexd` 是应用、服务、模型、MCP 和 Agent 状态的唯一所有者。

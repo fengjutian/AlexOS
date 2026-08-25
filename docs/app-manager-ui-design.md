@@ -6,9 +6,16 @@ nav_order: 7
 
 # Alex OS 应用管理 UI 设计
 
-状态：设计提案  
+状态：设计提案（已部分实现，2026-08-25 修订）  
 适用版本：Alex OS 0.1.x 原型  
 优先级：P0
+
+> **2026-08-25 修订说明**：本设计提案 §2 "当前基础与缺口"表反映的是 0.1 早期未补 Manager plugin
+> 前的状态。`com.alex.manager` plugin 自举闭环（见 [`reverse-ipc.md` §7](./reverse-ipc.md)）已
+> 落地：`alex manager` 在检测到 `com.alex.manager` plugin 已安装时走 plugin 路径，提供已安装
+> 应用列表、扩展点、Runtime 状态（`AppSummary.runtime` 快照）和卸载按钮。AI Runtime overview
+> UI 已并入 Manager plugin 前端（最近 commit `969087b`）。下表 §2 的"未实现"标注按
+> 2026-08-25 已部分补齐；设计目标（多窗口、设置页、安装摘要、诊断导出）仍属 P0 缺口。
 
 ## 1. 目标与定位
 

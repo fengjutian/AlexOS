@@ -6,8 +6,16 @@ nav_order: 5
 
 # Reverse IPC — plugin backend → host 协议
 
-> 0.1 已实现。文档记录 wire format、host 端与 backend 端的契约,
-> 以及自托管 plugin(替换内置 `alex manager`)如何用这条通道做 system.* 调用。
+> 2026-08-25 修订：协议层 (`src/core/plugin.rs::run_unified_dispatch` + `parse_host_call`) 0.1
+> 仍按本文描述运作 — `hostCall` / `hostResponse` wire format、headless 自动 grant、
+> self-hosting 全景未变。§8 "已知限制" 中"0.1 不做并发 / 不做 stream / 不做 hostEvent"
+> 仍正确（hostCall 在 `src/core/plugin.rs` 内串行处理；并发指 service backend 方向，
+> 见 [`status.md` §2.4](./status.md)）；`hostEvent` 方向仍未做。MCP 方向的 stream /
+> subscription 不在本协议范围，见 [`mcp-runtime.md`](./mcp-runtime.md) 与
+> `src/mcp/mod.rs::listen`。
+
+0.1 已实现。文档记录 wire format、host 端与 backend 端的契约,
+以及自托管 plugin(替换内置 `alex manager`)如何用这条通道做 system.* 调用。
 
 ## 1. 为什么需要 reverse IPC
 

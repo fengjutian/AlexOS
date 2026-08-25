@@ -132,6 +132,13 @@ Created → Starting → Running → Ready → Stopping → Stopped
 
 ## 5. L1：Windows Job Object
 
+> **2026-08-25 状态**：L1 核心已落地。`src/container/isolation.rs` 实现 `WindowsJobProvider`，
+> 用 `CreateJobObjectW` + `AssignProcessToJobObject` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` +
+> RAII `Drop` 在 `IsolationHandle` 释放时回收整棵进程树；测试
+> `container::isolation::tests::job_provider_kills_process_on_handle_drop` 与
+> `container::service::tests::container_start_routes_through_isolation_provider_and_stops` 通过。
+> 资源硬上限（CPU / 内存 / 进程数）与 Completion Port 事件流仍属 §13 阶段 B 后续工作。
+
 新增目录：
 
 ```text

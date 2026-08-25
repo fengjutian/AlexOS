@@ -1,5 +1,9 @@
 # Local Model Worker Protocol v1
 
+> 2026-08-25 修订：本文是 worker ↔ alexd 协议规范 v1。Runtime Provider 阶段（阶段九，参见
+> [`ai-runtime-implementation.md`](./ai-runtime-implementation.md)）尚未实现；`src/model/`
+> 当前以 `remote.rs` 远程 provider 为主，本地 worker 适配器未起。规范本身保持稳定。
+
 Alex Runtime does not load inference libraries into the Shell or Daemon. A model
 engine is hosted by a dedicated worker process and communicates with `alexd`
 using newline-delimited JSON on stdin/stdout. Worker logs must use stderr.

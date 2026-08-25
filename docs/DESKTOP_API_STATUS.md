@@ -4,7 +4,11 @@ title: Desktop API 状态
 nav_order: 6
 ---
 
-# Desktop API status (2026-08-24)
+# Desktop API status (2026-08-25 修订)
+
+> 2026-08-25 修订：`src/` 96 个 `.rs` 文件，`cargo test -p alex --lib` 335/335 passed。
+> 本文档按"fully wired / in-registry-but-not-wired / planned"分类，每条对应 `src/api/router/handlers/`
+> 下的具体模块；与 [`status.md` §2.5](./status.md) 中文总览保持一致，差异应通过 CI 失败暴露。
 
 `system.capabilities` 是运行时能力的唯一权威来源。`capabilities` 使用与 IPC/SDK
 完全相同的方法名；`experimental` 表示请求可以被解析，但不应作为生产能力依赖。

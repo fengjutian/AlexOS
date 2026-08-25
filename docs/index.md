@@ -92,4 +92,6 @@ nav_order: 1
 - **README.md**（仓库根）— 用户面安装与运行说明，与本目录的"项目级设计文档"分工明确。
 - **ADR** — 重大架构决策的取舍记录将在 `docs/adr/` 下单独组织（待建）。
 
-最后更新：2026-08-22（拆分 `status-and-roadmap.md`，建立本文档索引）
+最后更新：2026-08-25（按 `src/` 当前代码基线同步 status / roadmap / architecture /
+product-requirements / ai-runtime-implementation / app-manager-ui-design / alex-container-design
+顶部与 §关键章节；2026-08-22 拆分的 `status-and-roadmap.md` 索引保持）

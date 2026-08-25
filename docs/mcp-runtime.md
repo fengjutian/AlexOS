@@ -1,5 +1,11 @@
 # MCP Runtime product flow
 
+> 2026-08-25 修订：本文是产品流程规范。`src/mcp/` 当前实现覆盖 initialize / ping / tools /
+> resources / prompts / notifications / subscriptions-listen / health / presentInput / OAuth
+> 2.1 loopback（begin / complete / loopback / token refresh）；具体 wired 状态以
+> [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) 与 [`status.md`](./status.md) 为准。
+> 未实现的能力（如运行中撤销已有调用、Server 端调用绑定哈希复用）以本文"完成标准"为门禁。
+
 Alexd owns MCP connections, OAuth tokens, health state, MRTR input requests and audit records. Applications use the typed Desktop API and never receive refresh tokens or direct access to the platform secret store.
 
 ## Native MRTR
