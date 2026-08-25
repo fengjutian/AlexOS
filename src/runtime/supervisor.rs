@@ -510,7 +510,9 @@ impl RuntimeHandle {
             Ok(Ok(value)) => Ok(value),
             Ok(Err(message)) => Err(RuntimeError::Protocol(message)),
             Err(mpsc::RecvTimeoutError::Timeout) => {
-                let _ = self.sender.send(RuntimeCommand::CancelRequest { id: id.into() });
+                let _ = self
+                    .sender
+                    .send(RuntimeCommand::CancelRequest { id: id.into() });
                 Err(RuntimeError::Timeout(timeout))
             }
             Err(mpsc::RecvTimeoutError::Disconnected) => {
@@ -715,7 +717,13 @@ fn runtime_manager(
                     endpoint = new_endpoint;
                     restart_count += 1;
                     last_error = None;
-                    Ok(snapshot(&process, &endpoint, restart_count, &last_error, &logs))
+                    Ok(snapshot(
+                        &process,
+                        &endpoint,
+                        restart_count,
+                        &last_error,
+                        &logs,
+                    ))
                 })
                 .map_err(|error| {
                     current_pid.store(0, Ordering::Release);
@@ -1077,12 +1085,14 @@ impl RuntimeProcess {
         if self.rpc.is_some() {
             return Ok(());
         }
-        let stdin = self.stdin.take().ok_or_else(|| {
-            RuntimeError::Protocol("runtime stdin is unavailable".into())
-        })?;
-        let mut stdout = self.stdout.take().ok_or_else(|| {
-            RuntimeError::Protocol("runtime stdout is unavailable".into())
-        })?;
+        let stdin = self
+            .stdin
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("runtime stdin is unavailable".into()))?;
+        let mut stdout = self
+            .stdout
+            .take()
+            .ok_or_else(|| RuntimeError::Protocol("runtime stdout is unavailable".into()))?;
         let pending = Arc::new(Mutex::new(HashMap::<String, PendingResponse>::new()));
         let pending_for_reader = Arc::clone(&pending);
         thread::Builder::new()
@@ -1141,7 +1151,9 @@ impl RuntimeProcess {
             ));
         }
         if let Some(status) = self.child.try_wait()? {
-            return Err(RuntimeError::Protocol(format!("runtime already exited with {status}")));
+            return Err(RuntimeError::Protocol(format!(
+                "runtime already exited with {status}"
+            )));
         }
         if self.rpc.is_none() {
             self.enable_rpc_multiplexing()?;
@@ -1153,16 +1165,24 @@ impl RuntimeProcess {
                 RuntimeError::Protocol("runtime pending request lock poisoned".into())
             })?;
             if pending.insert(id.to_string(), tx).is_some() {
-                return Err(RuntimeError::Protocol(format!("duplicate runtime request id: {id}")));
+                return Err(RuntimeError::Protocol(format!(
+                    "duplicate runtime request id: {id}"
+                )));
             }
         }
         let write_result = (|| -> Result<(), RuntimeError> {
-            let mut stdin = rpc.writer.lock().map_err(|_| {
-                RuntimeError::Protocol("runtime stdin lock poisoned".into())
-            })?;
+            let mut stdin = rpc
+                .writer
+                .lock()
+                .map_err(|_| RuntimeError::Protocol("runtime stdin lock poisoned".into()))?;
             serde_json::to_writer(
                 &mut *stdin,
-                &BackendRequest { protocol: 1, id, method, params },
+                &BackendRequest {
+                    protocol: 1,
+                    id,
+                    method,
+                    params,
+                },
             )
             .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
             stdin.write_all(b"\n")?;
@@ -1179,18 +1199,24 @@ impl RuntimeProcess {
     }
 
     fn cancel_request(&mut self, id: &str) -> Result<(), RuntimeError> {
-        let Some(rpc) = &self.rpc else { return Ok(()); };
+        let Some(rpc) = &self.rpc else {
+            return Ok(());
+        };
         if let Ok(mut pending) = rpc.pending.lock()
             && let Some(sender) = pending.remove(id)
         {
             let _ = sender.send(Err("request cancelled".into()));
         }
-        let mut stdin = rpc.writer.lock().map_err(|_| {
-            RuntimeError::Protocol("runtime stdin lock poisoned".into())
-        })?;
-        serde_json::to_writer(&mut *stdin, &serde_json::json!({
-            "protocol": 1, "type": "cancel", "id": id
-        }))
+        let mut stdin = rpc
+            .writer
+            .lock()
+            .map_err(|_| RuntimeError::Protocol("runtime stdin lock poisoned".into()))?;
+        serde_json::to_writer(
+            &mut *stdin,
+            &serde_json::json!({
+                "protocol": 1, "type": "cancel", "id": id
+            }),
+        )
         .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
         stdin.write_all(b"\n")?;
         stdin.flush()?;
@@ -2144,7 +2170,10 @@ mod service_runtime_tests {
             .expect("fast request succeeds while slow request is pending");
         assert_eq!(fast["marker"], "fast");
         assert!(started.elapsed() < Duration::from_millis(200));
-        assert_eq!(slow.join().expect("slow thread").expect("slow result")["marker"], "slow");
+        assert_eq!(
+            slow.join().expect("slow thread").expect("slow result")["marker"],
+            "slow"
+        );
 
         let timeout = handle.invoke(
             "hang",
