@@ -7,7 +7,8 @@ manifest.
 
 ```powershell
 # From the repository root. On the first run Alex installs missing frontend
-# dependencies, starts Vite, waits for it to become ready, then opens WebView.
+# and backend dependencies, starts `tsc --watch` and Vite, waits for Vite to
+# become ready, then opens WebView.
 cargo run -- validate examples/ai-coding-agent
 cargo run -- dev examples/ai-coding-agent
 
