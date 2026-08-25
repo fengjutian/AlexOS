@@ -1,0 +1,114 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="utf-8" />
+    <title>Alex OS App Manager</title>
+    <link rel="stylesheet" href="/manager_app.css" />
+  </head>
+  <body>
+    <header class="topbar">
+      <h1>App Manager</h1>
+      <div class="topbar-actions">
+        <input
+          type="search"
+          id="search"
+          placeholder="Filter by id, name, or service"
+          aria-label="Filter apps"
+        />
+        <button id="install-btn" type="button" class="primary">+ Install .alex</button>
+        <input type="file" id="install-file" accept=".alex" hidden />
+      </div>
+    </header>
+
+    <main>
+      <section id="list-view">
+        <div id="empty-state" class="empty-state" hidden>
+          <p>No installed applications.</p>
+          <p class="muted">Click <strong>+ Install .alex</strong> to add one.</p>
+        </div>
+        <table id="app-table" class="app-table" hidden>
+          <thead>
+            <tr>
+              <th scope="col">Name</th>
+              <th scope="col">Version</th>
+              <th scope="col">State</th>
+              <th scope="col">Source</th>
+              <th scope="col">Signature</th>
+              <th scope="col" class="actions-col">Actions</th>
+            </tr>
+          </thead>
+          <tbody id="app-tbody"></tbody>
+        </table>
+        <div id="list-error" class="error" hidden></div>
+      </section>
+
+      <section id="detail-view" hidden>
+        <button class="back-btn" id="back-btn" type="button">← All apps</button>
+        <header class="detail-header">
+          <div>
+            <h2 id="detail-name"></h2>
+            <p class="muted">
+              <code id="detail-id"></code>
+              <span class="dot">·</span>
+              <span id="detail-version"></span>
+              <span class="dot">·</span>
+              <span id="detail-source"></span>
+            </p>
+            <p id="detail-description" class="muted" hidden></p>
+            <p class="muted small">
+              <span id="detail-path"></span>
+              <span id="detail-last-launched" hidden></span>
+            </p>
+          </div>
+          <div class="detail-meta">
+            <div class="badge" id="detail-signature"></div>
+            <div class="badge" id="detail-runtime"></div>
+          </div>
+        </header>
+
+        <div class="detail-actions">
+          <button type="button" data-action="launch">Launch</button>
+          <button type="button" data-action="stop">Stop</button>
+          <button type="button" data-action="restart">Restart</button>
+          <button type="button" class="danger" data-action="uninstall">Uninstall</button>
+        </div>
+
+        <section class="panel" aria-labelledby="services-heading">
+          <h2 id="services-heading">Services</h2>
+          <div id="services" class="services-list"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="permissions-heading">
+          <h2 id="permissions-heading">Permissions</h2>
+          <div id="permissions" class="permissions-list"></div>
+        </section>
+
+        <section class="panel" aria-labelledby="logs-heading">
+          <h2 id="logs-heading">Recent logs (tail)</h2>
+          <pre id="logs" class="logs" aria-live="polite"></pre>
+        </section>
+      </section>
+    </main>
+
+    <div
+      id="toast"
+      class="toast"
+      role="status"
+      aria-live="polite"
+      hidden
+    ></div>
+    <div id="modal" class="modal" hidden role="dialog" aria-modal="true">
+      <div class="modal-body">
+        <p id="modal-message"></p>
+        <div class="modal-actions">
+          <button type="button" id="modal-cancel">Cancel</button>
+          <button type="button" id="modal-confirm" class="danger">
+            Confirm
+          </button>
+        </div>
+      </div>
+    </div>
+
+    <script src="/manager_app.js"></script>
+  </body>
+</html>

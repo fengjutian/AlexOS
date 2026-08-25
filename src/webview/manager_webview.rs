@@ -68,6 +68,14 @@ const BRIDGE: &str = r#"
   })();
 "#;
 
+// Built-in App Manager assets. The real UI is `manager_app.html` (a
+// single-page list + detail view that drives the per-service
+// `manager.*` IPC surface); the `manager_placeholder.html` page is
+// kept as a backwards-compatible route at `/placeholder` for any
+// saved bookmark from the Phase 1.4 placeholder era.
+const APP_HTML: &str = include_str!("manager_app.html");
+const APP_CSS: &str = include_str!("manager_app.css");
+const APP_JS: &str = include_str!("manager_app.js");
 const PLACEHOLDER_HTML: &str = include_str!("manager_placeholder.html");
 const PLACEHOLDER_CSS: &str = include_str!("manager_placeholder.css");
 
@@ -147,19 +155,50 @@ fn serve_system_asset(uri_path: &str) -> HttpResponse<std::borrow::Cow<'static, 
     // The manager WebView is loaded at `alex://system/app-manager/`,
     // so every asset path arrives prefixed with `/app-manager/`.
     // Strip that prefix so the rest of the routing uses the bare
-    // asset paths declared in the placeholder HTML.
-    let stripped = uri_path
+    // asset paths declared in the manager HTML.
+    let without_prefix = uri_path
         .strip_prefix("/app-manager/")
         .or_else(|| uri_path.strip_prefix("/app-manager"))
         .unwrap_or(uri_path);
-    let stripped = if stripped.is_empty() { "/" } else { stripped };
+    // Re-add a leading `/` so the bare routes below can use the
+    // same shape whether the caller passed the prefix or not.
+    // (`/app-manager/manager_app.js` and `/manager_app.js` both
+    // arrive here as `manager_app.js` after stripping, so we
+    // can't distinguish them at this point — but neither can
+    // the rest of the routing, and the asset paths are the
+    // same either way.)
+    let stripped = if without_prefix.is_empty() || without_prefix.starts_with('/') {
+        if without_prefix.is_empty() { "/".to_owned() } else { without_prefix.to_owned() }
+    } else {
+        format!("/{without_prefix}")
+    };
+    // Real App Manager UI (Phase 1.5) — the index, its stylesheet,
+    // and its app script. Served with the same restricted CSP as the
+    // main shell so a future system page that does call out to a
+    // service still passes the policy.
     if stripped == "/" {
         return response(
             200,
             "text/html; charset=utf-8",
-            PLACEHOLDER_HTML.as_bytes().to_vec(),
+            APP_HTML.as_bytes().to_vec(),
         );
     }
+    if stripped == "/manager_app.css" {
+        return response(
+            200,
+            "text/css; charset=utf-8",
+            APP_CSS.as_bytes().to_vec(),
+        );
+    }
+    if stripped == "/manager_app.js" {
+        return response(
+            200,
+            "application/javascript; charset=utf-8",
+            APP_JS.as_bytes().to_vec(),
+        );
+    }
+    // Backwards-compatible route for any saved bookmark from the
+    // Phase 1.4 placeholder era. New code should not depend on this.
     if stripped == "/placeholder" {
         return response(
             200,
@@ -202,3 +241,103 @@ fn response(
 // Anchor AppManifest so the path stays used even before Phase 1.5.
 #[allow(dead_code)]
 fn _manifest_anchor(_: &Path, _: AppManifest) {}
+
+#[cfg(test)]
+mod route_tests {
+    //! Route-level coverage for `serve_system_asset`. We can't easily
+    //! exercise the WebView itself without a window, but the helper is
+    //! a pure string-to-response function so a unit test is enough to
+    //! catch "renamed a file, forgot to update the route" regressions.
+    use super::{APP_CSS, APP_HTML, APP_JS, PLACEHOLDER_CSS, PLACEHOLDER_HTML};
+    use wry::http::header::CONTENT_TYPE;
+
+    fn body_and_type(path: &str) -> (u16, String, Vec<u8>) {
+        let response = super::serve_system_asset(path);
+        let status = response.status().as_u16();
+        let content_type = response
+            .headers()
+            .get(CONTENT_TYPE)
+            .map(|value| value.to_str().unwrap_or("").to_owned())
+            .unwrap_or_default();
+        let body = response.body().to_vec();
+        (status, content_type, body)
+    }
+
+    #[test]
+    fn index_serves_real_manager_app_html() {
+        let (status, content_type, body) = body_and_type("/");
+        assert_eq!(status, 200);
+        assert!(content_type.starts_with("text/html"));
+        // The real UI must be the served page, not the placeholder.
+        assert!(body.starts_with(b"<!doctype html>"));
+        assert!(body.windows(APP_HTML.len()).any(|window| window == APP_HTML.as_bytes()));
+    }
+
+    #[test]
+    fn manager_app_css_route() {
+        let (status, content_type, body) = body_and_type("/manager_app.css");
+        assert_eq!(status, 200);
+        assert!(content_type.starts_with("text/css"));
+        assert!(!body.is_empty());
+        assert_eq!(body, APP_CSS.as_bytes());
+    }
+
+    #[test]
+    fn manager_app_js_route() {
+        let (status, content_type, body) = body_and_type("/manager_app.js");
+        assert_eq!(status, 200);
+        assert!(content_type.starts_with("application/javascript"));
+        assert!(!body.is_empty());
+        assert_eq!(body, APP_JS.as_bytes());
+    }
+
+    #[test]
+    fn placeholder_route_still_serves_legacy_html() {
+        let (status, content_type, body) = body_and_type("/placeholder");
+        assert_eq!(status, 200);
+        assert!(content_type.starts_with("text/html"));
+        assert_eq!(body, PLACEHOLDER_HTML.as_bytes());
+    }
+
+    #[test]
+    fn placeholder_css_route_still_serves_legacy_stylesheet() {
+        let (status, content_type, body) = body_and_type("/manager_placeholder.css");
+        assert_eq!(status, 200);
+        assert!(content_type.starts_with("text/css"));
+        assert_eq!(body, PLACEHOLDER_CSS.as_bytes());
+    }
+
+    #[test]
+    fn unknown_route_returns_404() {
+        let (status, content_type, _body) = body_and_type("/nope.txt");
+        assert_eq!(status, 404);
+        assert!(content_type.starts_with("text/plain"));
+    }
+
+    #[test]
+    fn app_manager_url_prefix_is_stripped() {
+        // Wry sometimes reports the request URI with the manager
+        // prefix still attached (`/app-manager/...`). Stripping
+        // should be transparent — same status, same body.
+        let (status, _, body) = body_and_type("/app-manager/manager_app.js");
+        assert_eq!(status, 200);
+        assert_eq!(body, APP_JS.as_bytes());
+    }
+
+    #[test]
+    fn assets_contain_expected_landing_marks() {
+        // Regression guard against a future edit that strips the
+        // bridge or the per-service controls out of the bundled
+        // HTML/JS. The UI is the user-facing surface; the test
+        // only needs to know the high-level shape.
+        let html = APP_HTML;
+        assert!(html.contains("App Manager"), "asset html missing app manager title");
+        assert!(html.contains("manager_app.js"));
+        assert!(html.contains("manager_app.css"));
+        let js = APP_JS;
+        assert!(js.contains("manager.list_apps"));
+        assert!(js.contains("manager.list_services"));
+        assert!(js.contains("manager.set_permission"));
+        assert!(js.contains("file.path")); // WebView2 path accessor
+    }
+}
