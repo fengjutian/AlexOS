@@ -119,7 +119,7 @@ fn project_v2_for_dev(manifest: ApplicationManifest) -> AppManifest {
         .frontend()
         .map(|frontend| frontend.entry)
         .unwrap_or_default();
-    let backend = services.first().map(service_to_backend);
+    let backend = services.first().cloned().map(service_to_backend);
     let permissions: Vec<Permission> = manifest
         .permissions()
         .into_iter()
