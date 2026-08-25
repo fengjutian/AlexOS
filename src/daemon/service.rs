@@ -82,6 +82,13 @@ impl DaemonService {
                 self.service_status(&app_id, &service)
             }
             ControlCommand::ListServices { app_id } => self.list_services(&app_id),
+            ControlCommand::InvokeService {
+                app_id,
+                service,
+                method,
+                arguments,
+                timeout_ms,
+            } => self.invoke_service(&id, &app_id, &service, &method, &arguments, timeout_ms),
         };
         match result {
             Ok(value) => ControlResponse::success(id, value),
@@ -469,6 +476,36 @@ impl DaemonService {
             .map_err(|error| error.to_string())
     }
 
+    fn invoke_service(
+        &self,
+        request_id: &str,
+        app_id: &str,
+        service: &str,
+        method: &str,
+        arguments: &serde_json::Value,
+        timeout_ms: u64,
+    ) -> Result<serde_json::Value, String> {
+        if app_id.trim().is_empty() {
+            return Err("appId must not be empty".into());
+        }
+        if service.trim().is_empty() {
+            return Err("service must not be empty".into());
+        }
+        if method.trim().is_empty() {
+            return Err("method must not be empty".into());
+        }
+        if !(1..=30_000).contains(&timeout_ms) {
+            return Err("timeoutMs must be between 1 and 30000".into());
+        }
+        let manager = self
+            .manager
+            .as_ref()
+            .ok_or_else(|| "runtime manager is not configured".to_owned())?;
+        manager
+            .invoke_service(app_id, service, request_id, method, arguments, timeout_ms)
+            .map_err(|error| error.to_string())
+    }
+
     fn set_desired(
         &self,
         app_id: &str,
@@ -828,6 +865,7 @@ mod tests {
         RestartService(String, String),
         ServiceStatus(String, String),
         ListServices(String),
+        InvokeService(String, String, String, String, serde_json::Value, u64),
     }
 
     struct StubManager {
@@ -963,6 +1001,25 @@ mod tests {
                 .push(StubCall::ListServices(id.into()));
             Ok(Vec::new())
         }
+        fn invoke_service(
+            &self,
+            id: &str,
+            service: &str,
+            request_id: &str,
+            method: &str,
+            params: &serde_json::Value,
+            timeout_ms: u64,
+        ) -> Result<serde_json::Value, ManagerError> {
+            self.calls.lock().unwrap().push(StubCall::InvokeService(
+                id.into(),
+                service.into(),
+                request_id.into(),
+                method.into(),
+                params.clone(),
+                timeout_ms,
+            ));
+            Ok(json!({ "echo": params }))
+        }
         fn permissions(&self, _id: &str) -> Result<Vec<PermissionState>, ManagerError> {
             Ok(Vec::new())
         }
@@ -1050,6 +1107,49 @@ mod tests {
             stub.snapshot(),
             vec![StubCall::ListServices("com.example.api".into())]
         );
+    }
+
+    #[test]
+    fn invoke_service_dispatches_to_manager_with_request_identity() {
+        let (_temp, service, stub) = service_with_stub();
+        let response = service.handle(request(ControlCommand::InvokeService {
+            app_id: "com.example.api".into(),
+            service: "worker".into(),
+            method: "generate".into(),
+            arguments: json!({ "prompt": "hello" }),
+            timeout_ms: 5_000,
+        }));
+        assert!(response.ok, "{:?}", response.error);
+        assert_eq!(
+            response.result,
+            Some(json!({ "echo": { "prompt": "hello" } }))
+        );
+        assert_eq!(
+            stub.snapshot(),
+            vec![StubCall::InvokeService(
+                "com.example.api".into(),
+                "worker".into(),
+                "test-1".into(),
+                "generate".into(),
+                json!({ "prompt": "hello" }),
+                5_000,
+            )]
+        );
+    }
+
+    #[test]
+    fn invoke_service_rejects_invalid_timeout_before_dispatch() {
+        let (_temp, service, stub) = service_with_stub();
+        let response = service.handle(request(ControlCommand::InvokeService {
+            app_id: "com.example.api".into(),
+            service: "main".into(),
+            method: "ping".into(),
+            arguments: serde_json::Value::Null,
+            timeout_ms: 0,
+        }));
+        assert!(!response.ok);
+        assert!(response.error.unwrap().contains("timeoutMs"));
+        assert!(stub.snapshot().is_empty());
     }
 
     #[test]

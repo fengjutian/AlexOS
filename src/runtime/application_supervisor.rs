@@ -1016,6 +1016,45 @@ impl ApplicationSupervisor {
             .collect())
     }
 
+    /// Invoke an RPC-mode service without transferring ownership of its
+    /// process handle to the caller. This is the data-plane bridge used by
+    /// alexd clients once the Daemon is the sole runtime owner.
+    pub fn invoke_service(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        request_id: &str,
+        method: &str,
+        params: &serde_json::Value,
+        timeout: Duration,
+    ) -> Result<serde_json::Value, ApplicationSupervisorError> {
+        let handle = {
+            let guard = self
+                .applications
+                .lock()
+                .expect("application supervisor lock poisoned");
+            let application = guard
+                .get(app_id)
+                .ok_or_else(|| ApplicationSupervisorError::NotFound(app_id.to_owned()))?;
+            let service = application.services.get(service_name).ok_or_else(|| {
+                ApplicationSupervisorError::ServiceNotFound {
+                    app: app_id.to_owned(),
+                    service: service_name.to_owned(),
+                }
+            })?;
+            service
+                .handle
+                .clone()
+                .ok_or_else(|| ApplicationSupervisorError::ServiceNotFound {
+                    app: app_id.to_owned(),
+                    service: service_name.to_owned(),
+                })?
+        };
+        handle
+            .invoke(request_id, method, params, timeout)
+            .map_err(ApplicationSupervisorError::Runtime)
+    }
+
     // -------------------------------------------------------------------
     // Phase 4 — watchdog hooks
     // -------------------------------------------------------------------

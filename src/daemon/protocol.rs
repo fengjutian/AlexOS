@@ -71,10 +71,28 @@ pub enum ControlCommand {
     ListServices {
         app_id: String,
     },
+    InvokeService {
+        app_id: String,
+        #[serde(default = "default_service_name")]
+        service: String,
+        method: String,
+        #[serde(default)]
+        arguments: Value,
+        #[serde(default = "default_invoke_timeout_ms")]
+        timeout_ms: u64,
+    },
 }
 
 fn default_log_limit() -> u32 {
     200
+}
+
+fn default_service_name() -> String {
+    "main".into()
+}
+
+fn default_invoke_timeout_ms() -> u64 {
+    30_000
 }
 
 /// Stable response envelope. Domain results remain JSON until the daemon
@@ -204,5 +222,30 @@ mod tests {
             assert_eq!(parsed, request);
             assert_eq!(parsed.command, command);
         }
+    }
+
+    #[test]
+    fn invoke_service_defaults_to_main_and_a_bounded_timeout() {
+        let request: ControlRequest = serde_json::from_value(serde_json::json!({
+            "protocol": 1,
+            "id": "invoke-1",
+            "command": {
+                "type": "invokeService",
+                "params": {
+                    "appId": "com.example.agent",
+                    "method": "chat",
+                    "arguments": { "message": "hello" }
+                }
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            request.command,
+            ControlCommand::InvokeService {
+                service,
+                timeout_ms: 30_000,
+                ..
+            } if service == "main"
+        ));
     }
 }

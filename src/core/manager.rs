@@ -19,7 +19,7 @@ use std::{
     io::Write,
     path::{Path, PathBuf},
     sync::Arc,
-    time::SystemTime,
+    time::{Duration, SystemTime},
 };
 
 use serde::{Deserialize, Serialize};
@@ -248,6 +248,19 @@ pub trait AppManager: Send + Sync {
         &self,
         id: &str,
     ) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, ManagerError>;
+    fn invoke_service(
+        &self,
+        _id: &str,
+        _service: &str,
+        _request_id: &str,
+        _method: &str,
+        _params: &serde_json::Value,
+        _timeout_ms: u64,
+    ) -> Result<serde_json::Value, ManagerError> {
+        Err(ManagerError::Runtime(
+            "service invocation is not supported by this manager".into(),
+        ))
+    }
     fn permissions(&self, id: &str) -> Result<Vec<PermissionState>, ManagerError>;
     fn set_permission(
         &self,
@@ -948,6 +961,20 @@ impl AppManager for LocalAppManager {
         summaries.sort_by(|a, b| a.name.cmp(&b.name));
         Ok(summaries)
     }
+
+    fn invoke_service(
+        &self,
+        id: &str,
+        service: &str,
+        request_id: &str,
+        method: &str,
+        params: &serde_json::Value,
+        timeout_ms: u64,
+    ) -> Result<serde_json::Value, ManagerError> {
+        self.runtimes
+            .invoke_service(id, service, request_id, method, params, timeout_ms)
+            .map_err(|error| ManagerError::Runtime(error.to_string()))
+    }
 }
 
 /// In-memory map of running app backends. Keyed by app id.
@@ -1167,6 +1194,27 @@ impl RuntimeSupervisor {
     ) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, SupervisorError> {
         self.inner
             .list_services(id)
+            .map_err(|error| SupervisorError::Supervisor(error.to_string()))
+    }
+
+    pub fn invoke_service(
+        &self,
+        id: &str,
+        service: &str,
+        request_id: &str,
+        method: &str,
+        params: &serde_json::Value,
+        timeout_ms: u64,
+    ) -> Result<serde_json::Value, SupervisorError> {
+        self.inner
+            .invoke_service(
+                id,
+                service,
+                request_id,
+                method,
+                params,
+                Duration::from_millis(timeout_ms.clamp(1, 30_000)),
+            )
             .map_err(|error| SupervisorError::Supervisor(error.to_string()))
     }
 
