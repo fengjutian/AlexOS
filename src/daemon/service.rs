@@ -554,6 +554,14 @@ impl DaemonService {
         headers: &BTreeMap<String, String>,
         body_base64: &str,
     ) -> Result<serde_json::Value, String> {
+        if !matches!(
+            method,
+            "GET" | "POST" | "PUT" | "PATCH" | "DELETE" | "HEAD" | "OPTIONS"
+        ) {
+            return Err(format!(
+                "HTTP method {method:?} is not allowed by the service proxy"
+            ));
+        }
         if !path.starts_with("/api/") || path.contains(['\r', '\n']) {
             return Err("proxy path must start with /api/ and contain no control lines".into());
         }
@@ -972,12 +980,23 @@ mod tests {
 
     struct StubManager {
         calls: std::sync::Mutex<Vec<StubCall>>,
+        endpoint: crate::runtime::ServiceEndpoint,
     }
 
     impl StubManager {
         fn new() -> Self {
             Self {
                 calls: std::sync::Mutex::new(Vec::new()),
+                endpoint: crate::runtime::ServiceEndpoint {
+                    port: 1,
+                    token: "private-runtime-token".into(),
+                },
+            }
+        }
+        fn with_endpoint(endpoint: crate::runtime::ServiceEndpoint) -> Self {
+            Self {
+                calls: std::sync::Mutex::new(Vec::new()),
+                endpoint,
             }
         }
         fn snapshot(&self) -> Vec<StubCall> {
@@ -1131,10 +1150,7 @@ mod tests {
                 .lock()
                 .unwrap()
                 .push(StubCall::ServiceEndpoint(id.into(), service.into()));
-            Ok(crate::runtime::ServiceEndpoint {
-                port: 1,
-                token: "private-runtime-token".into(),
-            })
+            Ok(self.endpoint.clone())
         }
         fn permissions(&self, _id: &str) -> Result<Vec<PermissionState>, ManagerError> {
             Ok(Vec::new())
@@ -1306,6 +1322,22 @@ mod tests {
     }
 
     #[test]
+    fn http_proxy_rejects_connect_before_endpoint_lookup() {
+        let (_temp, service, stub) = service_with_stub();
+        let response = service.handle(request(ControlCommand::ProxyServiceHttp {
+            app_id: "com.example.api".into(),
+            service: "main".into(),
+            method: "CONNECT".into(),
+            path: "/api/tunnel".into(),
+            headers: BTreeMap::new(),
+            body_base64: String::new(),
+        }));
+        assert!(!response.ok);
+        assert!(response.error.unwrap().contains("not allowed"));
+        assert!(stub.snapshot().is_empty());
+    }
+
+    #[test]
     fn http_proxy_returns_a_transport_safe_response_envelope() {
         let (_temp, service, stub) = service_with_stub();
         let response = service.handle(request(ControlCommand::ProxyServiceHttp {
@@ -1328,6 +1360,60 @@ mod tests {
                 "main".into()
             )]
         );
+    }
+
+    #[test]
+    fn http_proxy_injects_app_identity_and_private_token_into_real_backend() {
+        use std::io::{Read, Write};
+        use std::net::TcpListener;
+
+        let listener = TcpListener::bind(("127.0.0.1", 0)).unwrap();
+        let port = listener.local_addr().unwrap().port();
+        let backend = std::thread::spawn(move || {
+            let (mut stream, _) = listener.accept().unwrap();
+            let mut request = Vec::new();
+            let mut chunk = [0u8; 1024];
+            while !request.windows(4).any(|window| window == b"\r\n\r\n") {
+                let read = stream.read(&mut chunk).unwrap();
+                assert!(read > 0);
+                request.extend_from_slice(&chunk[..read]);
+            }
+            stream
+                .write_all(
+                    b"HTTP/1.0 201 Created\r\nContent-Type: application/octet-stream\r\nContent-Length: 3\r\n\r\n\x00\x01\xff",
+                )
+                .unwrap();
+            String::from_utf8(request).unwrap()
+        });
+
+        let temp = tempfile::tempdir().unwrap();
+        let store = DaemonStateStore::new(temp.path().join("state.json"));
+        let stub = Arc::new(StubManager::with_endpoint(
+            crate::runtime::ServiceEndpoint {
+                port,
+                token: "integration-private-token".into(),
+            },
+        ));
+        let service = DaemonService::new(store).with_manager(stub);
+        let response = service.handle(request(ControlCommand::ProxyServiceHttp {
+            app_id: "com.example.integration".into(),
+            service: "main".into(),
+            method: "GET".into(),
+            path: "/api/binary?version=1".into(),
+            headers: BTreeMap::from([("accept".into(), "application/octet-stream".into())]),
+            body_base64: String::new(),
+        }));
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.unwrap();
+        assert_eq!(result["status"], 201);
+        assert_eq!(result["bodyBase64"], "AAH/");
+
+        let upstream_request = backend.join().unwrap();
+        assert!(upstream_request.starts_with("GET /api/binary?version=1 HTTP/1.0"));
+        assert!(upstream_request.contains("X-Alx-App-Id: com.example.integration"));
+        assert!(upstream_request.contains("X-Alx-Token: integration-private-token"));
+        assert!(upstream_request.contains("accept: application/octet-stream"));
+        assert!(!result.to_string().contains("integration-private-token"));
     }
 
     #[test]
