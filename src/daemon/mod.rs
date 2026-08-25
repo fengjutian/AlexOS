@@ -12,6 +12,7 @@ mod transport;
 
 pub use protocol::{
     ControlCommand, ControlRequest, ControlResponse, MAX_PROXY_BODY_BYTES, PROTOCOL_VERSION,
+    StreamControlError,
 };
 pub use proxy_client::{open_service_websocket, proxy_service_http};
 pub use service::{DaemonService, RecoveryFailure, RecoveryReport};

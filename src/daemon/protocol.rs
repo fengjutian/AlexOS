@@ -99,6 +99,41 @@ pub enum ControlCommand {
         #[serde(default)]
         body_base64: String,
     },
+    StreamOpen {
+        app_id: String,
+        request_id: String,
+        stream_id: String,
+        #[serde(default)]
+        metadata: Value,
+    },
+    StreamCredit {
+        stream_id: String,
+        bytes: usize,
+    },
+    StreamPush {
+        stream_id: String,
+        data_base64: String,
+    },
+    StreamRead {
+        stream_id: String,
+    },
+    StreamEnd {
+        stream_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<StreamControlError>,
+    },
+    StreamCancel {
+        stream_id: String,
+        #[serde(default)]
+        reason: String,
+    },
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct StreamControlError {
+    pub code: String,
+    pub message: String,
 }
 
 fn default_log_limit() -> u32 {
@@ -304,5 +339,32 @@ mod tests {
             serde_json::from_value::<ControlCommand>(value).unwrap(),
             command
         );
+    }
+
+    #[test]
+    fn stream_control_commands_round_trip() {
+        for command in [
+            ControlCommand::StreamCredit {
+                stream_id: "stream-1".into(),
+                bytes: 4096,
+            },
+            ControlCommand::StreamPush {
+                stream_id: "stream-1".into(),
+                data_base64: "aGVsbG8=".into(),
+            },
+            ControlCommand::StreamRead {
+                stream_id: "stream-1".into(),
+            },
+            ControlCommand::StreamCancel {
+                stream_id: "stream-1".into(),
+                reason: "user".into(),
+            },
+        ] {
+            let value = serde_json::to_value(&command).unwrap();
+            assert_eq!(
+                serde_json::from_value::<ControlCommand>(value).unwrap(),
+                command
+            );
+        }
     }
 }

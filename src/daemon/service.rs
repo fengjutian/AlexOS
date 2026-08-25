@@ -33,6 +33,7 @@ pub struct DaemonService {
     state: DaemonStateStore,
     manager: Option<Arc<dyn crate::manager::AppManager>>,
     websocket_tunnels: Arc<Mutex<BTreeMap<String, crate::proxy::WebSocketTunnel>>>,
+    streams: Arc<crate::runtime::stream::StreamManager>,
 }
 
 impl DaemonService {
@@ -41,6 +42,9 @@ impl DaemonService {
             state,
             manager: None,
             websocket_tunnels: Arc::new(Mutex::new(BTreeMap::new())),
+            streams: Arc::new(crate::runtime::stream::StreamManager::new(
+                crate::runtime::stream::StreamLimits::default(),
+            )),
         }
     }
 
@@ -105,6 +109,24 @@ impl DaemonService {
                 headers,
                 body_base64,
             } => self.proxy_service_http(&app_id, &service, &method, &path, &headers, &body_base64),
+            ControlCommand::StreamOpen {
+                app_id,
+                request_id,
+                stream_id,
+                metadata,
+            } => self.stream_open(&app_id, &request_id, &stream_id, metadata),
+            ControlCommand::StreamCredit { stream_id, bytes } => {
+                self.stream_credit(&stream_id, bytes)
+            }
+            ControlCommand::StreamPush {
+                stream_id,
+                data_base64,
+            } => self.stream_push(&stream_id, &data_base64),
+            ControlCommand::StreamRead { stream_id } => self.stream_read(&stream_id),
+            ControlCommand::StreamEnd { stream_id, error } => self.stream_end(&stream_id, error),
+            ControlCommand::StreamCancel { stream_id, reason } => {
+                self.stream_cancel(&stream_id, &reason)
+            }
         };
         match result {
             Ok(value) => ControlResponse::success(id, value),
@@ -615,6 +637,83 @@ impl DaemonService {
         }))
     }
 
+    fn stream_open(
+        &self,
+        app_id: &str,
+        request_id: &str,
+        stream_id: &str,
+        metadata: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.streams
+            .open(app_id, stream_id)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "requestId": request_id, "streamId": stream_id, "metadata": metadata }))
+    }
+
+    fn stream_credit(&self, stream_id: &str, bytes: usize) -> Result<serde_json::Value, String> {
+        self.streams
+            .grant_credit(stream_id, bytes)
+            .map(|available| json!({ "streamId": stream_id, "available": available }))
+            .map_err(|error| error.to_string())
+    }
+
+    fn stream_push(&self, stream_id: &str, data_base64: &str) -> Result<serde_json::Value, String> {
+        let data = base64::engine::general_purpose::STANDARD
+            .decode(data_base64)
+            .map_err(|_| "dataBase64 is invalid".to_owned())?;
+        self.streams
+            .push(stream_id, data)
+            .map(|sequence| json!({ "streamId": stream_id, "sequence": sequence }))
+            .map_err(|error| error.to_string())
+    }
+
+    fn stream_read(&self, stream_id: &str) -> Result<serde_json::Value, String> {
+        let chunk = self
+            .streams
+            .pop(stream_id)
+            .map_err(|error| error.to_string())?;
+        let terminal = self
+            .streams
+            .terminal(stream_id)
+            .map_err(|error| error.to_string())?;
+        Ok(match chunk {
+            Some(chunk) => json!({
+                "streamId": stream_id,
+                "sequence": chunk.sequence,
+                "dataBase64": base64::engine::general_purpose::STANDARD.encode(chunk.data),
+            }),
+            None => json!({
+                "streamId": stream_id,
+                "pending": terminal.is_none(),
+                "terminal": terminal.map(stream_terminal_json),
+            }),
+        })
+    }
+
+    fn stream_end(
+        &self,
+        stream_id: &str,
+        error: Option<super::StreamControlError>,
+    ) -> Result<serde_json::Value, String> {
+        let terminal = error.map_or(crate::runtime::stream::StreamTerminal::Completed, |error| {
+            crate::runtime::stream::StreamTerminal::Failed {
+                code: error.code,
+                message: error.message,
+            }
+        });
+        self.streams
+            .finish(stream_id, terminal)
+            .map(|_| json!({ "streamId": stream_id, "ended": true }))
+            .map_err(|error| error.to_string())
+    }
+
+    fn stream_cancel(&self, stream_id: &str, reason: &str) -> Result<serde_json::Value, String> {
+        self.streams
+            .cancel(stream_id, reason)
+            .map(|_| json!({ "streamId": stream_id, "cancelled": true }))
+            .map_err(|error| error.to_string())
+    }
+
     fn set_desired(
         &self,
         app_id: &str,
@@ -686,6 +785,18 @@ impl DaemonService {
                 Ok(())
             }
             Err(error) => Err(error.to_string()),
+        }
+    }
+}
+
+fn stream_terminal_json(terminal: crate::runtime::stream::StreamTerminal) -> serde_json::Value {
+    match terminal {
+        crate::runtime::stream::StreamTerminal::Completed => json!({ "kind": "completed" }),
+        crate::runtime::stream::StreamTerminal::Failed { code, message } => {
+            json!({ "kind": "failed", "error": { "code": code, "message": message } })
+        }
+        crate::runtime::stream::StreamTerminal::Cancelled { reason } => {
+            json!({ "kind": "cancelled", "reason": reason })
         }
     }
 }
@@ -809,6 +920,68 @@ mod tests {
             id: "test-1".into(),
             command,
         }
+    }
+
+    #[test]
+    fn daemon_stream_flow_enforces_credit_and_reports_terminal_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")));
+        assert!(
+            service
+                .handle(request(ControlCommand::StreamOpen {
+                    app_id: "com.example.stream".into(),
+                    request_id: "model-1".into(),
+                    stream_id: "stream-1".into(),
+                    metadata: json!({ "contentType": "text/plain" }),
+                }))
+                .ok
+        );
+        let blocked = service.handle(request(ControlCommand::StreamPush {
+            stream_id: "stream-1".into(),
+            data_base64: "aGVsbG8=".into(),
+        }));
+        assert!(!blocked.ok);
+        assert!(blocked.error.unwrap().contains("insufficient credit"));
+        assert!(
+            service
+                .handle(request(ControlCommand::StreamCredit {
+                    stream_id: "stream-1".into(),
+                    bytes: 5,
+                }))
+                .ok
+        );
+        assert!(
+            service
+                .handle(request(ControlCommand::StreamPush {
+                    stream_id: "stream-1".into(),
+                    data_base64: "aGVsbG8=".into(),
+                }))
+                .ok
+        );
+        let chunk = service.handle(request(ControlCommand::StreamRead {
+            stream_id: "stream-1".into(),
+        }));
+        assert_eq!(chunk.result.unwrap()["dataBase64"], "aGVsbG8=");
+        assert!(
+            service
+                .handle(request(ControlCommand::StreamEnd {
+                    stream_id: "stream-1".into(),
+                    error: None,
+                }))
+                .ok
+        );
+        let ended = service.handle(request(ControlCommand::StreamRead {
+            stream_id: "stream-1".into(),
+        }));
+        assert_eq!(ended.result.unwrap()["terminal"]["kind"], "completed");
+        assert!(
+            !service
+                .handle(request(ControlCommand::StreamEnd {
+                    stream_id: "stream-1".into(),
+                    error: None,
+                }))
+                .ok
+        );
     }
 
     #[test]
