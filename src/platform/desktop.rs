@@ -98,3 +98,13 @@ impl DesktopServices for NativeDesktopPlatform {
 pub fn native() -> NativeDesktopPlatform {
     NativeDesktopPlatform
 }
+
+/// UI-thread entry points used by WebView hosts. Keeping these here avoids
+/// duplicating platform dialog construction in each event loop.
+pub fn pick_paths_on_ui_thread(spec: OpenDialogSpec) -> Result<Vec<PathBuf>, NativeError> {
+    implementation::pick_paths(spec)
+}
+
+pub fn pick_save_path_on_ui_thread(spec: SaveDialogSpec) -> Result<Option<PathBuf>, NativeError> {
+    implementation::pick_save_path(spec)
+}

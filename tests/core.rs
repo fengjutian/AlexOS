@@ -33,8 +33,11 @@ impl alex::native::NativeHost for TestNativeHost {
         Ok(())
     }
 
-    fn supports_secondary_windows(&self) -> bool {
-        true
+    fn capabilities(&self) -> alex::native::NativeHostCapabilities {
+        alex::native::NativeHostCapabilities {
+            secondary_windows: true,
+            ..Default::default()
+        }
     }
 }
 

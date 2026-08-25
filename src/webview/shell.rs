@@ -67,7 +67,7 @@ pub mod windows {
         authorization::PermissionStore,
         manifest::AppManifest,
         menu_tray::{MenuItem, MenuTemplate},
-        native::{HostCommand, NativeError, NativeHost},
+        native::{HostCommand, NativeError, NativeHost, NativeHostCapabilities},
         runtime::RuntimeHandle,
         webview::secondary_windows::SecondaryWindows,
     };
@@ -203,6 +203,14 @@ pub mod windows {
             String,
             std::sync::mpsc::SyncSender<Result<bool, NativeError>>,
         ),
+        OpenDialog(
+            crate::platform::desktop::OpenDialogSpec,
+            std::sync::mpsc::SyncSender<Result<Vec<PathBuf>, NativeError>>,
+        ),
+        SaveDialog(
+            crate::platform::desktop::SaveDialogSpec,
+            std::sync::mpsc::SyncSender<Result<Option<PathBuf>, NativeError>>,
+        ),
         Host(
             HostCommand,
             std::sync::mpsc::SyncSender<Result<(), NativeError>>,
@@ -249,8 +257,16 @@ pub mod windows {
                 .map_err(|_| NativeError::Failed("native command timed out".into()))?
         }
 
-        fn supports_secondary_windows(&self) -> bool {
-            self.secondary_windows
+        fn capabilities(&self) -> NativeHostCapabilities {
+            NativeHostCapabilities {
+                secondary_windows: self.secondary_windows,
+                menus: self.secondary_windows,
+                tray: self.secondary_windows,
+                shortcuts: self.secondary_windows,
+                dialogs: true,
+                media: true,
+                geolocation: true,
+            }
         }
 
         fn confirm_permission(
@@ -265,6 +281,32 @@ pub mod windows {
                 ),
                 Duration::from_secs(600),
             )
+        }
+
+        fn pick_paths(
+            &self,
+            spec: crate::platform::desktop::OpenDialogSpec,
+        ) -> Result<Vec<PathBuf>, NativeError> {
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+            self.proxy
+                .send_event(UserEvent::OpenDialog(spec, reply_tx))
+                .map_err(|_| NativeError::Failed("window event loop is closed".into()))?;
+            reply_rx
+                .recv_timeout(Duration::from_secs(600))
+                .map_err(|_| NativeError::Failed("open dialog timed out".into()))?
+        }
+
+        fn pick_save_path(
+            &self,
+            spec: crate::platform::desktop::SaveDialogSpec,
+        ) -> Result<Option<PathBuf>, NativeError> {
+            let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
+            self.proxy
+                .send_event(UserEvent::SaveDialog(spec, reply_tx))
+                .map_err(|_| NativeError::Failed("window event loop is closed".into()))?;
+            reply_rx
+                .recv_timeout(Duration::from_secs(600))
+                .map_err(|_| NativeError::Failed("save dialog timed out".into()))?
         }
 
         fn confirm_mrtr(&self, title: &str, message: &str) -> Result<bool, NativeError> {
@@ -586,6 +628,12 @@ pub mod windows {
                         .set_buttons(MessageButtons::YesNo)
                         .show();
                     let _ = reply.send(Ok(matches!(result, MessageDialogResult::Yes)));
+                }
+                Event::UserEvent(UserEvent::OpenDialog(spec, reply)) => {
+                    let _ = reply.send(crate::platform::desktop::pick_paths_on_ui_thread(spec));
+                }
+                Event::UserEvent(UserEvent::SaveDialog(spec, reply)) => {
+                    let _ = reply.send(crate::platform::desktop::pick_save_path_on_ui_thread(spec));
                 }
                 Event::UserEvent(UserEvent::Host(command, reply)) => {
                     let mut host_result = Ok(());

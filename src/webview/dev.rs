@@ -788,6 +788,12 @@ mod windows {
                         .show();
                     let _ = reply.send(Ok(matches!(result, MessageDialogResult::Yes)));
                 }
+                Event::UserEvent(UserEvent::OpenDialog(spec, reply)) => {
+                    let _ = reply.send(crate::platform::desktop::pick_paths_on_ui_thread(spec));
+                }
+                Event::UserEvent(UserEvent::SaveDialog(spec, reply)) => {
+                    let _ = reply.send(crate::platform::desktop::pick_save_path_on_ui_thread(spec));
+                }
                 Event::UserEvent(UserEvent::Host(command, reply)) => {
                     let result = match command {
                         HostCommand::SetWindowTitle(title) => {

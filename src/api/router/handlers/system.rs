@@ -142,11 +142,12 @@ impl ApiRouter {
             ]);
         }
         available.push("net.fetch"); */
-        let native_desktop = self
+        let native = self
             .native_host
             .as_ref()
-            .is_some_and(|host| host.supports_secondary_windows());
-        let available = crate::api::capabilities::available(native_desktop);
+            .map(|host| host.capabilities())
+            .unwrap_or_default();
+        let available = crate::api::capabilities::available(native);
         let experimental = crate::api::capabilities::experimental();
         let platform = crate::platform::native();
         let platform_capabilities = crate::platform::PlatformServices::capabilities(&platform);

@@ -36,10 +36,12 @@ impl ApiRouter {
             multiple,
             directory,
         };
-        let paths = self
-            .desktop_services
-            .pick_paths(spec)
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        let paths = if let Some(host) = &self.native_host {
+            host.pick_paths(spec)
+        } else {
+            self.desktop_services.pick_paths(spec)
+        }
+        .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         if directory {
             // Directory pick returns paths with full access
             // (read + write). The page can use these to call
@@ -104,10 +106,12 @@ impl ApiRouter {
             filters,
             suggested_name: params.suggested_name.clone(),
         };
-        let chosen = self
-            .desktop_services
-            .pick_save_path(spec)
-            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        let chosen = if let Some(host) = &self.native_host {
+            host.pick_save_path(spec)
+        } else {
+            self.desktop_services.pick_save_path(spec)
+        }
+        .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
         let Some(path) = chosen else {
             return Ok(json!({ "path": Value::Null, "token": Value::Null }));
         };

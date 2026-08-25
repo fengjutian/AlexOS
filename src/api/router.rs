@@ -262,7 +262,7 @@ impl ApiRouter {
         if self
             .native_host
             .as_ref()
-            .is_some_and(|host| host.supports_secondary_windows())
+            .is_some_and(|host| host.capabilities().secondary_windows)
         {
             Ok(())
         } else {
