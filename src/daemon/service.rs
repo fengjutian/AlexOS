@@ -966,6 +966,7 @@ mod tests {
         );
         let chunk = service.handle(request(ControlCommand::StreamRead {
             stream_id: "stream-1".into(),
+            wait_ms: 0,
         }));
         assert_eq!(chunk.result.unwrap()["dataBase64"], "aGVsbG8=");
         assert!(
@@ -978,6 +979,7 @@ mod tests {
         );
         let ended = service.handle(request(ControlCommand::StreamRead {
             stream_id: "stream-1".into(),
+            wait_ms: 0,
         }));
         assert_eq!(ended.result.unwrap()["terminal"]["kind"], "completed");
         assert!(

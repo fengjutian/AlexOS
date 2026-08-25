@@ -115,7 +115,11 @@ impl StreamManager {
         if stream_id.trim().is_empty() {
             return Err(StreamError::EmptyId);
         }
-        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self
+            .shared
+            .streams
+            .lock()
+            .expect("stream manager lock poisoned");
         if streams.contains_key(stream_id) {
             return Err(StreamError::Duplicate(stream_id.into()));
         }
@@ -149,7 +153,11 @@ impl StreamManager {
         if bytes == 0 {
             return Err(StreamError::InvalidCredit);
         }
-        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self
+            .shared
+            .streams
+            .lock()
+            .expect("stream manager lock poisoned");
         let stream = streams
             .get_mut(stream_id)
             .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
@@ -170,7 +178,11 @@ impl StreamManager {
                 limit: self.limits.max_chunk_bytes,
             });
         }
-        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self
+            .shared
+            .streams
+            .lock()
+            .expect("stream manager lock poisoned");
         let stream = streams
             .get_mut(stream_id)
             .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
@@ -201,7 +213,11 @@ impl StreamManager {
     }
 
     pub fn pop(&self, stream_id: &str) -> Result<Option<StreamChunk>, StreamError> {
-        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self
+            .shared
+            .streams
+            .lock()
+            .expect("stream manager lock poisoned");
         let stream = streams
             .get_mut(stream_id)
             .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
@@ -221,7 +237,11 @@ impl StreamManager {
         timeout: Duration,
     ) -> Result<Option<StreamChunk>, StreamError> {
         let deadline = Instant::now() + timeout;
-        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self
+            .shared
+            .streams
+            .lock()
+            .expect("stream manager lock poisoned");
         loop {
             let stream = streams
                 .get_mut(stream_id)
@@ -251,7 +271,11 @@ impl StreamManager {
     }
 
     pub fn finish(&self, stream_id: &str, terminal: StreamTerminal) -> Result<(), StreamError> {
-        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self
+            .shared
+            .streams
+            .lock()
+            .expect("stream manager lock poisoned");
         let stream = streams
             .get_mut(stream_id)
             .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
@@ -277,7 +301,8 @@ impl StreamManager {
     }
 
     pub fn terminal(&self, stream_id: &str) -> Result<Option<StreamTerminal>, StreamError> {
-        self.shared.streams
+        self.shared
+            .streams
             .lock()
             .expect("stream manager lock poisoned")
             .get(stream_id)
@@ -286,7 +311,9 @@ impl StreamManager {
     }
 
     pub fn remove(&self, stream_id: &str) -> bool {
-        let removed = self.shared.streams
+        let removed = self
+            .shared
+            .streams
             .lock()
             .expect("stream manager lock poisoned")
             .remove(stream_id)
@@ -301,7 +328,11 @@ impl StreamManager {
     /// page session or application host shuts down so producers cannot outlive
     /// their security identity.
     pub fn close_app(&self, app_id: &str) -> Vec<String> {
-        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self
+            .shared
+            .streams
+            .lock()
+            .expect("stream manager lock poisoned");
         let ids: Vec<String> = streams
             .iter()
             .filter_map(|(id, stream)| (stream.app_id == app_id).then_some(id.clone()))
@@ -317,7 +348,11 @@ impl StreamManager {
 
     pub fn reap_idle(&self) -> Vec<String> {
         let now = Instant::now();
-        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self
+            .shared
+            .streams
+            .lock()
+            .expect("stream manager lock poisoned");
         let expired: Vec<String> = streams
             .iter()
             .filter_map(|(id, stream)| {
@@ -373,6 +408,46 @@ mod tests {
         assert_eq!(manager.push("stream", vec![3, 4]).unwrap(), 1);
         assert_eq!(manager.pop("stream").unwrap().unwrap().sequence, 0);
         assert_eq!(manager.pop("stream").unwrap().unwrap().sequence, 1);
+    }
+
+    #[test]
+    fn pop_wait_wakes_as_soon_as_a_producer_pushes() {
+        let manager = manager();
+        manager.open("app", "stream").unwrap();
+        manager.grant_credit("stream", 4).unwrap();
+        let producer = manager.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            producer.push("stream", vec![1, 2, 3]).unwrap();
+        });
+        let started = Instant::now();
+        let chunk = manager
+            .pop_wait("stream", Duration::from_secs(1))
+            .unwrap()
+            .unwrap();
+        assert_eq!(chunk.data, vec![1, 2, 3]);
+        assert!(started.elapsed() < Duration::from_millis(500));
+    }
+
+    #[test]
+    fn pop_wait_wakes_on_terminal_without_a_chunk() {
+        let manager = manager();
+        manager.open("app", "stream").unwrap();
+        let producer = manager.clone();
+        std::thread::spawn(move || {
+            std::thread::sleep(Duration::from_millis(20));
+            producer
+                .finish("stream", StreamTerminal::Completed)
+                .unwrap();
+        });
+        assert_eq!(
+            manager.pop_wait("stream", Duration::from_secs(1)).unwrap(),
+            None
+        );
+        assert_eq!(
+            manager.terminal("stream").unwrap(),
+            Some(StreamTerminal::Completed)
+        );
     }
 
     #[test]

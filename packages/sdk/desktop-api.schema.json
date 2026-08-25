@@ -57,6 +57,10 @@
       "permission": "runtime",
       "execution": "blocking"
     },
+    "stream": {
+      "permission": "runtime.invoke",
+      "execution": "blocking"
+    },
     "events": {
       "permission": "none",
       "execution": "inline"
@@ -124,6 +128,9 @@
       "runtime.status",
       "runtime.restart",
       "runtime.cancel",
+      "stream.credit",
+      "stream.read",
+      "stream.cancel",
       "events.subscribe",
       "events.unsubscribe",
       "system.instances.create",
@@ -2283,6 +2290,75 @@
         "required": [
           "cancelled"
         ],
+        "additionalProperties": false
+      }
+    },
+    "stream.credit": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "streamId": { "type": "string", "minLength": 1 },
+          "bytes": { "type": "integer", "minimum": 1, "maximum": 1048576 }
+        },
+        "required": ["streamId", "bytes"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "streamId": { "type": "string" },
+          "available": { "type": "integer", "minimum": 0 }
+        },
+        "required": ["streamId", "available"],
+        "additionalProperties": false
+      }
+    },
+    "stream.read": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "streamId": { "type": "string", "minLength": 1 },
+          "waitMs": { "type": "integer", "minimum": 0, "maximum": 30000 }
+        },
+        "required": ["streamId"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "streamId": { "type": "string" },
+          "sequence": { "type": "integer", "minimum": 0 },
+          "bytes": { "type": "integer", "minimum": 0 },
+          "dataBase64": { "type": "string" },
+          "pending": { "type": "boolean" },
+          "terminal": {
+            "anyOf": [
+              { "type": "null" },
+              { "type": "object", "additionalProperties": true }
+            ]
+          }
+        },
+        "required": ["streamId"],
+        "additionalProperties": false
+      }
+    },
+    "stream.cancel": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "streamId": { "type": "string", "minLength": 1 },
+          "reason": { "type": "string" }
+        },
+        "required": ["streamId"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "streamId": { "type": "string" },
+          "cancelled": { "type": "boolean" }
+        },
+        "required": ["streamId", "cancelled"],
         "additionalProperties": false
       }
     },

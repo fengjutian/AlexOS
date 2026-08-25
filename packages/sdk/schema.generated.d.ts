@@ -65,6 +65,9 @@ export type AlexCapability =
   | "runtime.status"
   | "runtime.restart"
   | "runtime.cancel"
+  | "stream.credit"
+  | "stream.read"
+  | "stream.cancel"
   | "events.subscribe"
   | "events.unsubscribe"
   | "system.instances.create"
@@ -152,6 +155,9 @@ export interface AlexMethodMap {
   "runtime.status": { params: Empty; result: RuntimeStatus };
   "runtime.restart": { params: Empty; result: RuntimeStatus };
   "runtime.cancel": { params: { "requestId": string }; result: { "cancelled": boolean } };
+  "stream.credit": { params: { "streamId": string; "bytes": number }; result: { "streamId": string; "available": number } };
+  "stream.read": { params: { "streamId": string; "waitMs"?: number }; result: { "streamId": string; "sequence"?: number; "bytes"?: number; "dataBase64"?: string; "pending"?: boolean; "terminal"?: null | { [key: string]: unknown } } };
+  "stream.cancel": { params: { "streamId": string; "reason"?: string }; result: { "streamId": string; "cancelled": boolean } };
   "events.subscribe": { params: { "event": string; "filter"?: { [key: string]: unknown } }; result: { "subscriptionId": string; "event": string } };
   "events.unsubscribe": { params: { "subscriptionId": string }; result: { "removed": boolean } };
   "system.instances.create": { params: { "appId": string; "appVersion": string; "instanceId"?: string; "isolation"?: "process" | "job" | "appcontainer" | "wsl-oci" }; result: ContainerView };

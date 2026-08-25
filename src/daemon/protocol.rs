@@ -356,6 +356,7 @@ mod tests {
             },
             ControlCommand::StreamRead {
                 stream_id: "stream-1".into(),
+                wait_ms: 0,
             },
             ControlCommand::StreamCancel {
                 stream_id: "stream-1".into(),
