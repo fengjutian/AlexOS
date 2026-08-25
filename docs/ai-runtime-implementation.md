@@ -275,6 +275,10 @@ pub trait ModelProvider: Send + Sync {
 只引用 Secret Store。请求统一表达 messages、tools、response format、temperature、token limit；响应统一为
 delta、tool call、usage、finish 和 error 事件。
 
+> `model.embed` 仅提供 embedding 原语；RAG 的切分、向量索引、检索与重排属应用层能力，由应用/Agent
+> 自行实现或经 MCP 接入，Runtime 不内建向量数据库或检索编排（边界见
+> [`product-requirements.md`](./product-requirements.md) §1）。
+
 ModelManager 负责 provider 注册、并发/速率限制、超时、重试、usage 统计和审计。网络访问仍受 Manifest
 origin 白名单约束；默认不自动重试非幂等生成请求，除非尚未收到首个 token。
 

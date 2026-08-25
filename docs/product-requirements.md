@@ -23,6 +23,9 @@ Windows，后续扩展到 macOS、Linux、Server、Android、HarmonyOS、iOS 和
 Alex Runtime 不是操作系统，也不自行实现 Node.js、Python、LLM、数据库、GPU Runtime 或
 OCI 容器。它管理这些现有 Runtime 和应用服务。
 
+RAG（检索增强生成）属于应用层能力：切分、向量索引、检索与重排由应用/Agent 自行实现或经
+MCP 接入；Runtime 仅提供 `model.embed`、Storage 与 Agent 原语，不内建向量数据库或检索编排。
+
 产品飞轮是：
 
 ```text
