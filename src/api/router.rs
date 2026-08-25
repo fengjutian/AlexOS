@@ -56,6 +56,7 @@ pub struct ApiRouter {
     menu_store: Arc<MenuStore>,
     process_registry: Arc<ProcessRegistry>,
     inflight: Arc<Mutex<InflightTracker>>,
+    stream_manager: Arc<crate::runtime::stream::StreamManager>,
     /// When true, every call to `permission_granted` is echoed
     /// to stderr with the resolved decision. `alex dev` flips
     /// this on; the production shell does not. Off by default
@@ -128,6 +129,9 @@ impl ApiRouter {
             menu_store,
             process_registry,
             inflight: Arc::new(Mutex::new(InflightTracker::default())),
+            stream_manager: Arc::new(crate::runtime::stream::StreamManager::new(
+                crate::runtime::stream::StreamLimits::default(),
+            )),
             permission_log: Arc::new(std::sync::atomic::AtomicBool::new(false)),
         }
     }
@@ -213,6 +217,10 @@ impl ApiRouter {
         Arc::clone(&self.event_bus)
     }
 
+    pub fn stream_manager(&self) -> Arc<crate::runtime::stream::StreamManager> {
+        Arc::clone(&self.stream_manager)
+    }
+
     /// Convert an OS file-drop into app-scoped, short-lived grants and
     /// enqueue it for WebView delivery. Returns false when the package did
     /// not declare (or the user revoked) `filesystem.drop`.
@@ -279,6 +287,7 @@ impl ApiRouter {
         self.windows.drop_app(&self.manifest.id);
         self.menu_store.drop_app(&self.manifest.id);
         self.process_registry.clear();
+        self.stream_manager.close_app(&self.manifest.id);
         let mut tracker = self.inflight.lock().expect("inflight lock poisoned");
         for token in tracker.pending.values() {
             token.cancel();

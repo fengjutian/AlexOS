@@ -10,6 +10,7 @@ pub mod net;
 pub mod process;
 pub mod proxy;
 pub mod service_supervisor;
+pub mod stream;
 mod supervisor;
 pub mod task_executor;
 pub mod watchdog;

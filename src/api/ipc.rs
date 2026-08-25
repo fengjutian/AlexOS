@@ -27,10 +27,53 @@ pub struct Response {
     pub error: Option<IpcError>,
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 pub struct IpcError {
     pub code: String,
     pub message: String,
+}
+
+/// Bidirectional stream control envelope. Payload bytes are base64 on JSON
+/// transports; binary transports may map the same sequence/data fields to a
+/// native frame without changing stream semantics.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(
+    tag = "kind",
+    rename_all = "camelCase",
+    rename_all_fields = "camelCase",
+    deny_unknown_fields
+)]
+pub enum StreamEnvelope {
+    StreamOpen {
+        protocol: u32,
+        request_id: String,
+        stream_id: String,
+        #[serde(default)]
+        metadata: Value,
+    },
+    StreamChunk {
+        protocol: u32,
+        stream_id: String,
+        sequence: u64,
+        data_base64: String,
+    },
+    StreamCredit {
+        protocol: u32,
+        stream_id: String,
+        bytes: usize,
+    },
+    StreamEnd {
+        protocol: u32,
+        stream_id: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        error: Option<IpcError>,
+    },
+    StreamCancel {
+        protocol: u32,
+        stream_id: String,
+        #[serde(default)]
+        reason: String,
+    },
 }
 
 impl Response {
@@ -84,6 +127,55 @@ impl EventEnvelope {
             sequence,
             payload,
         }
+    }
+}
+
+#[cfg(test)]
+mod stream_tests {
+    use super::*;
+
+    #[test]
+    fn stream_envelopes_have_stable_camel_case_tags() {
+        let envelope = StreamEnvelope::StreamChunk {
+            protocol: PROTOCOL_VERSION,
+            stream_id: "stream-1".into(),
+            sequence: 7,
+            data_base64: "aGVsbG8=".into(),
+        };
+        let value = serde_json::to_value(&envelope).unwrap();
+        assert_eq!(value["kind"], "streamChunk");
+        assert_eq!(value["streamId"], "stream-1");
+        assert_eq!(value["dataBase64"], "aGVsbG8=");
+        assert_eq!(
+            serde_json::from_value::<StreamEnvelope>(value).unwrap(),
+            envelope
+        );
+    }
+
+    #[test]
+    fn stream_end_carries_one_structured_error() {
+        let envelope = StreamEnvelope::StreamEnd {
+            protocol: PROTOCOL_VERSION,
+            stream_id: "stream-1".into(),
+            error: Some(IpcError {
+                code: "MODEL_RATE_LIMITED".into(),
+                message: "retry later".into(),
+            }),
+        };
+        let value = serde_json::to_value(envelope).unwrap();
+        assert_eq!(value["error"]["code"], "MODEL_RATE_LIMITED");
+    }
+
+    #[test]
+    fn unknown_stream_fields_are_rejected() {
+        let value = serde_json::json!({
+            "kind": "streamCredit",
+            "protocol": 1,
+            "streamId": "stream-1",
+            "bytes": 1024,
+            "unexpected": true
+        });
+        assert!(serde_json::from_value::<StreamEnvelope>(value).is_err());
     }
 }
 
