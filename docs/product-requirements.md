@@ -9,7 +9,9 @@ nav_order: 1
 本文档是 Alex Runtime 的产品范围、阶段目标和架构取舍的统一来源。它由最初的
 “AI 应用运行时基础设施 / Alex Runtime”产品方案整理而来。实现事实见
 [`status.md`](./status.md)，技术方案见 [`architecture.md`](./architecture.md)，未完成工作见
-[`roadmap.md`](./roadmap.md)。当其他文档与本文的产品边界冲突时，以本文为准。
+[`roadmap.md`](./roadmap.md)，Model、MCP 与 Agent 的分阶段实现规范见
+[`ai-runtime-implementation.md`](./ai-runtime-implementation.md)。当其他文档与本文的产品边界冲突时，
+以本文为准。
 
 ## 1. 产品定位
 

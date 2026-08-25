@@ -324,5 +324,7 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
 4. [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) — 每个 API 的"诚实"状态。
 5. [`app-manager-ui-design.md`](./app-manager-ui-design.md) — 0.1 内置 App Manager 的 UI 形态。
 6. [`alex-container-design.md`](./alex-container-design.md) — 0.2/0.3/0.4 的 Windows 容器路线。
+7. [`ai-runtime-implementation.md`](./ai-runtime-implementation.md) — Manifest、Daemon、流式 IPC、
+   Model、MCP 和 Agent Runtime 的完整目标实现与验收门禁。
 
 最后更新：2026-08-22（首版，与 docs/ 拆分同步）

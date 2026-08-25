@@ -10,6 +10,9 @@ Runtime 在不同平台负责安装、服务编排、进程、运行时、权限
 正式产品范围和阶段目标见
 [docs/product-requirements.md](docs/product-requirements.md)。该文档是产品边界的统一来源。
 
+Model、MCP 与 Agent 的完整技术实施顺序、协议、安全边界和验收标准见
+[docs/ai-runtime-implementation.md](docs/ai-runtime-implementation.md)。
+
 详细的实现状态、限制和未开发功能见
 [docs/status.md](docs/status.md) 和 [docs/roadmap.md](docs/roadmap.md)。
 应用管理 UI 的产品范围、页面结构和技术方案见
