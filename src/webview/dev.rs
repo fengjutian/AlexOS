@@ -933,18 +933,7 @@ mod windows {
     }
 
     fn frontend_command(name: &str) -> Result<Command, Box<dyn std::error::Error>> {
-        if matches!(name, "npm" | "npm.cmd")
-            && let Some(node) = crate::runtime::discover_node()
-            && let Some(bin) = node.parent()
-        {
-            let npm_cli = bin.join("node_modules").join("npm").join("bin").join("npm-cli.js");
-            if npm_cli.is_file() {
-                let mut command = Command::new(node);
-                command.arg(npm_cli);
-                return Ok(command);
-            }
-        }
-        Ok(Command::new(name))
+        Ok(crate::runtime::node_tool_command(name))
     }
 
     fn wait_for_dev_server(

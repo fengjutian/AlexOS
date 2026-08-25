@@ -556,12 +556,52 @@ pub fn build_frontend(destination: &Path) -> Result<(), PackageError> {
     let build = manifest.frontend.build.as_ref().ok_or_else(|| {
         PackageError::Build("manifest has no frontend.build block; nothing to do".into())
     })?;
-    let frontend_dir = destination.join(
-        Path::new(&manifest.frontend.entry)
-            .parent()
-            .unwrap_or(Path::new("frontend")),
-    );
-    let mut command = std::process::Command::new(&build.command);
+    let frontend_dir = manifest
+        .frontend
+        .dev
+        .as_ref()
+        .map(|dev| destination.join(&dev.cwd))
+        .or_else(|| {
+            let conventional = destination.join("frontend");
+            conventional.join("package.json").is_file().then_some(conventional)
+        })
+        .unwrap_or_else(|| {
+            destination.join(
+                Path::new(&manifest.frontend.entry)
+                    .parent()
+                    .unwrap_or(Path::new("frontend")),
+            )
+        });
+    if !frontend_dir.join("node_modules").is_dir()
+        && let Some(install) = manifest
+            .frontend
+            .dev
+            .as_ref()
+            .and_then(|dev| dev.install.as_ref())
+    {
+        eprintln!(
+            "alex build: frontend dependencies missing; running {} {}",
+            install.command,
+            install.args.join(" ")
+        );
+        let status = crate::runtime::node_tool_command(&install.command)
+            .args(&install.args)
+            .current_dir(&frontend_dir)
+            .status()
+            .map_err(|error| {
+                PackageError::Build(format!(
+                    "failed to install frontend dependencies with {}: {error}",
+                    install.command
+                ))
+            })?;
+        if !status.success() {
+            return Err(PackageError::Build(format!(
+                "frontend dependency install failed with exit code {:?}",
+                status.code()
+            )));
+        }
+    }
+    let mut command = crate::runtime::node_tool_command(&build.command);
     command.args(&build.args).current_dir(&frontend_dir);
     let status = command.status().map_err(|e| {
         PackageError::Build(format!(

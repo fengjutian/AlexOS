@@ -1617,6 +1617,28 @@ pub fn discover_node() -> Option<PathBuf> {
     find_on_path(if cfg!(windows) { "node.exe" } else { "node" })
 }
 
+/// Build a process command for a Node ecosystem tool. For npm, prefer the
+/// npm-cli.js shipped beside Alex's discovered Node runtime so callers do not
+/// depend on a global `npm`/`npm.cmd` entry in PATH.
+pub fn node_tool_command(name: &str) -> Command {
+    if matches!(name, "npm" | "npm.cmd")
+        && let Some(node) = discover_node()
+        && let Some(bin) = node.parent()
+    {
+        let npm_cli = bin
+            .join("node_modules")
+            .join("npm")
+            .join("bin")
+            .join("npm-cli.js");
+        if npm_cli.is_file() {
+            let mut command = Command::new(node);
+            command.arg(npm_cli);
+            return command;
+        }
+    }
+    Command::new(name)
+}
+
 fn find_on_path(name: &str) -> Option<PathBuf> {
     std::env::var_os("PATH").and_then(|paths| {
         std::env::split_paths(&paths)
