@@ -79,6 +79,7 @@ export type AlexCapability =
   | "mcp.callTool"
   | "mcp.callToolInteractive"
   | "mcp.respondInput"
+  | "mcp.presentInput"
   | "mcp.oauthBegin"
   | "mcp.oauthComplete"
   | "mcp.audit"
@@ -203,6 +204,7 @@ export interface AlexMethodMap {
   "mcp.callTool": { params: { "binding": string; "name": string; "arguments"?: JsonValue }; result: { "content": Array<JsonValue>; "isError": boolean; "structuredContent"?: JsonValue } };
   "mcp.callToolInteractive": { params: { "binding": string; "name": string; "arguments"?: JsonValue }; result: { "streamId": string; "binding": string; "tool": string } };
   "mcp.respondInput": { params: { "inputId": string; "response": JsonValue }; result: { "inputId": string; "accepted": boolean } };
+  "mcp.presentInput": { params: { "inputId": string; "message": string; "title"?: string }; result: { "inputId": string; "accepted": boolean } };
   "mcp.oauthBegin": { params: { "binding": string; "clientId": string; "redirectUri": string; "scopes"?: Array<string> }; result: { "authorizationUrl": string; "state": string; "expiresInMs": number } };
   "mcp.oauthComplete": { params: { "state": string; "code": string; "issuer": string }; result: { "application": string; "binding": string; "authorized": boolean } };
   "mcp.audit": { params: { "limit"?: number }; result: { "entries": Array<{ "timestampMs": number; "callId": string; "application": string; "binding": string; "tool": string; "phase": "started" | "finished"; "outcome"?: "success" | "failure"; "durationMs"?: number; "errorKind"?: string }> } };

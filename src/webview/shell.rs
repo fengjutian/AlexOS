@@ -256,7 +256,11 @@ pub mod windows {
         fn confirm_mrtr(&self, title: &str, message: &str) -> Result<bool, NativeError> {
             let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
             self.proxy
-                .send_event(UserEvent::MrtrPrompt(title.into(), message.into(), reply_tx))
+                .send_event(UserEvent::MrtrPrompt(
+                    title.into(),
+                    message.into(),
+                    reply_tx,
+                ))
                 .map_err(|_| NativeError::Failed("window event loop is closed".into()))?;
             reply_rx
                 .recv_timeout(Duration::from_secs(600))

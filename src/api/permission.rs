@@ -141,9 +141,7 @@ impl Permission {
             | "mcp.complete" | "mcp.ping" | "mcp.health" | "mcp.oauthBegin"
             | "mcp.oauthComplete" => Some("mcp.use"),
             "mcp.listen" => Some("mcp.use"),
-            "mcp.callToolInteractive" | "mcp.respondInput" | "mcp.presentInput" => {
-                Some("mcp.use")
-            }
+            "mcp.callToolInteractive" | "mcp.respondInput" | "mcp.presentInput" => Some("mcp.use"),
             "model.list" | "model.generate" | "model.cancel" => Some("model.use"),
             "model.import" | "model.load" | "model.unload" | "model.remove" => Some("model.manage"),
             "agent.create" | "agent.start" | "agent.pause" | "agent.resume" | "agent.cancel"
