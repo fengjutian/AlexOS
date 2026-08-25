@@ -3,7 +3,7 @@
 use std::{
     collections::{BTreeMap, VecDeque},
     sync::{
-        Arc, Mutex,
+        Arc, Condvar, Mutex,
         atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
@@ -91,14 +91,23 @@ struct StreamState {
 #[derive(Debug, Clone)]
 pub struct StreamManager {
     limits: StreamLimits,
-    streams: Arc<Mutex<BTreeMap<String, StreamState>>>,
+    shared: Arc<StreamShared>,
+}
+
+#[derive(Debug)]
+struct StreamShared {
+    streams: Mutex<BTreeMap<String, StreamState>>,
+    changed: Condvar,
 }
 
 impl StreamManager {
     pub fn new(limits: StreamLimits) -> Self {
         Self {
             limits,
-            streams: Arc::new(Mutex::new(BTreeMap::new())),
+            shared: Arc::new(StreamShared {
+                streams: Mutex::new(BTreeMap::new()),
+                changed: Condvar::new(),
+            }),
         }
     }
 
@@ -106,7 +115,7 @@ impl StreamManager {
         if stream_id.trim().is_empty() {
             return Err(StreamError::EmptyId);
         }
-        let mut streams = self.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
         if streams.contains_key(stream_id) {
             return Err(StreamError::Duplicate(stream_id.into()));
         }
@@ -132,6 +141,7 @@ impl StreamManager {
                 last_activity: Instant::now(),
             },
         );
+        self.shared.changed.notify_all();
         Ok(cancellation)
     }
 
@@ -139,7 +149,7 @@ impl StreamManager {
         if bytes == 0 {
             return Err(StreamError::InvalidCredit);
         }
-        let mut streams = self.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
         let stream = streams
             .get_mut(stream_id)
             .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
@@ -160,7 +170,7 @@ impl StreamManager {
                 limit: self.limits.max_chunk_bytes,
             });
         }
-        let mut streams = self.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
         let stream = streams
             .get_mut(stream_id)
             .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
@@ -186,11 +196,12 @@ impl StreamManager {
         stream.buffered_bytes += data.len();
         stream.chunks.push_back(StreamChunk { sequence, data });
         stream.last_activity = Instant::now();
+        self.shared.changed.notify_all();
         Ok(sequence)
     }
 
     pub fn pop(&self, stream_id: &str) -> Result<Option<StreamChunk>, StreamError> {
-        let mut streams = self.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
         let stream = streams
             .get_mut(stream_id)
             .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
@@ -202,8 +213,45 @@ impl StreamManager {
         Ok(chunk)
     }
 
+    /// Wait until a chunk, terminal state, removal, or timeout is observable.
+    /// This is the transport-facing alternative to tight `stream.read` polling.
+    pub fn pop_wait(
+        &self,
+        stream_id: &str,
+        timeout: Duration,
+    ) -> Result<Option<StreamChunk>, StreamError> {
+        let deadline = Instant::now() + timeout;
+        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
+        loop {
+            let stream = streams
+                .get_mut(stream_id)
+                .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
+            if let Some(chunk) = stream.chunks.pop_front() {
+                stream.buffered_bytes = stream.buffered_bytes.saturating_sub(chunk.data.len());
+                stream.last_activity = Instant::now();
+                return Ok(Some(chunk));
+            }
+            if stream.terminal.is_some() || timeout.is_zero() {
+                return Ok(None);
+            }
+            let now = Instant::now();
+            if now >= deadline {
+                return Ok(None);
+            }
+            let (next, wait) = self
+                .shared
+                .changed
+                .wait_timeout(streams, deadline.saturating_duration_since(now))
+                .expect("stream manager lock poisoned while waiting");
+            streams = next;
+            if wait.timed_out() {
+                return Ok(None);
+            }
+        }
+    }
+
     pub fn finish(&self, stream_id: &str, terminal: StreamTerminal) -> Result<(), StreamError> {
-        let mut streams = self.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
         let stream = streams
             .get_mut(stream_id)
             .ok_or_else(|| StreamError::NotFound(stream_id.into()))?;
@@ -215,6 +263,7 @@ impl StreamManager {
         }
         stream.terminal = Some(terminal);
         stream.last_activity = Instant::now();
+        self.shared.changed.notify_all();
         Ok(())
     }
 
@@ -228,7 +277,7 @@ impl StreamManager {
     }
 
     pub fn terminal(&self, stream_id: &str) -> Result<Option<StreamTerminal>, StreamError> {
-        self.streams
+        self.shared.streams
             .lock()
             .expect("stream manager lock poisoned")
             .get(stream_id)
@@ -237,18 +286,22 @@ impl StreamManager {
     }
 
     pub fn remove(&self, stream_id: &str) -> bool {
-        self.streams
+        let removed = self.shared.streams
             .lock()
             .expect("stream manager lock poisoned")
             .remove(stream_id)
-            .is_some()
+            .is_some();
+        if removed {
+            self.shared.changed.notify_all();
+        }
+        removed
     }
 
     /// Cancel and remove every stream owned by an application. Used when a
     /// page session or application host shuts down so producers cannot outlive
     /// their security identity.
     pub fn close_app(&self, app_id: &str) -> Vec<String> {
-        let mut streams = self.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
         let ids: Vec<String> = streams
             .iter()
             .filter_map(|(id, stream)| (stream.app_id == app_id).then_some(id.clone()))
@@ -258,12 +311,13 @@ impl StreamManager {
                 stream.cancellation.0.store(true, Ordering::Release);
             }
         }
+        self.shared.changed.notify_all();
         ids
     }
 
     pub fn reap_idle(&self) -> Vec<String> {
         let now = Instant::now();
-        let mut streams = self.streams.lock().expect("stream manager lock poisoned");
+        let mut streams = self.shared.streams.lock().expect("stream manager lock poisoned");
         let expired: Vec<String> = streams
             .iter()
             .filter_map(|(id, stream)| {
@@ -275,6 +329,9 @@ impl StreamManager {
             if let Some(stream) = streams.remove(id) {
                 stream.cancellation.0.store(true, Ordering::Release);
             }
+        }
+        if !expired.is_empty() {
+            self.shared.changed.notify_all();
         }
         expired
     }
