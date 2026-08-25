@@ -736,39 +736,99 @@ mod tests {
 
     struct Worker;
     impl crate::model::InferenceWorker for Worker {
-        fn kind(&self) -> &str { "mock" }
-        fn load(&self, _: &crate::model::ModelManifest, _: &Path) -> Result<(), crate::model::ModelError> { Ok(()) }
-        fn generate(&self, request: &crate::model::GenerateRequest, emit: &mut dyn FnMut(crate::model::GenerateEvent) -> Result<(), crate::model::ModelError>) -> Result<(), crate::model::ModelError> {
-            emit(crate::model::GenerateEvent::Usage { input_tokens: 10, output_tokens: 3 })?;
-            if request.messages.iter().any(|message| message.get("role").and_then(Value::as_str) == Some("tool")) {
-                emit(crate::model::GenerateEvent::Delta { text: "finished".into() })?;
-                emit(crate::model::GenerateEvent::Finish { reason: "stop".into() })
+        fn kind(&self) -> &str {
+            "mock"
+        }
+        fn load(
+            &self,
+            _: &crate::model::ModelManifest,
+            _: &Path,
+        ) -> Result<(), crate::model::ModelError> {
+            Ok(())
+        }
+        fn generate(
+            &self,
+            request: &crate::model::GenerateRequest,
+            emit: &mut dyn FnMut(
+                crate::model::GenerateEvent,
+            ) -> Result<(), crate::model::ModelError>,
+        ) -> Result<(), crate::model::ModelError> {
+            emit(crate::model::GenerateEvent::Usage {
+                input_tokens: 10,
+                output_tokens: 3,
+            })?;
+            if request
+                .messages
+                .iter()
+                .any(|message| message.get("role").and_then(Value::as_str) == Some("tool"))
+            {
+                emit(crate::model::GenerateEvent::Delta {
+                    text: "finished".into(),
+                })?;
+                emit(crate::model::GenerateEvent::Finish {
+                    reason: "stop".into(),
+                })
             } else {
-                emit(crate::model::GenerateEvent::ToolCall { name: "tools/write".into(), arguments: json!({"value":"ok"}) })?;
-                emit(crate::model::GenerateEvent::Finish { reason: "tool-call".into() })
+                emit(crate::model::GenerateEvent::ToolCall {
+                    name: "tools/write".into(),
+                    arguments: json!({"value":"ok"}),
+                })?;
+                emit(crate::model::GenerateEvent::Finish {
+                    reason: "tool-call".into(),
+                })
             }
         }
-        fn cancel(&self, _: &str) -> Result<(), crate::model::ModelError> { Ok(()) }
-        fn unload(&self, _: &str) -> Result<(), crate::model::ModelError> { Ok(()) }
+        fn cancel(&self, _: &str) -> Result<(), crate::model::ModelError> {
+            Ok(())
+        }
+        fn unload(&self, _: &str) -> Result<(), crate::model::ModelError> {
+            Ok(())
+        }
     }
     struct Mcp;
     impl crate::mcp::RpcTransport for Mcp {
         fn request(&self, _: u64, method: &str, _: Value) -> Result<Value, crate::mcp::McpError> {
-            Ok(if method == "tools/call" { json!({"content":[{"type":"text","text":"written"}]}) } else { json!({}) })
+            Ok(if method == "tools/call" {
+                json!({"content":[{"type":"text","text":"written"}]})
+            } else {
+                json!({})
+            })
         }
-        fn notify(&self, _: &str, _: Value) -> Result<(), crate::mcp::McpError> { Ok(()) }
+        fn notify(&self, _: &str, _: Value) -> Result<(), crate::mcp::McpError> {
+            Ok(())
+        }
     }
     fn runtime(temp: &tempfile::TempDir) -> AgentManager {
         let store = crate::model::ModelStore::open(temp.path().join("models")).unwrap();
         let blob = temp.path().join("model.bin");
         fs::write(&blob, b"model").unwrap();
         let digest = format!("sha256:{:x}", Sha256::digest(b"model"));
-        store.import(&blob, crate::model::ModelManifest { id: "local/test@1".into(), digest, size_bytes: 0, format: "test".into(), architecture: "test".into(), quantization: None, license: None, source: None, compatible_workers: vec!["mock".into()] }).unwrap();
+        store
+            .import(
+                &blob,
+                crate::model::ModelManifest {
+                    id: "local/test@1".into(),
+                    digest,
+                    size_bytes: 0,
+                    format: "test".into(),
+                    architecture: "test".into(),
+                    quantization: None,
+                    license: None,
+                    source: None,
+                    compatible_workers: vec!["mock".into()],
+                },
+            )
+            .unwrap();
         let models = crate::model::ModelManager::new(store);
         models.register_worker(Arc::new(Worker)).unwrap();
         models.load("local/test@1", "mock").unwrap();
         let mcp = crate::mcp::ConnectionManager::default();
-        mcp.connect("com.example.app", "tools", crate::mcp::McpClient::new(Arc::new(Mcp), crate::mcp::ProtocolEra::Modern)).unwrap();
+        mcp.connect(
+            "com.example.app",
+            "tools",
+            crate::mcp::McpClient::new(Arc::new(Mcp), crate::mcp::ProtocolEra::Modern),
+        )
+        .unwrap();
         AgentManager::open(temp.path().join("agents"), models, mcp).unwrap()
     }
 
@@ -776,27 +836,77 @@ mod tests {
     fn agent_checkpoints_approval_tool_result_and_completion() {
         let temp = tempfile::tempdir().unwrap();
         let manager = runtime(&temp);
-        let spec = AgentSpec { model: "local/test@1".into(), system_prompt: Some("safe".into()), tools: vec![AgentToolSpec { binding: "tools".into(), name: "write".into(), idempotent: false, require_approval: true }], budget: AgentBudget::default() };
-        let run = manager.create("com.example.app", spec, vec![json!({"role":"user","content":"write"})]).unwrap();
+        let spec = AgentSpec {
+            model: "local/test@1".into(),
+            system_prompt: Some("safe".into()),
+            tools: vec![AgentToolSpec {
+                binding: "tools".into(),
+                name: "write".into(),
+                idempotent: false,
+                require_approval: true,
+            }],
+            budget: AgentBudget::default(),
+        };
+        let run = manager
+            .create(
+                "com.example.app",
+                spec,
+                vec![json!({"role":"user","content":"write"})],
+            )
+            .unwrap();
         let mut events = Vec::new();
-        let waiting = manager.execute("com.example.app", &run.id, &mut |event| { events.push(event); Ok(()) }).unwrap();
+        let waiting = manager
+            .execute("com.example.app", &run.id, &mut |event| {
+                events.push(event);
+                Ok(())
+            })
+            .unwrap();
         assert_eq!(waiting.state, AgentState::WaitingApproval);
         assert!(waiting.pending_tool.is_some());
         manager.approve("com.example.app", &run.id).unwrap();
-        let completed = manager.execute("com.example.app", &run.id, &mut |_| Ok(())).unwrap();
+        let completed = manager
+            .execute("com.example.app", &run.id, &mut |_| Ok(()))
+            .unwrap();
         assert_eq!(completed.state, AgentState::Completed);
         assert_eq!(completed.usage.tool_calls, 1);
         assert!(manager.run_dir(&run.id).join("checkpoints").is_dir());
-        assert!(!manager.history("com.example.app", &run.id, 100).unwrap().is_empty());
+        assert!(
+            !manager
+                .history("com.example.app", &run.id, 100)
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]
     fn agent_state_is_application_isolated_and_survives_reopen() {
         let temp = tempfile::tempdir().unwrap();
         let manager = runtime(&temp);
-        let run = manager.create("com.example.app", AgentSpec { model: "local/test@1".into(), system_prompt: None, tools: vec![], budget: AgentBudget::default() }, vec![]).unwrap();
-        assert!(matches!(manager.status("com.other.app", &run.id), Err(AgentError::NotFound(_))));
-        let reopened = AgentManager::open(temp.path().join("agents"), manager.models.clone(), manager.mcp.clone()).unwrap();
-        assert_eq!(reopened.status("com.example.app", &run.id).unwrap().state, AgentState::Queued);
+        let run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: vec![],
+                    budget: AgentBudget::default(),
+                },
+                vec![],
+            )
+            .unwrap();
+        assert!(matches!(
+            manager.status("com.other.app", &run.id),
+            Err(AgentError::NotFound(_))
+        ));
+        let reopened = AgentManager::open(
+            temp.path().join("agents"),
+            manager.models.clone(),
+            manager.mcp.clone(),
+        )
+        .unwrap();
+        assert_eq!(
+            reopened.status("com.example.app", &run.id).unwrap().state,
+            AgentState::Queued
+        );
     }
 }
