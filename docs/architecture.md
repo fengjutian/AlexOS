@@ -9,8 +9,11 @@ nav_order: 2
 > 本文档是 Alex OS 的**顶层架构总览**，目标是让读者在 15 分钟内建立"组件如何拼接、数据如何流动"的心智模型。
 > 实现细节、当前状态、路线图分别见 [`status.md`](./status.md)、[`roadmap.md`](./roadmap.md) 及各专题文档。
 >
-> 产品目标架构以 [`product-requirements.md`](./product-requirements.md) 为准。下文主要记录当前
-> `0.1.0` Windows + WebView2 + 单 Node Backend 原型，不能视为最终产品架构。
+> 产品目标架构以 [`product-requirements.md`](./product-requirements.md) 为准。下文主要记录
+> 当前 `0.1.0` Windows + WebView2 + Node.js 桌面 AI 应用 Runtime。Runtime MVP 关键件（`alex
+> daemon`、Manifest v2 多服务编排、Job Object 进程树清理、Agent / MCP / Model 协议层）已在
+> `src/` 落地（2026-08-25 基线：`cargo test -p alex --lib` 335/335 passed），但 v0.2 之后的
+> 受管 Runtime、跨平台、移动端、Registry 仍属 P1/P2。
 
 ## 0. 目标架构与迁移方向
 
@@ -32,9 +35,11 @@ CLI / Shell / App Manager
      Node Python Native
 ```
 
-当前 `RuntimeSupervisor` 仍由调用进程持有，Manifest 仍只有单 backend。近期迁移顺序是：先建立
-Daemon 控制面和持久状态，再引入多服务 Manifest，随后接入受管 Node/Python。Shell 不再直接
-拥有应用进程生命周期。
+当前 `alexd` 已持有共享 `LocalAppManager` / `RuntimeSupervisor`（`src/daemon/service.rs`），
+Manifest v2 多服务依赖编排已落地（`src/runtime/application_supervisor.rs`），Shell / CLI / App
+Manager 通过 Windows Named Pipe `\\.\pipe\alex-runtime-v1` 调用 Daemon。Shell 不再直接
+拥有应用进程生命周期。剩余迁移项见 [`roadmap.md`](./roadmap.md) §0.3 受管 Node/Python Runtime
+与 §3.x。
 
 ## 1. 当前原型的设计目标
 
@@ -101,7 +106,7 @@ Daemon 控制面和持久状态，再引入多服务 Manifest，随后接入受�
 
 | 进程 | 启动时机 | 终止时机 | 隔离手段 |
 | --- | --- | --- | --- |
-| Rust Shell | 用户启动 Alex OS | 用户退出 / Shell crash（0.1：crash 后已启动的 service 进程成孤儿，需手动清理；0.2 Job Object 落地后自动 kill） | — |
+| Rust Shell | 用户启动 Alex OS | 用户退出 / Shell crash（Job Object RAII Drop 已 wired：`container::isolation::job_provider` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，`job_provider_kills_process_on_handle_drop` 测试通过；显式"Shell 异常退出 → service 自动 kill" 端到端用例待补） | Job Object + 当前用户 DACL |
 | WebView（App） | 用户启动 App | App 关闭 / 进程崩溃 | 独立进程 + CSP |
 | Node RPC 模式 | 每次 IPC 调用 | 每次调用结束 | 短进程 |
 | Node Service 模式 | App 启动时 | App 关闭 | 独立进程 + per-launch token |
@@ -150,7 +155,7 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
 
 当前（0.1）：
 
-- **进程隔离**：每个 App / 每次 service 模式 = 独立进程。**0.1 限制**：Rust Shell 异常退出后，已启动的 service 后端进程成为孤儿（host 不持有 Job Object 句柄，无强 kill 路径），需要 OS 手动清理或重启机器。0.2 通过 [`alex-container-design.md`](./alex-container-design.md) §5 L1 Job Object 落地，宿主 crash 时 `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 触发整棵进程树回收。
+- **进程隔离**：每个 App / 每次 service 模式 = 独立进程。**Job Object 已落地**（`src/container/isolation.rs`），`JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE` 配合 RAII `Drop` 在 service 句柄释放时回收整棵进程树。Rust Shell 异常退出后已启动的 service 进程由 Job Object 自动 kill；显式端到端测试尚未补（见 [`roadmap.md` §3.1](./roadmap.md)）。
 - **WebView 隔离**：独立 `WebView2` 进程 + `alex://app/` 自定义 scheme + CSP + 路径规范化 + 入口白名单。
 - **权限隔离**：Manifest 声明上限；首次 Native 调用弹 rfd 模态框；决策持久化在 `permissions/<id>.json`。
 - **数据隔离**：App 不能写其他 App 的 `%LOCALAPPDATA%/AlexOS/apps/<other-id>/`。
@@ -254,21 +259,25 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
 
 | 模块 | 路径 | 职责 |
 | --- | --- | --- |
-| CLI 入口 | `src/main.rs` | 子命令分发（`run` / `pack` / `install` / `manager` / `plugin` / `container`） |
-| Dev 模式 | `src/dev.rs` | `alex dev` 框架：frontend 文件观察与热刷新、node backend 自动重启、manifest 变更检测、DevTools/IPC Inspector 钩子 |
+| CLI 入口 | `src/main.rs` | 子命令分发（`create` / `validate` / `inspect` / `pack` / `install` / `list` / `uninstall` / `update` / `update-remote` / `publish-update` / `permissions` / `keygen` / `trust` / `run` / `dev` / `shell` / `plugin` / `manager` / `daemon` / `start` / `stop` / `restart` / `status` / `logs` / `shutdown` / `container`） |
+| Dev 模式 | `src/webview/dev.rs` | `alex dev` 框架：frontend 文件观察与热刷新、node backend 自动重启、manifest 变更检测、DevTools/IPC Inspector 钩子 |
 | 进程管理 | `src/runtime/supervisor.rs` | 启动、停止、握手、重启；`ALEX_SERVICE_PORT` 注入；`alex.ready` 协议 |
+| Service 编排 | `src/runtime/application_supervisor.rs` | Manifest v2 多服务依赖分层启动、失败回滚、反向停止、generation 防旧任务写回 |
 | IPC 派发 | `src/api/router.rs` | 所有 `system.*` / `dialog.*` / ... 的注册与 `dispatch`；统一权限检查入口 |
 | 权限定义 | `src/api/permission.rs` | `Permission` 枚举、`name()` 规范名、声明与请求的归一化 |
 | 权限兼容层 | `src/api/permission_shim.rs` | 老 manifest/老 permission 字符串到新 `Permission` 的迁移映射 |
 | 权限持久化 | `src/api/authorization.rs` | `PermissionStore`；CLI grant/revoke；JSONL 审计 |
 | WebView 容器 | `src/webview/shell.rs` | wry + WebView2 + 协议处理器 + CSP + 资源服务 |
-| WebView 协议 | `src/webview/protocol.rs` | `serve_system_asset`（`/app-manager/` 解析）+ `asset_response`（frontend root） |
-| 自定义 IPC | `src/webview/native.rs` | rfd 文件选择 / 模态确认；pre-grant plugin system 权限 |
-| 反向代理 | `src/proxy.rs` | `proxy_to_service`（sync HTTP/1.1 forwarder，token 注入） |
+| WebView 原生 | `src/webview/native.rs` | rfd 文件选择 / 模态确认；pre-grant plugin system 权限 |
+| WebView2 检测 | `src/webview/webview2.rs` | 运行时检测 + 启动参数 |
+| 反向代理 | `src/runtime/proxy.rs` | `proxy_to_service`（sync HTTP/1.1 forwarder，token 注入）；WebSocket capability loopback tunnel |
 | 包安装/签名 | `src/core/package.rs` | `.alex` 编/解 + Ed25519 签名 + 完整性 + Trust Store |
+| Manifest v2 | `src/core/manifest_v2.rs` + `src/core/manifest.rs` | v1/v2 双解析；`ResolvedApplication` 统一模型 |
 | 插件运行时 | `src/core/plugin.rs` | 自托管 plugin；reverse IPC 派发；headless 自动 grant |
-| 应用数据 | `src/data/` | per-app data/cache/logs/runtime 目录；`store.json` 原子写 |
-| 容器 | `src/container/` | L0 进程管理 + L1 Job Object 骨架（0.2） |
+| 更新 | `src/core/update.rs` + `src/core/update_tasks.rs` | 签名清单 + 原子暂存 / 备份 / 替换 / 回滚 + 持久化任务队列 |
+| 应用数据 | `src/data/` | per-app data/cache/logs/runtime 目录；`store.json` 原子写；`file_token` 短期文件授权 |
+| 容器 | `src/container/` | L0 进程管理 + L1 Job Object（已 wired）；L2 AppContainer 设计中 |
+| Daemon | `src/daemon/` | Named Pipe + JSON Lines 控制协议 + 共享 RuntimeSupervisor + desired/observed state 原子持久化 |
 
 ## 8. 关键设计决策（ADR 风格）
 

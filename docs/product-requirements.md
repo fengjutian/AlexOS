@@ -285,12 +285,10 @@ alex doctor
 
 ## 10. 当前工程决策
 
-第一主线固定为四个技术核心：
+两条主线**并行**推进（2026-08-25 修订）：
 
-1. Application Package；
-2. Process Manager；
-3. Runtime Manager；
-4. Permission Manager。
+1. **Runtime MVP（0.1 P0）** — Application Package + Process Manager + Runtime Manager + Permission Manager；`alexd` + 本地控制协议 + 持久状态 + 生命周期 CLI 是这条主线的第一交付物；
+2. **AI Runtime（0.2 主线）** — Model + MCP + Agent，按 [`ai-runtime-implementation.md`](./ai-runtime-implementation.md) 实施，当前已在 `src/agent/`、`src/mcp/`、`src/model/` 并行落地。
 
-近期第一交付物是 `alexd + 本地控制协议 + 持久状态 + 生命周期 CLI`。Desktop API、Shell、Plugin、
-Container、Model、MCP 和 Registry 均不得挤占这条交付主线。
+Desktop API、Shell、Plugin、Container、Registry 不得挤占这两条主线。Python Runtime、跨平台、
+移动端、Store 与签名安装器仍属 P1/P2，未出现在本版本能力承诺中。
