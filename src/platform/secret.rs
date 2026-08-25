@@ -47,7 +47,98 @@ impl SecretStore for NativeSecretStore {
     }
 }
 
-#[cfg(not(target_os = "macos"))]
+#[cfg(target_os = "windows")]
+impl SecretStore for NativeSecretStore {
+    fn set(&self, service: &str, account: &str, secret: &[u8]) -> Result<(), SecretStoreError> {
+        use windows::{
+            Win32::Security::Credentials::{
+                CRED_MAX_CREDENTIAL_BLOB_SIZE, CRED_PERSIST_LOCAL_MACHINE, CRED_TYPE_GENERIC,
+                CREDENTIALW, CredWriteW,
+            },
+            core::PWSTR,
+        };
+        validate_key(service, account)?;
+        if secret.len() > CRED_MAX_CREDENTIAL_BLOB_SIZE as usize {
+            return Err(SecretStoreError::Failed(
+                "secret exceeds Windows Credential Manager limit".into(),
+            ));
+        }
+        let mut target = wide(&target_name(service, account));
+        let mut username = wide(account);
+        let mut blob = secret.to_vec();
+        let credential = CREDENTIALW {
+            Type: CRED_TYPE_GENERIC,
+            TargetName: PWSTR(target.as_mut_ptr()),
+            CredentialBlobSize: blob.len() as u32,
+            CredentialBlob: blob.as_mut_ptr(),
+            Persist: CRED_PERSIST_LOCAL_MACHINE,
+            UserName: PWSTR(username.as_mut_ptr()),
+            ..Default::default()
+        };
+        // SAFETY: all pointers reference live buffers for the duration of the
+        // synchronous call; CredWriteW copies the credential data.
+        unsafe { CredWriteW(&credential, 0) }
+            .map_err(|error| SecretStoreError::Failed(error.to_string()))
+    }
+
+    fn get(&self, service: &str, account: &str) -> Result<Option<Vec<u8>>, SecretStoreError> {
+        use windows::Win32::Security::Credentials::{
+            CRED_TYPE_GENERIC, CREDENTIALW, CredFree, CredReadW,
+        };
+        use windows::core::PCWSTR;
+        validate_key(service, account)?;
+        let target = wide(&target_name(service, account));
+        let mut credential: *mut CREDENTIALW = std::ptr::null_mut();
+        // SAFETY: the output pointer is initialized by CredReadW and released
+        // with CredFree on every successful call.
+        match unsafe {
+            CredReadW(
+                PCWSTR(target.as_ptr()),
+                CRED_TYPE_GENERIC,
+                None,
+                &mut credential,
+            )
+        } {
+            Ok(()) => {
+                if credential.is_null() {
+                    return Err(SecretStoreError::Failed(
+                        "Credential Manager returned a null credential".into(),
+                    ));
+                }
+                // SAFETY: CredentialBlob is owned by the returned credential
+                // and remains valid until CredFree below.
+                let secret = unsafe {
+                    let value = &*credential;
+                    std::slice::from_raw_parts(
+                        value.CredentialBlob,
+                        value.CredentialBlobSize as usize,
+                    )
+                    .to_vec()
+                };
+                // SAFETY: credential was allocated by CredReadW.
+                unsafe { CredFree(credential.cast()) };
+                Ok(Some(secret))
+            }
+            Err(error) if error.code().0 == -2147023728 => Ok(None), // HRESULT_FROM_WIN32(ERROR_NOT_FOUND)
+            Err(error) => Err(SecretStoreError::Failed(error.to_string())),
+        }
+    }
+
+    fn delete(&self, service: &str, account: &str) -> Result<bool, SecretStoreError> {
+        use windows::Win32::Security::Credentials::{CRED_TYPE_GENERIC, CredDeleteW};
+        use windows::core::PCWSTR;
+        validate_key(service, account)?;
+        let target = wide(&target_name(service, account));
+        // SAFETY: target is a live, NUL-terminated UTF-16 buffer.
+        match unsafe { CredDeleteW(PCWSTR(target.as_ptr()), CRED_TYPE_GENERIC, None) } {
+            Ok(()) => Ok(true),
+            Err(error) if error.code().0 == -2147023728 => Ok(false),
+            Err(error) => Err(SecretStoreError::Failed(error.to_string())),
+        }
+    }
+}
+
+#[cfg(not(any(target_os = "macos", target_os = "windows")))]
 impl SecretStore for NativeSecretStore {
     fn set(&self, _: &str, _: &str, _: &[u8]) -> Result<(), SecretStoreError> {
         Err(SecretStoreError::Unsupported)
@@ -60,7 +151,7 @@ impl SecretStore for NativeSecretStore {
     }
 }
 
-#[cfg(any(target_os = "macos", test))]
+#[cfg(any(target_os = "macos", target_os = "windows", test))]
 fn validate_key(service: &str, account: &str) -> Result<(), SecretStoreError> {
     let valid = |value: &str| !value.is_empty() && value.len() <= 255 && !value.contains('\0');
     if valid(service) && valid(account) {
@@ -70,6 +161,16 @@ fn validate_key(service: &str, account: &str) -> Result<(), SecretStoreError> {
             "invalid service or account name".into(),
         ))
     }
+}
+
+#[cfg(target_os = "windows")]
+fn target_name(service: &str, account: &str) -> String {
+    format!("AlexOS:{service}:{account}")
+}
+
+#[cfg(target_os = "windows")]
+fn wide(value: &str) -> Vec<u16> {
+    value.encode_utf16().chain(std::iter::once(0)).collect()
 }
 
 pub fn native() -> NativeSecretStore {
