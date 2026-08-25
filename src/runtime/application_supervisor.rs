@@ -40,7 +40,7 @@ use thiserror::Error;
 
 use crate::{
     core::{
-        application_manifest::{ApplicationManifest, ServiceDescriptor, ServiceRestartPolicy},
+        application_manifest::{ResolvedApplication, ServiceDescriptor, ServiceRestartPolicy},
         manifest::{Backend, BackendMode, HealthCheck, RestartPolicy, RuntimeKind},
     },
     runtime::{
@@ -503,7 +503,7 @@ impl ApplicationSupervisor {
         application.clone()
     }
 
-    /// Start every service declared in `manifest`. Phase 3
+    /// Start every service declared in `resolved`. Phase 3
     /// organises the spawn by `start_layers`: services in the
     /// same DAG layer are started concurrently up to
     /// `config.per_app_concurrency`, the layer must reach
@@ -520,12 +520,12 @@ impl ApplicationSupervisor {
         &self,
         app_id: &str,
         install_root: &Path,
-        manifest: &ApplicationManifest,
+        resolved: &ResolvedApplication,
     ) -> Result<ApplicationObservedState, ApplicationSupervisorError> {
         self.start_application_with_config(
             app_id,
             install_root,
-            manifest,
+            resolved,
             &StartConfig::default(),
         )
     }
@@ -538,10 +538,10 @@ impl ApplicationSupervisor {
         &self,
         app_id: &str,
         install_root: &Path,
-        manifest: &ApplicationManifest,
+        resolved: &ResolvedApplication,
         config: &StartConfig,
     ) -> Result<ApplicationObservedState, ApplicationSupervisorError> {
-        let services = manifest.services();
+        let services: Vec<ServiceDescriptor> = resolved.services.values().cloned().collect();
         if services.is_empty() {
             return Err(ApplicationSupervisorError::V2LaunchNotSupported(
                 "manifest declares no services; headless UI-only apps are not runnable".into(),
@@ -1983,8 +1983,9 @@ mod tests {
         // Build a v2 manifest with a Python service to drive
         // the runtime check. `start_application` must refuse
         // it before the service slot is even created.
-        use crate::core::manifest_v2::{
-            ApplicationManifestV2, RuntimeRequirements, ServiceSpec,
+        use crate::core::{
+            application_manifest::ApplicationManifest,
+            manifest_v2::{ApplicationManifestV2, RuntimeRequirements, ServiceSpec},
         };
         let mut services = BTreeMap::new();
         services.insert(
@@ -2015,7 +2016,8 @@ mod tests {
             permissions: Default::default(),
         };
         let unified = ApplicationManifest::V2(manifest);
-        let result = supervisor.start_application("com.example.python", Path::new("."), &unified);
+        let resolved = unified.resolve().expect("resolve python app");
+        let result = supervisor.start_application("com.example.python", Path::new("."), &resolved);
         match result {
             Err(ApplicationSupervisorError::V2LaunchNotSupported(message)) => {
                 assert!(message.contains("Python"), "unexpected: {message}");

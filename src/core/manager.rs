@@ -1119,7 +1119,13 @@ impl RuntimeSupervisor {
         install_root: &Path,
         manifest: &crate::core::application_manifest::ApplicationManifest,
     ) -> Result<RuntimeStatus, SupervisorError> {
-        self.inner.start_application(id, install_root, manifest)?;
+        // Resolve the manifest into the flattened execution model
+        // so the supervisor only ever receives `ResolvedApplication`
+        // (the AI Runtime plan's "execution sees one model" rule).
+        let resolved = manifest
+            .resolve()
+            .map_err(|error| SupervisorError::Supervisor(error.to_string()))?;
+        self.inner.start_application(id, install_root, &resolved)?;
         Ok(self
             .inner
             .runtime_status_compat(id)

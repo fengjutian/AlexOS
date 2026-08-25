@@ -374,6 +374,87 @@ pub struct PermissionDescriptor {
     pub name: String,
 }
 
+/// The flattened, schema-agnostic service view produced by
+/// [`ApplicationManifest::resolve`]. This type plays the role the
+/// AI Runtime plan names `ResolvedService`: a validated, runnable
+/// description with no reference back to the source schema. v1
+/// backends are projected onto the single `main` service; v2
+/// services are copied through with their declared DAG edges.
+pub type ResolvedService = ServiceDescriptor;
+
+/// Resolved frontend entry point.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedFrontend {
+    pub entry: String,
+}
+
+/// Effective permission request the resolved application asks for.
+///
+/// M1 populates this from the manifest's declared permissions (v1
+/// flat IPC-method names, or v2 synthesised `fs:` / `net:` /
+/// `shell:` policy names). Policy *evaluation* (grant/deny, user
+/// decisions, parameter checks) is introduced with the later
+/// permission/MCP milestones; M1 only needs the declared set to be
+/// carried in the resolved model so execution never re-reads the
+/// source schema.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct EffectivePermissionRequest {
+    pub descriptors: Vec<PermissionDescriptor>,
+}
+
+/// The single, stable execution model handed to the supervisor.
+///
+/// This is the AI Runtime plan's `ResolvedApplication`: parsing
+/// keeps the v1/v2 split ([`ApplicationManifest`]), execution only
+/// ever sees this flattened shape. `models`, `mcp_servers` and
+/// `agent` are intentionally absent — they are introduced with the
+/// Model (M6), MCP (M7) and Agent (M10) milestones and each needs
+/// its own manifest schema + types. M1 covers frontend, services
+/// and the declared permission set.
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct ResolvedApplication {
+    pub id: String,
+    pub name: String,
+    pub version: semver::Version,
+    pub frontend: Option<ResolvedFrontend>,
+    pub services: BTreeMap<String, ResolvedService>,
+    pub permissions: EffectivePermissionRequest,
+}
+
+impl ApplicationManifest {
+    /// Resolve the loaded manifest into the flattened execution
+    /// model. Fails only when the declared version is not a valid
+    /// semantic version — v2 validates this at load time, v1 stores
+    /// the version verbatim so a non-semver v1 version is caught
+    /// here instead of leaking into the execution layer.
+    pub fn resolve(&self) -> Result<ResolvedApplication, ManifestError> {
+        let version = semver::Version::parse(self.version())
+            .map_err(|error| ManifestError::Invalid(format!("invalid version: {error}")))?;
+        let frontend = self
+            .frontend()
+            .map(|frontend| ResolvedFrontend { entry: frontend.entry });
+        let services = self
+            .services()
+            .into_iter()
+            .map(|descriptor| (descriptor.name.clone(), descriptor))
+            .collect();
+        let permissions = EffectivePermissionRequest {
+            descriptors: self.permissions(),
+        };
+        Ok(ResolvedApplication {
+            id: self.id().to_owned(),
+            name: self.name().to_owned(),
+            version,
+            frontend,
+            services,
+            permissions,
+        })
+    }
+}
+
 /// Load the unified application manifest at `root`. Exactly one
 /// of `manifest.json` or `app.yaml` must be present; see
 /// [`ManifestError`] for the failure modes. The path arguments
@@ -952,5 +1033,79 @@ services:
         let manifest = load_application(dir2.path()).unwrap();
         assert!(manifest.as_v1().is_none());
         assert!(manifest.as_v2().is_some());
+    }
+
+    #[test]
+    fn resolve_projects_v1_backend_into_a_resolved_application() {
+        let dir = tempfile::tempdir().unwrap();
+        write_index_html(&dir.path());
+        write_main_js(&dir.path());
+        write_v1(&dir.path(), v1_with_backend());
+
+        let manifest = load_application(dir.path()).expect("load v1");
+        let resolved = manifest.resolve().expect("resolve v1");
+
+        assert_eq!(resolved.id, "com.alex.hello");
+        assert_eq!(resolved.name, "Hello");
+        assert_eq!(
+            resolved.version,
+            semver::Version::parse("0.1.0").unwrap()
+        );
+        assert_eq!(
+            resolved.frontend.as_ref().map(|f| f.entry.as_str()),
+            Some("index.html")
+        );
+        assert_eq!(resolved.services.len(), 1);
+        let main = resolved.services.get("main").expect("main service");
+        assert_eq!(main.command, "main.js");
+        assert!(main.depends_on.is_empty());
+        let names: Vec<_> = resolved
+            .permissions
+            .descriptors
+            .iter()
+            .map(|p| p.name.as_str())
+            .collect();
+        assert_eq!(names, vec!["runtime.invoke", "filesystem.read"]);
+    }
+
+    #[test]
+    fn resolve_projects_v2_services_and_headless_frontend() {
+        let dir = tempfile::tempdir().unwrap();
+        write_main_js(&dir.path());
+        std::fs::write(dir.path().join("worker.py"), "").unwrap();
+        write_v2(&dir.path(), v2_two_services());
+
+        let manifest = load_application(dir.path()).expect("load v2");
+        let resolved = manifest.resolve().expect("resolve v2");
+
+        assert_eq!(resolved.id, "com.alex.agent");
+        assert!(resolved.frontend.is_none());
+        assert_eq!(resolved.services.len(), 2);
+        let api = resolved.services.get("api").expect("api");
+        assert_eq!(api.depends_on, vec!["worker"]);
+        assert_eq!(api.port, Some(29010));
+        let worker = resolved.services.get("worker").expect("worker");
+        assert_eq!(worker.runtime, ServiceRuntime::Python);
+    }
+
+    #[test]
+    fn resolve_rejects_a_non_semver_v1_version() {
+        let dir = tempfile::tempdir().unwrap();
+        write_index_html(&dir.path());
+        write_v1(
+            &dir.path(),
+            r#"{
+              "schemaVersion": 1,
+              "id": "com.alex.loose",
+              "name": "Loose",
+              "version": "latest",
+              "frontend": { "entry": "index.html" }
+            }"#,
+        );
+        // v1 stores the version verbatim, so loading succeeds; the
+        // execution model is stricter and must reject the value here.
+        let manifest = load_application(dir.path()).expect("load loose v1");
+        let error = manifest.resolve().unwrap_err();
+        assert!(matches!(error, ManifestError::Invalid(_)));
     }
 }
