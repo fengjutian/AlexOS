@@ -1631,7 +1631,7 @@ pub fn node_tool_command(name: &str) -> Command {
             .join("bin")
             .join("npm-cli.js");
         if npm_cli.is_file() {
-            let mut command = Command::new(node);
+            let mut command = Command::new(&node);
             command.arg(npm_cli);
             let mut paths = vec![bin.to_path_buf()];
             if let Some(existing) = std::env::var_os("PATH") {

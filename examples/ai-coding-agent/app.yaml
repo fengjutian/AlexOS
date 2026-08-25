@@ -31,6 +31,9 @@ services:
     restart:
       policy: on-failure
       maxRetries: 3
+    env:
+      ALEX_WORKSPACE: workspace
+      LOG_LEVEL: info
 
 mcpServers:
   filesystem:
