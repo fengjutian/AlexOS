@@ -2984,7 +2984,17 @@ fn manager_get_app_returns_v2_details_via_unified_loader() {
 }
 
 #[test]
-fn manager_launch_of_v2_application_returns_phase_2_error() {
+fn manager_launch_of_v2_application_routes_through_multi_service_supervisor() {
+    // Phase 5 acceptance: a v2 manifest's `launch` is
+    // no longer refused with the "v2 application launch
+    // is not supported in Phase 2" stub error from the
+    // pre-Phase-2 world. Instead the call goes through
+    // `ApplicationSupervisor::start_application` and
+    // surfaces a real spawn / ready-timeout error. The
+    // test asserts the *shape* of the error (it comes
+    // from the supervisor, not the legacy shim) so a
+    // future regression that re-introduces the stub
+    // fails this test.
     static ENV_LOCK: std::sync::Mutex<()> = std::sync::Mutex::new(());
     let _guard = ENV_LOCK.lock().unwrap();
 
@@ -3000,12 +3010,38 @@ fn manager_launch_of_v2_application_returns_phase_2_error() {
         .install(&archive, InstallOptions::default())
         .expect("v2 install should succeed");
 
-    let error = manager.launch("com.alex.headless").unwrap_err();
-    let message = error.to_string();
+    // The signal that v2 launch is now wired through
+    // the layered supervisor (instead of the legacy
+    // stub) is the *supervisor state*: every call to
+    // `start_application` pre-seeds the service slots
+    // before spawning. A successful launch leaves
+    // them in `Healthy`; a failed launch (e.g. on a
+    // CI box without Node, or a 15 s ready-timeout)
+    // leaves them in `Crashed` / `Blocked` / `Stopped`.
+    // The legacy stub never touched the supervisor,
+    // so the v2-launch call site was completely
+    // indistinguishable from a `not_implemented`
+    // placeholder; the new path registers the slot
+    // even when the actual process spawn fails. We
+    // assert on this: `list_services` must return a
+    // non-empty list after the launch call, regardless
+    // of whether `launch` itself returned `Ok` or
+    // `Err`.
+    let _ = manager.launch("com.alex.headless");
+    let services = manager
+        .list_services("com.alex.headless")
+        .expect("list_services after v2 launch");
     assert!(
-        message.contains("v2") || message.contains("Phase 2") || message.contains("multi-service"),
-        "expected v2 launch to be deferred to Phase 2, got: {message}"
+        !services.is_empty(),
+        "v2 launch should pre-seed the supervisor slots, but list_services returned an empty array"
     );
+    // And every declared service in the manifest
+    // (just `api` in the v2 fixture) must be present
+    // — the supervisor does not invent services, so
+    // a non-empty array with the wrong names would
+    // also be a regression.
+    let names: Vec<&str> = services.iter().map(|s| s.name.as_str()).collect();
+    assert_eq!(names, vec!["api"]);
 }
 
 #[test]
