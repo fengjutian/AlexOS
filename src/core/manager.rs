@@ -261,6 +261,15 @@ pub trait AppManager: Send + Sync {
             "service invocation is not supported by this manager".into(),
         ))
     }
+    fn service_endpoint(
+        &self,
+        _id: &str,
+        _service: &str,
+    ) -> Result<crate::runtime::ServiceEndpoint, ManagerError> {
+        Err(ManagerError::Runtime(
+            "service endpoint access is not supported by this manager".into(),
+        ))
+    }
     fn permissions(&self, id: &str) -> Result<Vec<PermissionState>, ManagerError>;
     fn set_permission(
         &self,
@@ -975,6 +984,16 @@ impl AppManager for LocalAppManager {
             .invoke_service(id, service, request_id, method, params, timeout_ms)
             .map_err(|error| ManagerError::Runtime(error.to_string()))
     }
+
+    fn service_endpoint(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<crate::runtime::ServiceEndpoint, ManagerError> {
+        self.runtimes
+            .service_endpoint(id, service)
+            .map_err(|error| ManagerError::Runtime(error.to_string()))
+    }
 }
 
 /// In-memory map of running app backends. Keyed by app id.
@@ -1215,6 +1234,16 @@ impl RuntimeSupervisor {
                 params,
                 Duration::from_millis(timeout_ms.clamp(1, 30_000)),
             )
+            .map_err(|error| SupervisorError::Supervisor(error.to_string()))
+    }
+
+    pub fn service_endpoint(
+        &self,
+        id: &str,
+        service: &str,
+    ) -> Result<crate::runtime::ServiceEndpoint, SupervisorError> {
+        self.inner
+            .service_endpoint(id, service, Duration::from_secs(2))
             .map_err(|error| SupervisorError::Supervisor(error.to_string()))
     }
 

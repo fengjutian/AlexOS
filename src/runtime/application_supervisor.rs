@@ -1055,6 +1055,52 @@ impl ApplicationSupervisor {
             .map_err(ApplicationSupervisorError::Runtime)
     }
 
+    /// Resolve the private loopback capability for a service-mode backend.
+    /// This value must remain inside trusted host/daemon code and must never
+    /// be serialized into a Desktop API response.
+    pub fn service_endpoint(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        timeout: Duration,
+    ) -> Result<crate::runtime::ServiceEndpoint, ApplicationSupervisorError> {
+        let handle = {
+            let guard = self
+                .applications
+                .lock()
+                .expect("application supervisor lock poisoned");
+            let application = guard
+                .get(app_id)
+                .ok_or_else(|| ApplicationSupervisorError::NotFound(app_id.to_owned()))?;
+            let service = application.services.get(service_name).ok_or_else(|| {
+                ApplicationSupervisorError::ServiceNotFound {
+                    app: app_id.to_owned(),
+                    service: service_name.to_owned(),
+                }
+            })?;
+            service
+                .handle
+                .clone()
+                .ok_or_else(|| ApplicationSupervisorError::ServiceNotFound {
+                    app: app_id.to_owned(),
+                    service: service_name.to_owned(),
+                })?
+        };
+        let status = handle
+            .status(timeout)
+            .map_err(ApplicationSupervisorError::Runtime)?;
+        match (status.port, status.token) {
+            (Some(port), Some(token)) if status.ready => {
+                Ok(crate::runtime::ServiceEndpoint { port, token })
+            }
+            _ => Err(ApplicationSupervisorError::Runtime(
+                crate::runtime::RuntimeError::Protocol(format!(
+                    "service {app_id}/{service_name} has no ready endpoint"
+                )),
+            )),
+        }
+    }
+
     // -------------------------------------------------------------------
     // Phase 4 — watchdog hooks
     // -------------------------------------------------------------------

@@ -1,5 +1,7 @@
 use std::{
+    collections::BTreeMap,
     sync::Arc,
+    sync::Mutex,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -29,6 +31,7 @@ pub struct RecoveryReport {
 pub struct DaemonService {
     state: DaemonStateStore,
     manager: Option<Arc<dyn crate::manager::AppManager>>,
+    websocket_tunnels: Arc<Mutex<BTreeMap<String, crate::proxy::WebSocketTunnel>>>,
 }
 
 impl DaemonService {
@@ -36,6 +39,7 @@ impl DaemonService {
         Self {
             state,
             manager: None,
+            websocket_tunnels: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -89,6 +93,9 @@ impl DaemonService {
                 arguments,
                 timeout_ms,
             } => self.invoke_service(&id, &app_id, &service, &method, &arguments, timeout_ms),
+            ControlCommand::OpenServiceWebSocket { app_id, service } => {
+                self.open_service_websocket(&app_id, &service)
+            }
         };
         match result {
             Ok(value) => ControlResponse::success(id, value),
@@ -504,6 +511,29 @@ impl DaemonService {
         manager
             .invoke_service(app_id, service, request_id, method, arguments, timeout_ms)
             .map_err(|error| error.to_string())
+    }
+
+    fn open_service_websocket(
+        &self,
+        app_id: &str,
+        service: &str,
+    ) -> Result<serde_json::Value, String> {
+        let manager = self
+            .manager
+            .as_ref()
+            .ok_or_else(|| "runtime manager is not configured".to_owned())?;
+        let endpoint = manager
+            .service_endpoint(app_id, service)
+            .map_err(|error| error.to_string())?;
+        let tunnel = crate::proxy::WebSocketTunnel::start(endpoint, app_id.to_owned())
+            .map_err(|error| error.to_string())?;
+        let base_url = tunnel.base_url.clone();
+        let key = format!("{app_id}\0{service}");
+        self.websocket_tunnels
+            .lock()
+            .map_err(|_| "websocket tunnel registry lock poisoned".to_owned())?
+            .insert(key, tunnel);
+        Ok(json!({ "baseUrl": base_url }))
     }
 
     fn set_desired(

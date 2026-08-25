@@ -81,6 +81,11 @@ pub enum ControlCommand {
         #[serde(default = "default_invoke_timeout_ms")]
         timeout_ms: u64,
     },
+    OpenServiceWebSocket {
+        app_id: String,
+        #[serde(default = "default_service_name")]
+        service: String,
+    },
 }
 
 fn default_log_limit() -> u32 {
