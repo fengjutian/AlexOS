@@ -2056,6 +2056,7 @@ mod tests {
                 port: None,
                 health: None,
                 restart: Default::default(),
+                dev: None,
             },
         );
         let manifest = ApplicationManifestV2 {

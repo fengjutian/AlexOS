@@ -136,6 +136,19 @@ pub struct ServiceSpec {
     pub health: Option<ServiceHealth>,
     #[serde(default)]
     pub restart: ServiceRestart,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev: Option<ServiceDev>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ServiceDev {
+    pub command: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub args: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub install: Option<FrontendDevInstall>,
+    pub cwd: String,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -356,6 +369,28 @@ impl ApplicationManifestV2 {
                 return Err(validation(format!("invalid service name {name:?}")));
             }
             validate_package_path(root, &service.command, &format!("service {name} command"))?;
+            if let Some(dev) = &service.dev {
+                if dev.command.trim().is_empty() || dev.command.contains(['\r', '\n', '\0']) {
+                    return Err(validation(format!(
+                        "service {name} dev command is invalid"
+                    )));
+                }
+                validate_relative_path(&dev.cwd, &format!("service {name} dev cwd"))?;
+                if !root.join(&dev.cwd).is_dir() {
+                    return Err(validation(format!(
+                        "service {name} dev cwd does not exist: {}",
+                        dev.cwd
+                    )));
+                }
+                if dev.install.as_ref().is_some_and(|install| {
+                    install.command.trim().is_empty()
+                        || install.command.contains(['\r', '\n', '\0'])
+                }) {
+                    return Err(validation(format!(
+                        "service {name} install command is invalid"
+                    )));
+                }
+            }
             match service.runtime {
                 ServiceRuntime::Node if self.runtime.node.is_none() => {
                     return Err(validation(format!("service {name} requires runtime.node")));

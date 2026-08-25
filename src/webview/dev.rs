@@ -66,7 +66,7 @@ pub fn is_ignored(matcher: &Option<&Gitignore>, package_root: &Path, path: &Path
 
 #[cfg(windows)]
 pub fn run(package_root: &Path, manifest: AppManifest) -> Result<(), AlexError> {
-    windows::run(package_root, manifest, None)
+    windows::run(package_root, manifest, None, None)
         .map_err(|error| AlexError::Validation(format!("dev shell failed: {error}")))
 }
 
@@ -90,18 +90,22 @@ pub fn run_unified(package_root: &Path, manifest: ApplicationManifest) -> Result
         .as_v2()
         .and_then(|v2| v2.frontend.as_ref())
         .and_then(|frontend| frontend.dev.clone());
+    let backend_dev = manifest
+        .as_v2()
+        .and_then(|v2| v2.services.values().next())
+        .and_then(|service| service.dev.clone());
     let v1 = match manifest {
         ApplicationManifest::V1(m) => m,
         ApplicationManifest::V2(_) => project_v2_for_dev(manifest),
     };
     #[cfg(windows)]
     {
-        windows::run(package_root, v1, frontend_dev)
+        windows::run(package_root, v1, frontend_dev, backend_dev)
             .map_err(|error| AlexError::Validation(format!("dev shell failed: {error}")))
     }
     #[cfg(not(windows))]
     {
-        let _ = frontend_dev;
+        let _ = (frontend_dev, backend_dev);
         run(package_root, v1)
     }
 }
@@ -333,6 +337,7 @@ mod v2_projection_tests {
                 policy: restart_policy,
                 max_retries,
             },
+            dev: None,
         }
     }
 
@@ -545,7 +550,7 @@ mod windows {
         authorization::PermissionStore,
         dev::{is_ignored, load_alexignore},
         manifest::AppManifest,
-        manifest_v2::FrontendDev,
+        manifest_v2::{FrontendDev, ServiceDev},
         native::HostCommand,
         runtime::RuntimeHandle,
         shell::windows::{BRIDGE, UserEvent, WindowHost, asset_response, emit_event},
@@ -573,6 +578,7 @@ mod windows {
         package_root: &Path,
         manifest: AppManifest,
         frontend_dev: Option<FrontendDev>,
+        backend_dev: Option<ServiceDev>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let canonical_root = package_root
             .canonicalize()
@@ -590,8 +596,15 @@ mod windows {
         if let Some(dev) = frontend_dev.as_ref() {
             install_frontend_dependencies(&canonical_root, dev)?;
         }
+        if let Some(dev) = backend_dev.as_ref() {
+            install_service_dependencies(&canonical_root, dev)?;
+        }
         let mut frontend_process = match frontend_dev.as_ref() {
             Some(dev) => Some(start_frontend_dev_server(&canonical_root, dev)?),
+            None => None,
+        };
+        let mut backend_dev_process = match backend_dev.as_ref() {
+            Some(dev) => Some(start_service_dev_process(&canonical_root, dev)?),
             None => None,
         };
         if let Some(dev) = frontend_dev.as_ref() {
@@ -784,6 +797,10 @@ mod windows {
                         let _ = child.kill();
                         let _ = child.wait();
                     }
+                    if let Some(child) = backend_dev_process.as_mut() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
                 }
                 _ => {}
             }
@@ -857,6 +874,55 @@ mod windows {
             return Err(format!("frontend dependency install failed with {status}").into());
         }
         Ok(())
+    }
+
+    fn install_service_dependencies(
+        package_root: &Path,
+        dev: &ServiceDev,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let Some(install) = &dev.install else {
+            return Ok(());
+        };
+        let cwd = package_root.join(&dev.cwd);
+        if cwd.join("node_modules").is_dir() {
+            return Ok(());
+        }
+        eprintln!(
+            "alex dev: backend dependencies missing; running {} {}",
+            install.command,
+            install.args.join(" ")
+        );
+        let status = frontend_command(&install.command)?
+            .args(&install.args)
+            .current_dir(&cwd)
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .status()?;
+        if !status.success() {
+            return Err(format!("backend dependency install failed with {status}").into());
+        }
+        Ok(())
+    }
+
+    fn start_service_dev_process(
+        package_root: &Path,
+        dev: &ServiceDev,
+    ) -> Result<Child, Box<dyn std::error::Error>> {
+        eprintln!(
+            "alex dev: starting backend compiler: {} {} (cwd: {})",
+            dev.command,
+            dev.args.join(" "),
+            dev.cwd
+        );
+        let mut command = frontend_command(&dev.command)?;
+        Ok(command
+            .args(&dev.args)
+            .current_dir(package_root.join(&dev.cwd))
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()?)
     }
 
     fn frontend_command(name: &str) -> Result<Command, Box<dyn std::error::Error>> {

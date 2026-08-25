@@ -21,6 +21,13 @@ services:
   app:
     runtime: node
     command: app/dist/service.js
+    dev:
+      command: npm
+      args: [run, dev]
+      install:
+        command: npm
+        args: [install]
+      cwd: app
     restart:
       policy: on-failure
       maxRetries: 3

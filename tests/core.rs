@@ -3990,6 +3990,7 @@ fn build_v2_manifest(
                 port: svc.port.map(ServicePort::Fixed),
                 health: None,
                 restart: Default::default(),
+                dev: None,
             },
         );
     }
