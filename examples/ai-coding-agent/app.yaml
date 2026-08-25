@@ -35,7 +35,7 @@ services:
 mcpServers:
   filesystem:
     transport: stdio
-    command: mcp/filesystem.mjs
+    command: mcp/dist/filesystem.js
 
 agent:
   model: remote/ollama/qwen3

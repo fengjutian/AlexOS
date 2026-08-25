@@ -1,9 +1,9 @@
 # Alex Coding Agent
 
 This is the V0.1 AI Application path described by the Alex Runtime DX:
-React + TypeScript UI, a TypeScript backend, Runtime-owned agent/model
-execution, an MCP filesystem tool, explicit permissions, and a packageable v2
-manifest.
+React + TypeScript UI, a TypeScript backend, a TypeScript filesystem MCP,
+Runtime-owned agent/model execution, explicit permissions, and a packageable
+v2 manifest.
 
 ```powershell
 # From the repository root. On the first run Alex installs missing frontend
