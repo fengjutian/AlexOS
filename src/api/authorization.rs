@@ -591,6 +591,99 @@ mod tests {
     }
 
     #[test]
+    fn audit_rotates_when_live_file_exceeds_cap() {
+        // A long-lived app that grants/denies permissions
+        // frequently would grow the JSONL file without bound.
+        // The store rotates to `<id>.audit.jsonl.1` once the
+        // live file crosses the cap, mirroring the per-service
+        // log file scheme. We pre-fill the file with synthetic
+        // entries larger than the cap so the rotation is
+        // guaranteed to fire on the next `set` call without
+        // having to write thousands of real entries.
+        let (workspace, store) = open_fresh("com.alex.rotate");
+        let audit_dir = workspace.path().join("permissions");
+        let live = audit_dir.join("com.alex.rotate.audit.jsonl");
+        let rotated = audit_dir.join("com.alex.rotate.audit.jsonl.1");
+
+        let filler_size = PermissionStore::AUDIT_LOG_MAX_BYTES as usize + 4096;
+        let mut filler = String::with_capacity(filler_size);
+        // Each line is a syntactically valid `AuditEntry` so a
+        // future `recent_audit` reader can still parse the
+        // rotated file end-to-end. The timestamp + permission
+        // do not matter for this test.
+        while filler.len() < filler_size {
+            filler.push_str(
+                r#"{"timestampMs":0,"appId":"filler","permission":"noop","decision":"granted"}"#,
+            );
+            filler.push('\n');
+        }
+        std::fs::write(&live, &filler).expect("seed live audit file");
+        let live_size_before = std::fs::metadata(&live).unwrap().len();
+        assert!(live_size_before > PermissionStore::AUDIT_LOG_MAX_BYTES);
+
+        // The next `set` triggers `audit()` which must rotate
+        // *before* appending the new line.
+        store
+            .set("filesystem.read", PermissionDecision::Granted)
+            .expect("set triggers rotation");
+
+        let live_size_after = std::fs::metadata(&live).expect("live exists").len();
+        assert!(
+            live_size_after < PermissionStore::AUDIT_LOG_MAX_BYTES,
+            "live file should be small after rotation, was {live_size_after} bytes",
+        );
+
+        let rotated_size = std::fs::metadata(&rotated)
+            .expect("rotation file should exist")
+            .len();
+        assert!(
+            rotated_size >= live_size_before,
+            "rotation file should hold the pre-rotation content ({rotated_size} vs {live_size_before})",
+        );
+
+        // The rotated file still parses end-to-end — we never
+        // produce a torn line at the boundary because the
+        // `rename` happens before the new `set` write.
+        let report = store.recent_audit(50).expect("recent_audit");
+        assert!(
+            report.entries.iter().any(|e| e.permission == "filesystem.read"),
+            "post-rotation `set` should be visible in the live file",
+        );
+    }
+
+    #[test]
+    fn audit_does_not_rotate_when_under_cap() {
+        // The rotation check must be a no-op for a normal-size
+        // file. This guards against a regression where the
+        // check fires unconditionally and shreds the audit
+        // history on every `set` call.
+        let (workspace, store) = open_fresh("com.alex.tiny");
+        let audit_dir = workspace.path().join("permissions");
+        let rotated = audit_dir.join("com.alex.tiny.audit.jsonl.1");
+        store
+            .set("filesystem.read", PermissionDecision::Granted)
+            .expect("set");
+        store
+            .set("filesystem.write", PermissionDecision::Denied)
+            .expect("set");
+        assert!(
+            !rotated.exists(),
+            "no rotation should occur when the live file is well under the cap",
+        );
+    }
+
+    #[test]
+    fn rotate_audit_if_needed_is_a_noop_when_file_is_missing() {
+        // The rotation helper is called from `audit()` *before*
+        // the live file is opened, so a missing file is the
+        // common case for freshly installed apps. The helper
+        // must not return an error in that case.
+        let dir = tempfile::tempdir().unwrap();
+        let path = dir.path().join("does-not-exist.audit.jsonl");
+        rotate_audit_if_needed(&path, 1024).expect("missing file is not an error");
+    }
+
+    #[test]
     fn revoke_all_clears_every_persisted_decision() {
         let (_workspace, store) = open_fresh("com.alex.test");
         store
