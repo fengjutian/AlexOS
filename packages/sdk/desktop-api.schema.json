@@ -142,6 +142,7 @@
       "mcp.connections",
       "mcp.listTools",
       "mcp.callTool",
+      "mcp.audit",
       "model.list",
       "model.import",
       "model.remove",
@@ -2413,6 +2414,10 @@
     "mcp.callTool": {
       "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "arguments": { "$ref": "#/$defs/JsonValue" } }, "required": ["binding", "name"], "additionalProperties": false },
       "result": { "type": "object", "properties": { "content": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "isError": { "type": "boolean" }, "structuredContent": { "$ref": "#/$defs/JsonValue" } }, "required": ["content", "isError"], "additionalProperties": false }
+    },
+    "mcp.audit": {
+      "params": { "type": "object", "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 } }, "additionalProperties": false },
+      "result": { "type": "object", "properties": { "entries": { "type": "array", "items": { "type": "object", "properties": { "timestampMs": { "type": "integer", "minimum": 0 }, "callId": { "type": "string" }, "application": { "type": "string" }, "binding": { "type": "string" }, "tool": { "type": "string" }, "phase": { "enum": ["started", "finished"] }, "outcome": { "enum": ["success", "failure"] }, "durationMs": { "type": "integer", "minimum": 0 }, "errorKind": { "type": "string" } }, "required": ["timestampMs", "callId", "application", "binding", "tool", "phase"], "additionalProperties": false } } }, "required": ["entries"], "additionalProperties": false }
     },
     "model.list": {
       "params": { "$ref": "#/$defs/Empty" },

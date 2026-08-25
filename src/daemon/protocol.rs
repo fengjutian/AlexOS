@@ -129,7 +129,9 @@ pub enum ControlCommand {
         #[serde(default)]
         reason: String,
     },
-    McpConnections,
+    McpConnections {
+        app_id: String,
+    },
     McpConnectStdio {
         app_id: String,
         binding: String,

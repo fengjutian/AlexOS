@@ -150,9 +150,14 @@ impl DaemonService {
             ControlCommand::StreamCancel { stream_id, reason } => {
                 self.stream_cancel(&stream_id, &reason)
             }
-            ControlCommand::McpConnections => {
-                serde_json::to_value(self.mcp.list()).map_err(|error| error.to_string())
-            }
+            ControlCommand::McpConnections { app_id } => serde_json::to_value(
+                self.mcp
+                    .list()
+                    .into_iter()
+                    .filter(|connection| connection.application == app_id)
+                    .collect::<Vec<_>>(),
+            )
+            .map_err(|error| error.to_string()),
             ControlCommand::McpConnectStdio {
                 app_id,
                 binding,
@@ -1353,8 +1358,7 @@ mod tests {
             arguments: json!({"text":"hello"}),
         }));
         assert!(called.ok);
-        let audit = std::fs::read_to_string(temp.path().join("audit").join("mcp.jsonl"))
-            .unwrap();
+        let audit = std::fs::read_to_string(temp.path().join("audit").join("mcp.jsonl")).unwrap();
         let entries = audit
             .lines()
             .map(|line| serde_json::from_str::<crate::mcp::AuditEntry>(line).unwrap())
@@ -1363,7 +1367,10 @@ mod tests {
         assert_eq!(entries[0].phase, "started");
         assert_eq!(entries[1].outcome.as_deref(), Some("success"));
         assert_eq!(entries[1].tool, "echo");
-        assert!(!audit.contains("hello"), "tool arguments must not be audited");
+        assert!(
+            !audit.contains("hello"),
+            "tool arguments must not be audited"
+        );
     }
 
     #[test]

@@ -341,6 +341,18 @@ export interface McpTool {
   inputSchema: Record<string, unknown>;
 }
 
+export interface McpAuditEntry {
+  timestampMs: number;
+  callId: string;
+  application: string;
+  binding: string;
+  tool: string;
+  phase: "started" | "finished";
+  outcome?: "success" | "failure";
+  durationMs?: number;
+  errorKind?: string;
+}
+
 export interface ModelManifest {
   id: string;
   digest: `sha256:${string}`;
@@ -432,6 +444,7 @@ export interface AlexClient {
       input?: Record<string, unknown>,
       options?: InvokeOptions,
     ): Promise<{ content: unknown[]; isError: boolean; structuredContent?: unknown }>;
+    audit(limit?: number, options?: InvokeOptions): Promise<McpAuditEntry[]>;
   };
   readonly model: {
     list(options?: InvokeOptions): Promise<ModelManifest[]>;

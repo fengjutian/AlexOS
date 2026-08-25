@@ -96,6 +96,7 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "mcp.connections" => router.mcp_connections(),
         "mcp.listTools" => router.mcp_list_tools(p),
         "mcp.callTool" => router.mcp_call_tool(p),
+        "mcp.audit" => router.mcp_audit(p),
         "model.list" => router.model_list(),
         "model.import" => router.model_import(p),
         "model.remove" => router.model_remove(p),

@@ -130,7 +130,7 @@ impl Permission {
             "notification.show" => Some("notification.show"),
             "runtime.invoke" => Some("runtime.invoke"),
             "runtime.restart" => Some("runtime.manage"),
-            "mcp.listTools" | "mcp.callTool" => Some("mcp.use"),
+            "mcp.listTools" | "mcp.callTool" | "mcp.audit" => Some("mcp.use"),
             "model.list" | "model.generate" | "model.cancel" => Some("model.use"),
             "model.import" | "model.load" | "model.unload" | "model.remove" => Some("model.manage"),
             "media.camera" => Some("media.camera"),

@@ -205,6 +205,10 @@ export function createAlexClient(transport = browserTransport()) {
       async callTool(binding, name, input = {}, options) {
         return invoke("mcp.callTool", { binding, name, arguments: input }, options);
       },
+      async audit(limit = 200, options) {
+        const result = await invoke("mcp.audit", { limit }, options);
+        return result.entries ?? [];
+      },
     }),
     model: Object.freeze({
       async list(options) {

@@ -19,6 +19,17 @@ struct McpCallParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpAuditParams {
+    #[serde(default = "default_mcp_audit_limit")]
+    limit: usize,
+}
+
+fn default_mcp_audit_limit() -> usize {
+    200
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ModelIdParams {
     model_id: String,
 }
@@ -119,9 +130,15 @@ impl ApiRouter {
 
     pub(crate) fn mcp_connections(&self) -> ApiResult {
         self.mcp_scope(None, None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
         self.daemon_ai(
             "mcp-connections",
-            crate::daemon::ControlCommand::McpConnections,
+            crate::daemon::ControlCommand::McpConnections { app_id },
         )
     }
     pub(crate) fn mcp_list_tools(&self, params: &Value) -> ApiResult {
@@ -158,6 +175,23 @@ impl ApiRouter {
                 binding: params.binding,
                 name: params.name,
                 arguments: params.arguments,
+            },
+        )
+    }
+    pub(crate) fn mcp_audit(&self, params: &Value) -> ApiResult {
+        let params: McpAuditParams = parse_params(params)?;
+        self.mcp_scope(None, None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-audit",
+            crate::daemon::ControlCommand::McpAudit {
+                app_id,
+                limit: params.limit,
             },
         )
     }
