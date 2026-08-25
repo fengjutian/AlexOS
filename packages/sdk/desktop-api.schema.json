@@ -150,6 +150,7 @@
       "mcp.callTool",
       "mcp.callToolInteractive",
       "mcp.respondInput",
+      "mcp.presentInput",
       "mcp.oauthBegin",
       "mcp.oauthComplete",
       "mcp.audit",
@@ -2473,6 +2474,10 @@
     },
     "mcp.respondInput": {
       "params": { "type": "object", "properties": { "inputId": { "type": "string", "minLength": 1 }, "response": { "$ref": "#/$defs/JsonValue" } }, "required": ["inputId", "response"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "inputId": { "type": "string" }, "accepted": { "type": "boolean" } }, "required": ["inputId", "accepted"], "additionalProperties": false }
+    },
+    "mcp.presentInput": {
+      "params": { "type": "object", "properties": { "inputId": { "type": "string", "minLength": 1, "maxLength": 512 }, "message": { "type": "string", "minLength": 1, "maxLength": 8192 }, "title": { "type": "string", "maxLength": 256 } }, "required": ["inputId", "message"], "additionalProperties": false },
       "result": { "type": "object", "properties": { "inputId": { "type": "string" }, "accepted": { "type": "boolean" } }, "required": ["inputId", "accepted"], "additionalProperties": false }
     },
     "mcp.oauthBegin": {

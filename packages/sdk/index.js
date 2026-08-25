@@ -221,6 +221,21 @@ export function createAlexClient(transport = browserTransport()) {
       respondInput(inputId, response, options) {
         return invoke("mcp.respondInput", { inputId, response }, options);
       },
+      presentInput(inputId, message, title, options) {
+        return invoke("mcp.presentInput", { inputId, message, title }, options);
+      },
+      async *callToolNative(binding, name, input = {}, options) {
+        for await (const event of this.callToolInteractive(binding, name, input, options)) {
+          if (event.type === "inputRequired" && event.method === "elicitation/create") {
+            const message = event.params?.message;
+            if (typeof message !== "string" || message.length === 0) {
+              throw new AlexError("INVALID_MRTR_REQUEST", "elicitation/create omitted its message");
+            }
+            await this.presentInput(event.inputId, message, event.params?.title, options);
+          }
+          yield event;
+        }
+      },
       oauthBegin(binding, clientId, redirectUri, scopes = [], options) {
         return invoke("mcp.oauthBegin", { binding, clientId, redirectUri, scopes }, options);
       },

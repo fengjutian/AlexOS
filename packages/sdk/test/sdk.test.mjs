@@ -111,6 +111,9 @@ test("MCP subscription and MRTR APIs decode stream events and route responses", 
   const interactions = [];
   for await (const event of client.mcp.callToolInteractive("tools", "confirm")) interactions.push(event);
   await client.mcp.respondInput("input-1", { action: "accept", content: {} });
+  for await (const _event of client.mcp.callToolNative("tools", "confirm")) {
+    // The helper routes elicitation through the Shell-owned native presenter.
+  }
   await client.mcp.oauthBegin("tools", "client-1", "http://127.0.0.1:49152/callback", ["tools:read"]);
   await client.mcp.oauthComplete("state-1", "code-1", "https://issuer.example");
   assert.equal(notices[0].method, "notifications/tools/list_changed");
@@ -119,6 +122,8 @@ test("MCP subscription and MRTR APIs decode stream events and route responses", 
     "mcp.listen",
     "mcp.callToolInteractive",
     "mcp.respondInput",
+    "mcp.callToolInteractive",
+    "mcp.presentInput",
     "mcp.oauthBegin",
     "mcp.oauthComplete",
   ]);

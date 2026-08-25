@@ -26,6 +26,15 @@ struct McpInputResponseParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpNativeInputParams {
+    input_id: String,
+    #[serde(default)]
+    title: Option<String>,
+    message: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct McpOAuthBeginParams {
     binding: String,
     client_id: String,
@@ -358,6 +367,45 @@ impl ApiRouter {
                 app_id,
                 input_id: params.input_id,
                 response: params.response,
+            },
+        )
+    }
+
+    pub(crate) fn mcp_present_input(&self, params: &Value) -> ApiResult {
+        let params: McpNativeInputParams = parse_params(params)?;
+        self.mcp_scope(None, None)?;
+        if params.input_id.is_empty()
+            || params.input_id.len() > 512
+            || params.message.is_empty()
+            || params.message.len() > 8_192
+            || params.title.as_ref().is_some_and(|title| title.len() > 256)
+        {
+            return Err(("INVALID_PARAMS", "invalid native MRTR prompt".into()));
+        }
+        let accepted = self
+            .native_host
+            .as_ref()
+            .ok_or(("NATIVE_UNAVAILABLE", "native MRTR UI is unavailable".into()))?
+            .confirm_mrtr(
+                params.title.as_deref().unwrap_or("MCP input request"),
+                &params.message,
+            )
+            .map_err(|error| ("NATIVE_FAILED", error.to_string()))?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-present-input",
+            crate::daemon::ControlCommand::McpInputRespond {
+                app_id,
+                input_id: params.input_id,
+                response: serde_json::json!({
+                    "action": if accepted { "accept" } else { "decline" },
+                    "content": { "confirmed": accepted }
+                }),
             },
         )
     }
