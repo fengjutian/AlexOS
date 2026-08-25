@@ -273,6 +273,21 @@ export function createAlexClient(transport = browserTransport()) {
         }
       },
     }),
+    agent: Object.freeze({
+      create(spec, messages = [], options) { return invoke("agent.create", { spec, messages }, options); },
+      async *start(runId, options) {
+        const decoder = new TextDecoder();
+        for await (const chunk of stream("agent.start", { runId }, options)) yield JSON.parse(decoder.decode(chunk));
+      },
+      pause(runId, options) { return invoke("agent.pause", { runId }, options); },
+      resume(runId, options) { return invoke("agent.resume", { runId }, options); },
+      cancel(runId, options) { return invoke("agent.cancel", { runId }, options); },
+      approve(runId, options) { return invoke("agent.approve", { runId }, options); },
+      deny(runId, options) { return invoke("agent.deny", { runId }, options); },
+      status(runId, options) { return invoke("agent.status", { runId }, options); },
+      async list(options) { const result = await invoke("agent.list", {}, options); return result.runs ?? []; },
+      async history(runId, limit = 200, options) { const result = await invoke("agent.history", { runId, limit }, options); return result.events ?? []; },
+    }),
     window: Object.freeze({
       async setTitle(title, options) {
         await invoke("window.setTitle", { title }, options);

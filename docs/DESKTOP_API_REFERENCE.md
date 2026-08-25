@@ -80,6 +80,16 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `model.unload` | always | method-specific | blocking |
 | `model.cancel` | always | method-specific | blocking |
 | `model.generate` | always | method-specific | blocking |
+| `agent.create` | always | agent.run | blocking |
+| `agent.start` | always | agent.run | blocking |
+| `agent.pause` | always | agent.run | blocking |
+| `agent.resume` | always | agent.run | blocking |
+| `agent.cancel` | always | agent.run | blocking |
+| `agent.approve` | always | agent.run | blocking |
+| `agent.deny` | always | agent.run | blocking |
+| `agent.status` | always | agent.run | blocking |
+| `agent.list` | always | agent.run | blocking |
+| `agent.history` | always | agent.run | blocking |
 | `events.subscribe` | always | none | inline |
 | `events.unsubscribe` | always | none | inline |
 | `system.instances.create` | always | method-specific | blocking |
@@ -108,6 +118,6 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `shortcuts.unregister` | nativeDesktop | shortcuts | native |
 | `shortcuts.list` | nativeDesktop | shortcuts | native |
 
-Typed JSON Schema coverage: 103/103 methods.
+Typed JSON Schema coverage: 113/113 methods.
 
 Common errors: `INVALID_PARAMS`, `PERMISSION_DENIED`, `OPERATION_FAILED`, `DEADLINE_EXCEEDED`, `HOST_BUSY`, `METHOD_NOT_FOUND`.

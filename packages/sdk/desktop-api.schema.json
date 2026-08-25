@@ -69,6 +69,10 @@
       "permission": "method-specific",
       "execution": "blocking"
     },
+    "agent": {
+      "permission": "agent.run",
+      "execution": "blocking"
+    },
     "events": {
       "permission": "none",
       "execution": "inline"
@@ -160,6 +164,16 @@
       "model.unload",
       "model.cancel",
       "model.generate",
+      "agent.create",
+      "agent.start",
+      "agent.pause",
+      "agent.resume",
+      "agent.cancel",
+      "agent.approve",
+      "agent.deny",
+      "agent.status",
+      "agent.list",
+      "agent.history",
       "events.subscribe",
       "events.unsubscribe",
       "system.instances.create",
@@ -216,6 +230,12 @@
       "required": ["modelId"],
       "additionalProperties": false
     },
+    "AgentRunId": {
+      "type": "object",
+      "properties": { "runId": { "type": "string", "minLength": 1 } },
+      "required": ["runId"],
+      "additionalProperties": false
+    },
     "ModelManifest": {
       "type": "object",
       "properties": {
@@ -230,6 +250,17 @@
         "compatibleWorkers": { "type": "array", "items": { "type": "string" } }
       },
       "required": ["id", "digest", "sizeBytes", "format", "architecture", "compatibleWorkers"],
+      "additionalProperties": false
+    },
+    "AgentSpec": {
+      "type": "object",
+      "properties": {
+        "model": { "type": "string", "minLength": 1 },
+        "systemPrompt": { "type": "string" },
+        "tools": { "type": "array", "maxItems": 128, "items": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "idempotent": { "type": "boolean" }, "requireApproval": { "type": "boolean" } }, "required": ["binding", "name"], "additionalProperties": false } },
+        "budget": { "type": "object", "properties": { "maxSteps": { "type": "integer", "minimum": 1, "maximum": 1000 }, "maxTokens": { "type": "integer", "minimum": 1 }, "maxToolCalls": { "type": "integer", "minimum": 0, "maximum": 1000 }, "maxWallTimeMs": { "type": "integer", "minimum": 1 } }, "additionalProperties": false }
+      },
+      "required": ["model"],
       "additionalProperties": false
     },
     "UpdateTask": {
@@ -2514,6 +2545,22 @@
       "params": { "type": "object", "properties": { "model": { "type": "string", "minLength": 1 }, "messages": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "options": { "$ref": "#/$defs/JsonValue" } }, "required": ["model", "messages"], "additionalProperties": false },
       "result": { "type": "object", "properties": { "streamId": { "type": "string" }, "requestId": { "type": "string" } }, "required": ["streamId", "requestId"], "additionalProperties": false }
     },
+    "agent.create": {
+      "params": { "type": "object", "properties": { "spec": { "$ref": "#/$defs/AgentSpec" }, "messages": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["spec"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/JsonValue" }
+    },
+    "agent.start": {
+      "params": { "$ref": "#/$defs/AgentRunId" },
+      "result": { "type": "object", "properties": { "runId": { "type": "string" }, "streamId": { "type": "string" } }, "required": ["runId", "streamId"], "additionalProperties": false }
+    },
+    "agent.pause": { "params": { "$ref": "#/$defs/AgentRunId" }, "result": { "$ref": "#/$defs/JsonValue" } },
+    "agent.resume": { "params": { "$ref": "#/$defs/AgentRunId" }, "result": { "$ref": "#/$defs/JsonValue" } },
+    "agent.cancel": { "params": { "$ref": "#/$defs/AgentRunId" }, "result": { "$ref": "#/$defs/JsonValue" } },
+    "agent.approve": { "params": { "$ref": "#/$defs/AgentRunId" }, "result": { "$ref": "#/$defs/JsonValue" } },
+    "agent.deny": { "params": { "$ref": "#/$defs/AgentRunId" }, "result": { "$ref": "#/$defs/JsonValue" } },
+    "agent.status": { "params": { "$ref": "#/$defs/AgentRunId" }, "result": { "$ref": "#/$defs/JsonValue" } },
+    "agent.list": { "params": { "$ref": "#/$defs/Empty" }, "result": { "type": "object", "properties": { "runs": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["runs"], "additionalProperties": false } },
+    "agent.history": { "params": { "type": "object", "properties": { "runId": { "type": "string", "minLength": 1 }, "limit": { "type": "integer", "minimum": 1, "maximum": 1000 } }, "required": ["runId"], "additionalProperties": false }, "result": { "type": "object", "properties": { "events": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["events"], "additionalProperties": false } },
     "events.subscribe": {
       "params": {
         "type": "object",

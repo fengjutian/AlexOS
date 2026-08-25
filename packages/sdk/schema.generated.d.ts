@@ -2,7 +2,9 @@
 export type Empty = {  };
 export type InstanceId = { "instanceId": string };
 export type ModelId = { "modelId": string };
+export type AgentRunId = { "runId": string };
 export type ModelManifest = { "id": string; "digest": string; "sizeBytes": number; "format": string; "architecture": string; "quantization"?: string | null; "license"?: string | null; "source"?: string | null; "compatibleWorkers": Array<string> };
+export type AgentSpec = { "model": string; "systemPrompt"?: string; "tools"?: Array<{ "binding": string; "name": string; "idempotent"?: boolean; "requireApproval"?: boolean }>; "budget"?: { "maxSteps"?: number; "maxTokens"?: number; "maxToolCalls"?: number; "maxWallTimeMs"?: number } };
 export type UpdateTask = { "id": string; "appId": string; "manifestUrl": string; "channel": "stable" | "beta" | "dev"; "state": string; "stage": string; "progress": number; "error": string | null };
 export type JsonValue = unknown;
 export type PathInput = { "path": string };
@@ -91,6 +93,16 @@ export type AlexCapability =
   | "model.unload"
   | "model.cancel"
   | "model.generate"
+  | "agent.create"
+  | "agent.start"
+  | "agent.pause"
+  | "agent.resume"
+  | "agent.cancel"
+  | "agent.approve"
+  | "agent.deny"
+  | "agent.status"
+  | "agent.list"
+  | "agent.history"
   | "events.subscribe"
   | "events.unsubscribe"
   | "system.instances.create"
@@ -202,6 +214,16 @@ export interface AlexMethodMap {
   "model.unload": { params: ModelId; result: { "modelId": string; "unloaded": boolean } };
   "model.cancel": { params: { "modelId": string; "requestId": string }; result: { "modelId": string; "requestId": string; "cancelled": boolean } };
   "model.generate": { params: { "model": string; "messages": Array<JsonValue>; "options"?: JsonValue }; result: { "streamId": string; "requestId": string } };
+  "agent.create": { params: { "spec": AgentSpec; "messages"?: Array<JsonValue> }; result: JsonValue };
+  "agent.start": { params: AgentRunId; result: { "runId": string; "streamId": string } };
+  "agent.pause": { params: AgentRunId; result: JsonValue };
+  "agent.resume": { params: AgentRunId; result: JsonValue };
+  "agent.cancel": { params: AgentRunId; result: JsonValue };
+  "agent.approve": { params: AgentRunId; result: JsonValue };
+  "agent.deny": { params: AgentRunId; result: JsonValue };
+  "agent.status": { params: AgentRunId; result: JsonValue };
+  "agent.list": { params: Empty; result: { "runs": Array<JsonValue> } };
+  "agent.history": { params: { "runId": string; "limit"?: number }; result: { "events": Array<JsonValue> } };
   "events.subscribe": { params: { "event": string; "filter"?: { [key: string]: unknown } }; result: { "subscriptionId": string; "event": string } };
   "events.unsubscribe": { params: { "subscriptionId": string }; result: { "removed": boolean } };
   "system.instances.create": { params: { "appId": string; "appVersion": string; "instanceId"?: string; "isolation"?: "process" | "job" | "appcontainer" | "wsl-oci" }; result: ContainerView };

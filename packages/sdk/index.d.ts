@@ -389,6 +389,20 @@ export type ModelGenerateEvent =
   | { type: "usage"; inputTokens: number; outputTokens: number }
   | { type: "finish"; reason: string };
 
+export interface AgentBudget { maxSteps?: number; maxTokens?: number; maxToolCalls?: number; maxWallTimeMs?: number; }
+export interface AgentToolSpec { binding: string; name: string; idempotent?: boolean; requireApproval?: boolean; }
+export interface AgentSpec { model: string; systemPrompt?: string; tools?: AgentToolSpec[]; budget?: AgentBudget; }
+export type AgentState = "queued" | "running" | "waiting-approval" | "waiting-tool" | "paused" | "completed" | "failed" | "cancelled";
+export interface AgentRun { id: string; application: string; generation: number; state: AgentState; step: number; spec: AgentSpec; usage: { inputTokens: number; outputTokens: number; toolCalls: number }; messages: unknown[]; createdAtMs: number; updatedAtMs: number; startedAtMs?: number; lastError?: string; }
+export type AgentEvent =
+  | { type: "state"; state: AgentState; generation: number }
+  | { type: "modelDelta"; text: string }
+  | { type: "toolIntent"; call: unknown }
+  | { type: "toolResult"; binding: string; name: string; result: unknown }
+  | { type: "usage"; usage: AgentRun["usage"] }
+  | { type: "checkpoint"; step: number }
+  | { type: "error"; code: string; message: string };
+
 export interface AlexClient {
   invoke<K extends AlexMethodName>(method: K, params: AlexMethodMap[K]["params"], options?: InvokeOptions): Promise<AlexMethodMap[K]["result"]>;
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
@@ -485,6 +499,18 @@ export interface AlexClient {
       request: { model: string; messages: unknown[]; options?: Record<string, unknown> },
       options?: StreamOptions,
     ): AsyncIterable<ModelGenerateEvent>;
+  };
+  readonly agent: {
+    create(spec: AgentSpec, messages?: unknown[], options?: InvokeOptions): Promise<AgentRun>;
+    start(runId: string, options?: StreamOptions): AsyncIterable<AgentEvent>;
+    pause(runId: string, options?: InvokeOptions): Promise<AgentRun>;
+    resume(runId: string, options?: InvokeOptions): Promise<AgentRun>;
+    cancel(runId: string, options?: InvokeOptions): Promise<AgentRun>;
+    approve(runId: string, options?: InvokeOptions): Promise<AgentRun>;
+    deny(runId: string, options?: InvokeOptions): Promise<AgentRun>;
+    status(runId: string, options?: InvokeOptions): Promise<AgentRun>;
+    list(options?: InvokeOptions): Promise<AgentRun[]>;
+    history(runId: string, limit?: number, options?: InvokeOptions): Promise<AgentEvent[]>;
   };
   readonly window: {
     setTitle(title: string, options?: InvokeOptions): Promise<void>;
