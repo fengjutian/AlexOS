@@ -1,13 +1,22 @@
 # Alex Coding Agent
 
 This is the V0.1 AI Application path described by the Alex Runtime DX:
-React + TypeScript UI, Runtime-owned agent/model execution, an MCP filesystem
-tool, explicit permissions, and a packageable v2 manifest.
+React + TypeScript UI, a TypeScript backend, Runtime-owned agent/model
+execution, an MCP filesystem tool, explicit permissions, and a packageable v2
+manifest.
 
 ```powershell
-cd examples/ai-coding-agent/frontend
+# Build the TypeScript backend
+cd examples/ai-coding-agent/app
 npm install
 npm run build
+
+# Build the React frontend
+cd ../frontend
+npm install
+npm run build
+
+# Validate and run the complete application
 cd ..
 cargo run --manifest-path ../../Cargo.toml -- validate .
 cargo run --manifest-path ../../Cargo.toml -- dev .

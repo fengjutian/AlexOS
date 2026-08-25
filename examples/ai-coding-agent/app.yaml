@@ -12,7 +12,7 @@ runtime:
 services:
   app:
     runtime: node
-    command: app/service.mjs
+    command: app/dist/service.js
     restart:
       policy: on-failure
       maxRetries: 3
