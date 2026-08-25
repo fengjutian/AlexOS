@@ -1532,6 +1532,10 @@ impl ManagerRouter {
                 Ok(value) => json_response(&request.id, &value),
                 Err(error) => crate::ipc::Response::error(&request.id, "DAEMON_UNAVAILABLE", error),
             },
+            "manager.ai_action" => match self.ai_action(&request.params) {
+                Ok(value) => json_response(&request.id, &value),
+                Err(error) => crate::ipc::Response::error(&request.id, "AI_ACTION_FAILED", error),
+            },
             "manager.list_apps" => match self.manager.list_apps() {
                 Ok(apps) => json_response(&request.id, &serde_json::json!({ "apps": apps })),
                 Err(error) => manager_error_response(&request.id, error),
@@ -1778,6 +1782,41 @@ impl ManagerRouter {
             "providerHealth": provider_health.get("providers").cloned().unwrap_or_default(),
             "applications": applications
         }))
+    }
+
+    fn ai_action(&self, params: &serde_json::Value) -> Result<serde_json::Value, String> {
+        let required = |name: &str| {
+            params
+                .get(name)
+                .and_then(serde_json::Value::as_str)
+                .filter(|value| !value.is_empty())
+                .map(str::to_owned)
+                .ok_or_else(|| format!("missing `{name}` parameter"))
+        };
+        let operation = required("operation")?;
+        let command = match operation.as_str() {
+            "provider.remove" => crate::daemon::ControlCommand::ModelProviderRemove {
+                provider_id: required("providerId")?,
+            },
+            "mcp.disconnect" => crate::daemon::ControlCommand::McpDisconnect {
+                app_id: required("appId")?,
+                binding: required("binding")?,
+            },
+            "agent.pause" => crate::daemon::ControlCommand::AgentPause {
+                app_id: required("appId")?,
+                run_id: required("runId")?,
+            },
+            "agent.resume" => crate::daemon::ControlCommand::AgentResume {
+                app_id: required("appId")?,
+                run_id: required("runId")?,
+            },
+            "agent.cancel" => crate::daemon::ControlCommand::AgentCancel {
+                app_id: required("appId")?,
+                run_id: required("runId")?,
+            },
+            _ => return Err(format!("unsupported AI Runtime operation: {operation}")),
+        };
+        self.daemon_command(&operation, command)
     }
 }
 

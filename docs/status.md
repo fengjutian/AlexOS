@@ -33,7 +33,7 @@ nav_order: 3
 
 ## 1. 当前系统边界
 
-### 1.1 Alex Runtime Daemon 控制面（迁移中）
+### 1.1 Alex Runtime Daemon 控制面
 
 已新增 `alex daemon` Windows Named Pipe 服务端，默认端点为
 `\\.\pipe\alex-runtime-v1`。控制协议使用版本化 JSON Lines envelope，当前接受

@@ -77,22 +77,22 @@
     $("ai-providers").innerHTML = providers.length
       ? providers.map((provider) => {
           const state = health.get(provider.id)?.status ?? (provider.enabled ? "unknown" : "disabled");
-          return `<div class="service-row"><div><div class="name">${escapeText(provider.id)}</div><div class="meta">${escapeText(provider.kind)} · ${escapeText(provider.endpoint)}</div></div><div class="meta">secret: ${health.get(provider.id)?.secretConfigured ? "configured" : "missing"}</div><span class="badge ${stateClass(state)}">${escapeText(formatState(state))}</span></div>`;
+          return `<div class="service-row"><div><div class="name">${escapeText(provider.id)}</div><div class="meta">${escapeText(provider.kind)} · ${escapeText(provider.endpoint)}</div></div><div class="meta">secret: ${health.get(provider.id)?.secretConfigured ? "configured" : "missing"}</div><span class="badge ${stateClass(state)}">${escapeText(formatState(state))}</span><button type="button" data-ai-action="provider.remove" data-provider-id="${escapeText(provider.id)}">Remove</button></div>`;
         }).join("")
       : '<p class="muted">No remote model providers configured.</p>';
 
     const applications = overview.applications ?? [];
     const connections = applications.flatMap((app) => {
       const values = Array.isArray(app.mcp) ? app.mcp : (app.mcp?.connections ?? []);
-      return values.map((connection) => ({ ...connection, appName: app.name }));
+      return values.map((connection) => ({ ...connection, appId: app.id, appName: app.name }));
     });
     $("ai-mcp").innerHTML = connections.length
-      ? connections.map((connection) => `<div class="service-row"><div><div class="name">${escapeText(connection.binding)}</div><div class="meta">${escapeText(connection.appName ?? connection.application)}</div></div><span class="badge">${escapeText(connection.era ?? "modern")}</span></div>`).join("")
+      ? connections.map((connection) => `<div class="service-row"><div><div class="name">${escapeText(connection.binding)}</div><div class="meta">${escapeText(connection.appName ?? connection.application)}</div></div><span class="badge">${escapeText(connection.era ?? "modern")}</span><button type="button" data-ai-action="mcp.disconnect" data-app-id="${escapeText(connection.appId ?? connection.application)}" data-binding="${escapeText(connection.binding)}">Disconnect</button></div>`).join("")
       : '<p class="muted">No live MCP connections.</p>';
 
-    const runs = applications.flatMap((app) => (app.agents?.runs ?? []).map((run) => ({ ...run, appName: app.name })));
+    const runs = applications.flatMap((app) => (app.agents?.runs ?? []).map((run) => ({ ...run, appId: app.id, appName: app.name })));
     $("ai-agents").innerHTML = runs.length
-      ? runs.map((run) => `<div class="service-row"><div><div class="name">${escapeText(run.id)}</div><div class="meta">${escapeText(run.appName)} · step ${Number(run.step ?? 0)}</div></div><span class="badge ${stateClass(run.state)}">${escapeText(formatState(run.state))}</span></div>`).join("")
+      ? runs.map((run) => `<div class="service-row"><div><div class="name">${escapeText(run.id)}</div><div class="meta">${escapeText(run.appName)} · step ${Number(run.step ?? 0)}</div></div><span class="badge ${stateClass(run.state)}">${escapeText(formatState(run.state))}</span><div><button type="button" data-ai-action="agent.pause" data-app-id="${escapeText(run.appId)}" data-run-id="${escapeText(run.id)}">Pause</button><button type="button" data-ai-action="agent.resume" data-app-id="${escapeText(run.appId)}" data-run-id="${escapeText(run.id)}">Resume</button><button type="button" data-ai-action="agent.cancel" data-app-id="${escapeText(run.appId)}" data-run-id="${escapeText(run.id)}">Cancel</button></div></div>`).join("")
       : '<p class="muted">No Agent runs.</p>';
   }
 
@@ -689,6 +689,30 @@
   $("apps-view-btn").addEventListener("click", () => navigate("#/"));
   $("ai-view-btn").addEventListener("click", showAiView);
   $("ai-refresh-btn").addEventListener("click", loadAiOverview);
+  aiView.addEventListener("click", async (event) => {
+    const button = event.target.closest("[data-ai-action]");
+    if (!button) return;
+    const operation = button.dataset.aiAction;
+    const params = {
+      operation,
+      providerId: button.dataset.providerId,
+      appId: button.dataset.appId,
+      binding: button.dataset.binding,
+      runId: button.dataset.runId,
+    };
+    if ((operation === "provider.remove" || operation === "mcp.disconnect" || operation === "agent.cancel")
+        && !await confirmModal(`Confirm ${operation}?`, "Confirm", true)) return;
+    button.disabled = true;
+    try {
+      await call("manager.ai_action", params);
+      toast(`${operation} completed`, "success");
+      await loadAiOverview();
+    } catch (error) {
+      showError(operation, error);
+    } finally {
+      button.disabled = false;
+    }
+  });
 
   searchInput.addEventListener("input", (event) => {
     searchQuery = event.target.value;

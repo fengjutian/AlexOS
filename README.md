@@ -3,9 +3,11 @@
 Alex Runtime 是一个实验性的 AI Application Runtime。目标是让开发者构建一次应用，由统一
 Runtime 在不同平台负责安装、服务编排、进程、运行时、权限、日志、更新和恢复。
 
-项目仍处于 `0.1.0` 原型阶段，不是操作系统内核，也尚未达到生产发布标准。当前准确定位是：
-
-> 当前代码仍是 Windows WebView + 单 Node Backend 原型，尚未达到正式 Runtime MVP。
+项目当前版本 `0.1.0`，定位是 **Windows + WebView2 + Node.js 桌面 AI 应用 Runtime**（不是
+操作系统内核，也尚未达到生产发布标准）。Runtime MVP 关键件（常驻 `alex daemon`、Manifest v2
+多服务编排、Service 反代、Job Object 进程树清理、Agent / MCP / Model 协议层）已在 `src/`
+落地，335/335 单测通过，但跨用户 Daemon 拒绝、签名安装器、`alex dev` React 模板、受管 Node
+Runtime、UI 安全闭环仍属 P0 缺口，详见 [`docs/roadmap.md`](docs/roadmap.md)。
 
 正式产品范围和阶段目标见
 [docs/product-requirements.md](docs/product-requirements.md)。该文档是产品边界的统一来源。

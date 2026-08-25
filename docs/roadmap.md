@@ -18,20 +18,18 @@ nav_order: 4
 
 ### 0.1 Runtime Daemon 与控制面
 
-- [进行中] `alex daemon` 常驻服务入口；
-- [进行中] Windows Named Pipe 版本化控制协议；
-- [进行中] 应用 desired state 原子持久化；
-- [已接线] 当前用户 protected DACL 和客户端 Token User SID 校验；
-- 在多账户 Windows CI/VM 中验证跨用户连接拒绝；
+- [已完成] `alex daemon` 常驻服务入口；
+- [已完成] Windows Named Pipe 版本化控制协议（`\\.\pipe\alex-runtime-v1`，版本化 JSON Lines）；
+- [已完成] 应用 desired state 原子持久化（`src/daemon/state.rs`，schemaVersion 2 含 desired / observed / lastError）；
+- [已完成] 当前用户 protected DACL 和客户端 Token User SID 校验；
+- 在多账户 Windows CI/VM 中验证跨用户连接拒绝（代码已 wired，真实多账户 CI 验收未做）；
 - [已完成] 32 客户端有界并发连接和 `alex shutdown` 优雅退出；
-- [已接线] Daemon 持有共享 `LocalAppManager/RuntimeSupervisor`，生命周期命令驱动真实进程；
+- [已完成] Daemon 持有共享 `LocalAppManager/RuntimeSupervisor`，生命周期命令驱动真实进程；
 - [已完成基础闭环] Daemon 启动时按 desired state 恢复应用，并持久化 observed/lastError；
-- 在具备 Node 的 Windows CI 验证真实 backend 成功恢复；
+- [已完成] `runtime_handle_multiplexes_and_cancels_without_killing_backend` 等测试在测试主机上跑过真实 Node child；具备多 Node 版本矩阵的 Windows CI 仍待补；
 - [已完成] CLI Named Pipe 客户端与 `alex start/stop/restart/status/logs`；
-- 服务 observed state 和恢复信息持久化；
-- `alex start/stop/restart/status/logs`；
-- CLI、Shell 和 Manager 共享同一个 Runtime 状态；
-- Daemon 重启恢复与孤儿进程处理。
+- [已完成] CLI、Shell 和 Manager 共享同一个 Runtime 状态（共享 `RuntimeSupervisor`）；
+- [已完成] Daemon 重启恢复 + Job Object 进程树清理（`container::isolation::job_provider_kills_process_on_handle_drop`）。
 
 ### 0.2 Manifest v2 与服务编排
 
@@ -79,12 +77,12 @@ nav_order: 4
 
 ### 3.1 Runtime 可靠性
 
-- Node 随 Alex OS 安装并固定受支持版本；
-- 单请求并发、响应乱序关联和单请求取消；
-- 结构化日志级别、日志文件轮转和诊断导出；
-- CPU/内存/子进程数量限制；
-- Windows Job Object 管理完整进程树；
-- Shell 异常退出后的孤儿进程回收。
+- Node 随 Alex OS 安装并固定受支持版本（属 §0.3 受管 Runtime，未做）；
+- [已完成] 单请求并发、响应乱序关联和单请求取消（`runtime_handle_multiplexes_and_cancels_without_killing_backend`）；
+- 结构化日志级别、日志文件轮转和诊断导出（`runtime/log_file` 已 wired 轮转，结构化级别未做）；
+- CPU/内存/子进程数量限制（未做）；
+- [已完成] Windows Job Object 管理完整进程树（`container::isolation::job_provider` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，测试 `job_provider_kills_process_on_handle_drop` 通过）；
+- [已部分] Shell 异常退出后的孤儿进程回收（Job Object RAII Drop 已 wired；明确的"Shell 异常退出"路径单测未补）。
 
 > 注：启动握手 / readiness 状态 / 连续崩溃熔断 / 退避 / 优雅退出 — 已在 0.1 切片
 > 1-2 落地，详见 [`status.md` §2.4](./status.md#24-node-runtime-生命周期)。WebSocket 升级转发仍是 P1（见 §3.5）。
