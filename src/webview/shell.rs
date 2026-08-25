@@ -249,44 +249,53 @@ pub mod windows {
         if let Some(trust_root) = system_trust_root {
             router = router.with_system_trust_root(trust_root.to_path_buf());
         }
+        let daemon_pipe = (!dev_mode && manifest.backend.is_some()).then(|| {
+            std::env::var("ALEX_DAEMON_PIPE")
+                .unwrap_or_else(|_| crate::daemon::DEFAULT_PIPE_NAME.to_owned())
+        });
+        if let Some(pipe) = &daemon_pipe {
+            start_application_via_daemon(pipe, &manifest.id)?;
+            router = router.with_daemon_runtime(pipe.clone(), "main");
+        }
         // Service-mode backends expose an `alex://app/api/*` reverse
         // proxy. We need the host-allocated endpoint in scope before
         // building the WebView, so we resolve it from the runtime
         // status right after start.
-        let service_endpoint: Option<crate::runtime::ServiceEndpoint> =
-            if let Some(backend) = &manifest.backend {
-                if matches!(backend.mode, crate::manifest::BackendMode::Service) {
-                    let spec = crate::runtime::RuntimeSpec {
-                        app_id: manifest.id.clone(),
-                        package_root: package_root.to_path_buf(),
-                        backend: backend.clone(),
-                        data_dir: None,
-                        cache_dir: None,
-                        service_name: "main".to_owned(),
-                    };
-                    let handle = RuntimeHandle::start_with_spec(spec)?;
-                    let status = handle.status(Duration::from_secs(20))?;
-                    if !matches!(status.state, crate::runtime::RuntimeState::Ready) {
-                        return Err(format!(
+        let service_endpoint: Option<crate::runtime::ServiceEndpoint> = if daemon_pipe.is_some() {
+            None
+        } else if let Some(backend) = &manifest.backend {
+            if matches!(backend.mode, crate::manifest::BackendMode::Service) {
+                let spec = crate::runtime::RuntimeSpec {
+                    app_id: manifest.id.clone(),
+                    package_root: package_root.to_path_buf(),
+                    backend: backend.clone(),
+                    data_dir: None,
+                    cache_dir: None,
+                    service_name: "main".to_owned(),
+                };
+                let handle = RuntimeHandle::start_with_spec(spec)?;
+                let status = handle.status(Duration::from_secs(20))?;
+                if !matches!(status.state, crate::runtime::RuntimeState::Ready) {
+                    return Err(format!(
                         "service backend {} failed to reach Ready within handshake window: {:?}",
                         manifest.id, status.last_error
                     )
-                        .into());
+                    .into());
+                }
+                router = router.with_runtime(handle);
+                match (status.port, status.token) {
+                    (Some(port), Some(token)) => {
+                        Some(crate::runtime::ServiceEndpoint { port, token })
                     }
-                    router = router.with_runtime(handle);
-                    match (status.port, status.token) {
-                        (Some(port), Some(token)) => {
-                            Some(crate::runtime::ServiceEndpoint { port, token })
-                        }
-                        _ => None,
-                    }
-                } else {
-                    router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
-                    None
+                    _ => None,
                 }
             } else {
+                router = router.with_runtime(RuntimeHandle::start(package_root, backend)?);
                 None
-            };
+            }
+        } else {
+            None
+        };
         let router = Arc::new(router);
         let ipc_router = Arc::clone(&router);
         let root = package_root.to_path_buf();
@@ -311,9 +320,27 @@ pub mod windows {
               });
             "#);
         }
+        let mut websocket_base = None;
         let _websocket_tunnel = if let Some(endpoint) = service_endpoint.clone() {
             let tunnel = crate::proxy::WebSocketTunnel::start(endpoint, manifest.id.clone())?;
-            let base = serde_json::to_string(&tunnel.base_url)?;
+            websocket_base = Some(tunnel.base_url.clone());
+            Some(tunnel)
+        } else {
+            None
+        };
+        if daemon_pipe.is_some()
+            && manifest.backend.as_ref().is_some_and(|backend| {
+                matches!(backend.mode, crate::manifest::BackendMode::Service)
+            })
+        {
+            websocket_base = Some(crate::daemon::open_service_websocket(
+                daemon_pipe.as_deref().expect("daemon pipe checked"),
+                &manifest.id,
+                "main",
+            )?);
+        }
+        if let Some(base_url) = websocket_base {
+            let base = serde_json::to_string(&base_url)?;
             init_script.push_str(&format!(r#"
               (() => {{
                 const NativeWebSocket = window.WebSocket;
@@ -327,11 +354,9 @@ pub mod windows {
                 }});
               }})();
             "#));
-            Some(tunnel)
-        } else {
-            None
-        };
+        }
         let endpoint_for_handler = service_endpoint.clone();
+        let daemon_for_handler = daemon_pipe.clone();
         let app_id_for_handler = manifest.id.clone();
         let drop_router = Arc::clone(&router);
 
@@ -378,6 +403,15 @@ pub mod windows {
             .with_custom_protocol("alex".into(), move |_id, request| {
                 let path = request.uri().path();
                 if path.starts_with("/api/") {
+                    if let Some(pipe) = &daemon_for_handler {
+                        return crate::daemon::proxy_service_http(
+                            pipe,
+                            &app_id_for_handler,
+                            "main",
+                            &request,
+                        )
+                        .unwrap_or_else(|_| crate::proxy::service_unavailable_response());
+                    }
                     if let Some(endpoint) = &endpoint_for_handler {
                         return crate::proxy::proxy_to_service(
                             endpoint,
@@ -399,6 +433,7 @@ pub mod windows {
         let child_init_script = init_script.clone();
         let child_router = Arc::clone(&router);
         let child_service_endpoint = service_endpoint.clone();
+        let child_daemon_pipe = daemon_pipe.clone();
         let child_app_id = manifest.id.clone();
         let mut child_windows: HashMap<u64, tao::window::Window> = HashMap::new();
         let mut child_webviews: HashMap<u64, wry::WebView> = HashMap::new();
@@ -471,6 +506,7 @@ pub mod windows {
                                     let asset_root = child_root.clone();
                                     let frontend = child_frontend.clone();
                                     let service_endpoint = child_service_endpoint.clone();
+                                    let daemon_pipe = child_daemon_pipe.clone();
                                     let service_app_id = child_app_id.clone();
                                     let drop_router = Arc::clone(&child_router);
                                     let url = if info.url.starts_with("alex://app/") {
@@ -516,6 +552,17 @@ pub mod windows {
                                         .with_custom_protocol("alex".into(), move |_id, request| {
                                             let path = request.uri().path();
                                             if path.starts_with("/api/") {
+                                                if let Some(pipe) = &daemon_pipe {
+                                                    return crate::daemon::proxy_service_http(
+                                                        pipe,
+                                                        &service_app_id,
+                                                        "main",
+                                                        &request,
+                                                    )
+                                                    .unwrap_or_else(|_| {
+                                                        crate::proxy::service_unavailable_response()
+                                                    });
+                                                }
                                                 if let Some(endpoint) = &service_endpoint {
                                                     return crate::proxy::proxy_to_service(
                                                         endpoint,
@@ -827,6 +874,33 @@ pub mod windows {
                 }
             }
         })
+    }
+
+    fn start_application_via_daemon(
+        pipe: &str,
+        app_id: &str,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let sequence = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)?
+            .as_nanos();
+        let request = crate::daemon::ControlRequest {
+            protocol: crate::daemon::PROTOCOL_VERSION,
+            id: format!("shell-start-{}-{sequence}", std::process::id()),
+            command: crate::daemon::ControlCommand::Start {
+                app_id: app_id.to_owned(),
+            },
+        };
+        let response = crate::daemon::send_request(pipe, &request)?;
+        if response.protocol != crate::daemon::PROTOCOL_VERSION || response.id != request.id {
+            return Err("alexd returned a mismatched start response".into());
+        }
+        if !response.ok {
+            return Err(response
+                .error
+                .unwrap_or_else(|| "alexd failed to start application".into())
+                .into());
+        }
+        Ok(())
     }
 
     fn build_menu(template: &MenuTemplate) -> Result<Menu, Box<dyn std::error::Error>> {
