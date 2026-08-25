@@ -48,6 +48,26 @@ test("MCP and local model namespaces map to daemon-owned APIs", async () => {
   ]);
 });
 
+test("model.generate decodes structured events from the credit stream", async () => {
+  const client = createAlexClient({
+    invoke: async () => ({}),
+    async *stream(method, params) {
+      assert.equal(method, "model.generate");
+      assert.equal(params.model, "local/tiny@1");
+      yield new TextEncoder().encode(JSON.stringify({ type: "delta", text: "hello" }));
+      yield new TextEncoder().encode(JSON.stringify({ type: "finish", reason: "stop" }));
+    },
+  });
+  const events = [];
+  for await (const event of client.model.generate({ model: "local/tiny@1", messages: [] })) {
+    events.push(event);
+  }
+  assert.deepEqual(events, [
+    { type: "delta", text: "hello" },
+    { type: "finish", reason: "stop" },
+  ]);
+});
+
 test("app instance namespace uses the product-facing API", async () => {
   const calls = [];
   const client = createAlexClient({

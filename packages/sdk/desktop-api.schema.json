@@ -61,6 +61,14 @@
       "permission": "runtime.invoke",
       "execution": "blocking"
     },
+    "mcp": {
+      "permission": "mcp.use",
+      "execution": "blocking"
+    },
+    "model": {
+      "permission": "method-specific",
+      "execution": "blocking"
+    },
     "events": {
       "permission": "none",
       "execution": "inline"
@@ -131,6 +139,16 @@
       "stream.credit",
       "stream.read",
       "stream.cancel",
+      "mcp.connections",
+      "mcp.listTools",
+      "mcp.callTool",
+      "model.list",
+      "model.import",
+      "model.remove",
+      "model.load",
+      "model.unload",
+      "model.cancel",
+      "model.generate",
       "events.subscribe",
       "events.unsubscribe",
       "system.instances.create",
@@ -179,6 +197,28 @@
       "required": [
         "instanceId"
       ],
+      "additionalProperties": false
+    },
+    "ModelId": {
+      "type": "object",
+      "properties": { "modelId": { "type": "string", "minLength": 1 } },
+      "required": ["modelId"],
+      "additionalProperties": false
+    },
+    "ModelManifest": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "digest": { "type": "string", "pattern": "^sha256:[0-9a-f]{64}$" },
+        "sizeBytes": { "type": "integer", "minimum": 0 },
+        "format": { "type": "string", "minLength": 1 },
+        "architecture": { "type": "string", "minLength": 1 },
+        "quantization": { "type": ["string", "null"] },
+        "license": { "type": ["string", "null"] },
+        "source": { "type": ["string", "null"] },
+        "compatibleWorkers": { "type": "array", "items": { "type": "string" } }
+      },
+      "required": ["id", "digest", "sizeBytes", "format", "architecture", "compatibleWorkers"],
       "additionalProperties": false
     },
     "UpdateTask": {
@@ -2361,6 +2401,46 @@
         "required": ["streamId", "cancelled"],
         "additionalProperties": false
       }
+    },
+    "mcp.connections": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": { "type": "array", "items": { "type": "object", "properties": { "application": { "type": "string" }, "binding": { "type": "string" }, "era": { "enum": ["modern", "legacy"] } }, "required": ["application", "binding", "era"], "additionalProperties": false } }
+    },
+    "mcp.listTools": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "cursor": { "type": "string" } }, "required": ["binding"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "tools": { "type": "array", "items": { "type": "object", "properties": { "name": { "type": "string" }, "description": { "type": "string" }, "inputSchema": { "$ref": "#/$defs/JsonValue" } }, "required": ["name", "inputSchema"], "additionalProperties": false } }, "nextCursor": { "type": ["string", "null"] } }, "required": ["tools", "nextCursor"], "additionalProperties": false }
+    },
+    "mcp.callTool": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "arguments": { "$ref": "#/$defs/JsonValue" } }, "required": ["binding", "name"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "content": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "isError": { "type": "boolean" }, "structuredContent": { "$ref": "#/$defs/JsonValue" } }, "required": ["content", "isError"], "additionalProperties": false }
+    },
+    "model.list": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": { "type": "object", "properties": { "models": { "type": "array", "items": { "$ref": "#/$defs/ModelManifest" } } }, "required": ["models"], "additionalProperties": false }
+    },
+    "model.import": {
+      "params": { "type": "object", "properties": { "source": { "type": "string", "minLength": 1 }, "manifest": { "$ref": "#/$defs/ModelManifest" } }, "required": ["source", "manifest"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/ModelManifest" }
+    },
+    "model.remove": {
+      "params": { "$ref": "#/$defs/ModelId" },
+      "result": { "type": "object", "properties": { "modelId": { "type": "string" }, "removed": { "type": "boolean" } }, "required": ["modelId", "removed"], "additionalProperties": false }
+    },
+    "model.load": {
+      "params": { "type": "object", "properties": { "modelId": { "type": "string", "minLength": 1 }, "worker": { "type": "string", "minLength": 1 } }, "required": ["modelId", "worker"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "modelId": { "type": "string" }, "worker": { "type": "string" }, "loaded": { "type": "boolean" } }, "required": ["modelId", "worker", "loaded"], "additionalProperties": false }
+    },
+    "model.unload": {
+      "params": { "$ref": "#/$defs/ModelId" },
+      "result": { "type": "object", "properties": { "modelId": { "type": "string" }, "unloaded": { "type": "boolean" } }, "required": ["modelId", "unloaded"], "additionalProperties": false }
+    },
+    "model.cancel": {
+      "params": { "type": "object", "properties": { "modelId": { "type": "string", "minLength": 1 }, "requestId": { "type": "string", "minLength": 1 } }, "required": ["modelId", "requestId"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "modelId": { "type": "string" }, "requestId": { "type": "string" }, "cancelled": { "type": "boolean" } }, "required": ["modelId", "requestId", "cancelled"], "additionalProperties": false }
+    },
+    "model.generate": {
+      "params": { "type": "object", "properties": { "model": { "type": "string", "minLength": 1 }, "messages": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "options": { "$ref": "#/$defs/JsonValue" } }, "required": ["model", "messages"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "streamId": { "type": "string" }, "requestId": { "type": "string" } }, "required": ["streamId", "requestId"], "additionalProperties": false }
     },
     "events.subscribe": {
       "params": {

@@ -3,7 +3,9 @@
 use std::{
     collections::{BTreeMap, BTreeSet},
     fs,
+    io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
+    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::{Arc, Mutex},
 };
 
@@ -227,6 +229,194 @@ pub trait InferenceWorker: Send + Sync {
     ) -> Result<(), ModelError>;
     fn cancel(&self, request_id: &str) -> Result<(), ModelError>;
     fn unload(&self, model_id: &str) -> Result<(), ModelError>;
+}
+
+/// Adapter for an inference engine hosted in a dedicated JSON-lines process.
+/// stdout is protocol-only; stderr is drained separately so engine logs can
+/// never be mistaken for generation events.
+pub struct ProcessInferenceWorker {
+    kind: String,
+    child: Mutex<Child>,
+    writer: Mutex<ChildStdin>,
+    reader: Mutex<BufReader<ChildStdout>>,
+    operation: Mutex<()>,
+}
+
+impl ProcessInferenceWorker {
+    pub fn spawn(
+        kind: impl Into<String>,
+        root: &Path,
+        command: &Path,
+        args: &[String],
+    ) -> Result<Self, ModelError> {
+        let kind = kind.into();
+        if kind.is_empty() {
+            return Err(ModelError::Worker("worker kind is empty".into()));
+        }
+        let root = root.canonicalize()?;
+        let command = if command.is_absolute() {
+            command.to_path_buf()
+        } else {
+            root.join(command)
+        }
+        .canonicalize()?;
+        if !command.starts_with(&root) {
+            return Err(ModelError::Worker(
+                "worker executable escapes its runtime root".into(),
+            ));
+        }
+        let mut child = Command::new(command)
+            .args(args)
+            .current_dir(root)
+            .stdin(Stdio::piped())
+            .stdout(Stdio::piped())
+            .stderr(Stdio::piped())
+            .spawn()?;
+        let writer = child
+            .stdin
+            .take()
+            .ok_or_else(|| ModelError::Worker("worker stdin unavailable".into()))?;
+        let reader = child
+            .stdout
+            .take()
+            .ok_or_else(|| ModelError::Worker("worker stdout unavailable".into()))?;
+        if let Some(stderr) = child.stderr.take() {
+            std::thread::spawn(move || {
+                for line in BufReader::new(stderr).lines().map_while(Result::ok) {
+                    eprintln!("model-worker: {line}");
+                }
+            });
+        }
+        Ok(Self {
+            kind,
+            child: Mutex::new(child),
+            writer: Mutex::new(writer),
+            reader: Mutex::new(BufReader::new(reader)),
+            operation: Mutex::new(()),
+        })
+    }
+
+    fn send(&self, value: &Value) -> Result<(), ModelError> {
+        let data =
+            serde_json::to_vec(value).map_err(|error| ModelError::Worker(error.to_string()))?;
+        if data.len() > 1024 * 1024 {
+            return Err(ModelError::Worker("worker request exceeds 1 MiB".into()));
+        }
+        let mut writer = self
+            .writer
+            .lock()
+            .map_err(|_| ModelError::Worker("worker stdin lock poisoned".into()))?;
+        writer.write_all(&data)?;
+        writer.write_all(b"\n")?;
+        writer.flush()?;
+        Ok(())
+    }
+
+    fn receive(&self) -> Result<Value, ModelError> {
+        let mut reader = self
+            .reader
+            .lock()
+            .map_err(|_| ModelError::Worker("worker stdout lock poisoned".into()))?;
+        let mut line = String::new();
+        let count = reader.by_ref().take(1024 * 1024 + 1).read_line(&mut line)?;
+        if count == 0 {
+            return Err(ModelError::Worker("worker closed stdout".into()));
+        }
+        if count > 1024 * 1024 || !line.ends_with('\n') {
+            return Err(ModelError::Worker("worker response exceeds 1 MiB".into()));
+        }
+        let value: Value = serde_json::from_str(line.trim_end())
+            .map_err(|error| ModelError::Worker(format!("invalid worker response: {error}")))?;
+        if value.get("protocol").and_then(Value::as_u64) != Some(1) {
+            return Err(ModelError::Worker("worker protocol mismatch".into()));
+        }
+        if let Some(error) = value.get("error") {
+            return Err(ModelError::Worker(
+                error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("worker error")
+                    .into(),
+            ));
+        }
+        Ok(value)
+    }
+
+    fn operation(&self, request: Value, expected: &str) -> Result<(), ModelError> {
+        let _operation = self
+            .operation
+            .lock()
+            .map_err(|_| ModelError::Worker("worker operation lock poisoned".into()))?;
+        self.send(&request)?;
+        let response = self.receive()?;
+        if response.get("type").and_then(Value::as_str) != Some(expected) {
+            return Err(ModelError::Worker(format!(
+                "expected worker response {expected:?}"
+            )));
+        }
+        Ok(())
+    }
+}
+
+impl InferenceWorker for ProcessInferenceWorker {
+    fn kind(&self) -> &str {
+        &self.kind
+    }
+    fn load(&self, model: &ModelManifest, blob: &Path) -> Result<(), ModelError> {
+        self.operation(
+            serde_json::json!({"protocol":1,"type":"load","model":model,"path":blob}),
+            "loaded",
+        )
+    }
+    fn generate(
+        &self,
+        request: &GenerateRequest,
+        emit: &mut dyn FnMut(GenerateEvent) -> Result<(), ModelError>,
+    ) -> Result<(), ModelError> {
+        let _operation = self
+            .operation
+            .lock()
+            .map_err(|_| ModelError::Worker("worker operation lock poisoned".into()))?;
+        self.send(&serde_json::json!({"protocol":1,"type":"generate","request":request}))?;
+        loop {
+            let value = self.receive()?;
+            if value.get("requestId").and_then(Value::as_str) != Some(&request.request_id) {
+                return Err(ModelError::Worker(
+                    "worker response requestId mismatch".into(),
+                ));
+            }
+            let event: GenerateEvent = serde_json::from_value(
+                value
+                    .get("event")
+                    .cloned()
+                    .ok_or_else(|| ModelError::Worker("worker response omitted event".into()))?,
+            )
+            .map_err(|error| ModelError::Worker(error.to_string()))?;
+            let finished = matches!(event, GenerateEvent::Finish { .. });
+            emit(event)?;
+            if finished {
+                return Ok(());
+            }
+        }
+    }
+    fn cancel(&self, request_id: &str) -> Result<(), ModelError> {
+        self.send(&serde_json::json!({"protocol":1,"type":"cancel","requestId":request_id}))
+    }
+    fn unload(&self, model_id: &str) -> Result<(), ModelError> {
+        self.operation(
+            serde_json::json!({"protocol":1,"type":"unload","modelId":model_id}),
+            "unloaded",
+        )
+    }
+}
+
+impl Drop for ProcessInferenceWorker {
+    fn drop(&mut self) {
+        if let Ok(mut child) = self.child.lock() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+    }
 }
 
 #[derive(Clone)]

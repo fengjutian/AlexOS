@@ -1156,6 +1156,40 @@ mod tests {
         }
     }
 
+    struct MockInferenceWorker;
+    impl crate::model::InferenceWorker for MockInferenceWorker {
+        fn kind(&self) -> &str {
+            "mock"
+        }
+        fn load(
+            &self,
+            _model: &crate::model::ModelManifest,
+            _blob: &std::path::Path,
+        ) -> Result<(), crate::model::ModelError> {
+            Ok(())
+        }
+        fn generate(
+            &self,
+            _request: &crate::model::GenerateRequest,
+            emit: &mut dyn FnMut(
+                crate::model::GenerateEvent,
+            ) -> Result<(), crate::model::ModelError>,
+        ) -> Result<(), crate::model::ModelError> {
+            emit(crate::model::GenerateEvent::Delta {
+                text: "hello".into(),
+            })?;
+            emit(crate::model::GenerateEvent::Finish {
+                reason: "stop".into(),
+            })
+        }
+        fn cancel(&self, _request_id: &str) -> Result<(), crate::model::ModelError> {
+            Ok(())
+        }
+        fn unload(&self, _model_id: &str) -> Result<(), crate::model::ModelError> {
+            Ok(())
+        }
+    }
+
     fn persisted_service(name: &str, desired: DesiredState) -> crate::daemon::ServiceControlState {
         crate::daemon::ServiceControlState {
             service: name.into(),
@@ -1245,6 +1279,77 @@ mod tests {
         assert!(imported.ok, "{:?}", imported.error);
         let listed = service.handle(request(ControlCommand::ModelList));
         assert_eq!(listed.result.unwrap()["models"][0]["id"], "local/tiny@1");
+    }
+
+    #[test]
+    fn daemon_model_generation_uses_credit_stream() {
+        use sha2::{Digest, Sha256};
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("tiny.gguf");
+        std::fs::write(&source, b"weights").unwrap();
+        let digest: String = Sha256::digest(b"weights")
+            .iter()
+            .map(|v| format!("{v:02x}"))
+            .collect();
+        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")))
+            .with_ai_root(temp.path())
+            .unwrap();
+        let models = service.models.as_ref().unwrap();
+        models
+            .register_worker(Arc::new(MockInferenceWorker))
+            .unwrap();
+        models
+            .import(
+                &source,
+                crate::model::ModelManifest {
+                    id: "local/tiny@1".into(),
+                    digest: format!("sha256:{digest}"),
+                    size_bytes: 0,
+                    format: "gguf".into(),
+                    architecture: "llama".into(),
+                    quantization: None,
+                    license: None,
+                    source: None,
+                    compatible_workers: vec!["mock".into()],
+                },
+            )
+            .unwrap();
+        models.load("local/tiny@1", "mock").unwrap();
+        let opened = service.handle(request(ControlCommand::ModelGenerate {
+            app_id: "com.example.app".into(),
+            stream_id: "model-stream".into(),
+            request: crate::model::GenerateRequest {
+                request_id: "generate-1".into(),
+                model: "local/tiny@1".into(),
+                messages: vec![],
+                options: json!({}),
+            },
+        }));
+        assert!(opened.ok);
+        assert!(
+            service
+                .handle(request(ControlCommand::StreamCredit {
+                    stream_id: "model-stream".into(),
+                    bytes: 4096
+                }))
+                .ok
+        );
+        let first = service.handle(request(ControlCommand::StreamRead {
+            stream_id: "model-stream".into(),
+            wait_ms: 1000,
+        }));
+        assert!(first.ok);
+        let encoded = first.result.unwrap()["dataBase64"]
+            .as_str()
+            .unwrap()
+            .to_owned();
+        let event: serde_json::Value = serde_json::from_slice(
+            &base64::engine::general_purpose::STANDARD
+                .decode(encoded)
+                .unwrap(),
+        )
+        .unwrap();
+        assert_eq!(event, json!({"type":"delta","text":"hello"}));
     }
 
     #[test]

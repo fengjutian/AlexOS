@@ -110,6 +110,7 @@ impl ApiRouter {
     }
 
     fn require_model_manage(&self) -> Result<(), (&'static str, String)> {
+        self.require_plugin()?;
         self.require_permission(
             |permission| matches!(permission, Permission::ModelManage),
             "model.manage",

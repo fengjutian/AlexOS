@@ -59,6 +59,16 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `stream.credit` | always | runtime.invoke | blocking |
 | `stream.read` | always | runtime.invoke | blocking |
 | `stream.cancel` | always | runtime.invoke | blocking |
+| `mcp.connections` | always | mcp.use | blocking |
+| `mcp.listTools` | always | mcp.use | blocking |
+| `mcp.callTool` | always | mcp.use | blocking |
+| `model.list` | always | method-specific | blocking |
+| `model.import` | always | method-specific | blocking |
+| `model.remove` | always | method-specific | blocking |
+| `model.load` | always | method-specific | blocking |
+| `model.unload` | always | method-specific | blocking |
+| `model.cancel` | always | method-specific | blocking |
+| `model.generate` | always | method-specific | blocking |
 | `events.subscribe` | always | none | inline |
 | `events.unsubscribe` | always | none | inline |
 | `system.instances.create` | always | method-specific | blocking |
@@ -87,6 +97,6 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `shortcuts.unregister` | nativeDesktop | shortcuts | native |
 | `shortcuts.list` | nativeDesktop | shortcuts | native |
 
-Typed JSON Schema coverage: 82/82 methods.
+Typed JSON Schema coverage: 92/92 methods.
 
 Common errors: `INVALID_PARAMS`, `PERMISSION_DENIED`, `OPERATION_FAILED`, `DEADLINE_EXCEEDED`, `HOST_BUSY`, `METHOD_NOT_FOUND`.
