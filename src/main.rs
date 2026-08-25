@@ -261,6 +261,11 @@ enum Commands {
         #[command(subcommand)]
         action: TrustCommands,
     },
+    /// Manage the Alex managed runtime cache (import offline packages, list).
+    Runtime {
+        #[command(subcommand)]
+        action: RuntimeCommands,
+    },
     /// Diagnose host prerequisites (WebView2 runtime, Node, etc.).
     Doctor,
     /// Run the long-lived Alex Runtime control daemon.
@@ -344,6 +349,38 @@ enum TrustCommands {
         #[arg(long)]
         root: PathBuf,
     },
+}
+
+#[derive(Debug, Subcommand)]
+enum RuntimeCommands {
+    /// Import an offline runtime archive (ZIP) into the managed cache.
+    Import {
+        archive: PathBuf,
+        #[arg(long, value_enum)]
+        kind: RuntimeKindArg,
+        #[arg(long)]
+        version: String,
+        /// Expected SHA-256 of the archive (hex).
+        #[arg(long)]
+        sha256: String,
+    },
+    /// List runtimes currently installed in the managed cache.
+    List,
+}
+
+#[derive(Debug, Clone, Copy, ValueEnum)]
+enum RuntimeKindArg {
+    Node,
+    Python,
+}
+
+impl RuntimeKindArg {
+    fn into_service_runtime(self) -> alex::core::manifest_v2::ServiceRuntime {
+        match self {
+            RuntimeKindArg::Node => alex::core::manifest_v2::ServiceRuntime::Node,
+            RuntimeKindArg::Python => alex::core::manifest_v2::ServiceRuntime::Python,
+        }
+    }
 }
 
 #[derive(Debug, Clone, Copy, ValueEnum)]
@@ -492,6 +529,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 cache_dir: None,
                 service_name: "main".to_owned(),
                 limits: None,
+                runtime_requirements: Default::default(),
             };
             let auto_dirs = compute_app_dirs(&app.id).ok();
             let (data_dir, cache_dir, log_dir) = match &auto_dirs {
@@ -944,9 +982,83 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 }
             }
         },
+        Commands::Runtime { action } => match action {
+            RuntimeCommands::Import {
+                archive,
+                kind,
+                version,
+                sha256,
+            } => runtime_import(archive, kind, version, sha256)?,
+            RuntimeCommands::List => runtime_list()?,
+        },
         Commands::Doctor => run_doctor()?,
     }
     Ok(())
+}
+
+fn runtime_import(
+    archive: PathBuf,
+    kind: RuntimeKindArg,
+    version: String,
+    sha256: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let provider = alex::runtime_provider::RuntimeProvider::system(Arc::new(
+        alex::runtime::discover_node,
+    ));
+    let package = alex::runtime_provider::RuntimePackage {
+        version,
+        url: String::new(),
+        sha256,
+    };
+    let resolved = provider.install_from_archive(
+        kind.into_service_runtime(),
+        &alex::runtime_provider::TargetTriple::host(),
+        &package,
+        &archive,
+    )?;
+    println!(
+        "installed {} {} -> {}",
+        runtime_kind_label(kind),
+        resolved.version.as_deref().unwrap_or("?"),
+        resolved.executable.display()
+    );
+    Ok(())
+}
+
+fn runtime_list() -> Result<(), Box<dyn std::error::Error>> {
+    let provider = alex::runtime_provider::RuntimeProvider::system(Arc::new(
+        alex::runtime::discover_node,
+    ));
+    for kind in [
+        alex::core::manifest_v2::ServiceRuntime::Node,
+        alex::core::manifest_v2::ServiceRuntime::Python,
+    ] {
+        for installed in provider.installed(kind) {
+            println!(
+                "{}\t{}\t{}\t{}",
+                runtime_kind_label_kind(installed.kind),
+                installed.version,
+                installed.triple,
+                installed.root.display()
+            );
+        }
+    }
+    Ok(())
+}
+
+fn runtime_kind_label(kind: RuntimeKindArg) -> &'static str {
+    match kind {
+        RuntimeKindArg::Node => "node",
+        RuntimeKindArg::Python => "python",
+    }
+}
+
+fn runtime_kind_label_kind(kind: alex::core::manifest_v2::ServiceRuntime) -> &'static str {
+    match kind {
+        alex::core::manifest_v2::ServiceRuntime::Node => "node",
+        alex::core::manifest_v2::ServiceRuntime::Python => "python",
+        alex::core::manifest_v2::ServiceRuntime::Native => "native",
+    }
 }
 
 fn run_doctor() -> Result<(), Box<dyn std::error::Error>> {

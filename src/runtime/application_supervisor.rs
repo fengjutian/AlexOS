@@ -45,6 +45,7 @@ use crate::{
             ServiceRestartPolicy,
         },
         manifest::{Backend, BackendMode, HealthCheck, RestartPolicy, RuntimeKind},
+        manifest_v2::RuntimeRequirements,
     },
     runtime::{
         service_supervisor::{ServiceRuntime, ServiceStatus},
@@ -128,6 +129,10 @@ pub struct ApplicationRuntime {
     /// service name, etc.). Service-level errors live on the
     /// `ServiceRuntime.last_error` field.
     pub last_error: Option<String>,
+    /// App-level runtime version requirements from the manifest
+    /// (`runtime.node` / `runtime.python`), used to pin the
+    /// interpreter when a service is launched.
+    pub runtime_requirements: RuntimeRequirements,
 }
 
 impl ApplicationRuntime {
@@ -144,6 +149,7 @@ impl ApplicationRuntime {
             observed: ApplicationObservedState::Stopped,
             generation: 0,
             last_error: None,
+            runtime_requirements: RuntimeRequirements::default(),
         }
     }
 }
@@ -554,9 +560,13 @@ impl ApplicationSupervisor {
             ));
         }
         for descriptor in &services {
-            if !matches!(descriptor.runtime, crate::manifest_v2::ServiceRuntime::Node) {
+            if !matches!(
+                descriptor.runtime,
+                crate::manifest_v2::ServiceRuntime::Node
+                    | crate::manifest_v2::ServiceRuntime::Python
+            ) {
                 return Err(ApplicationSupervisorError::V2LaunchNotSupported(format!(
-                    "service {} declares runtime {:?}; Phase 2 only supports Node",
+                    "service {} declares runtime {:?}; only Node and Python are supported",
                     descriptor.name, descriptor.runtime
                 )));
             }
@@ -590,6 +600,7 @@ impl ApplicationSupervisor {
             application.generation = application.generation.wrapping_add(1);
             application.observed = ApplicationObservedState::Starting;
             application.last_error = None;
+            application.runtime_requirements = resolved.runtime.clone();
             for descriptor in &services {
                 application
                     .services
@@ -779,6 +790,7 @@ impl ApplicationSupervisor {
             data_dir: None,
             cache_dir: None,
             limits: spec.resources.as_ref().map(resources_to_limits),
+            runtime_requirements: application.runtime_requirements.clone(),
         };
         drop(guard);
         let handle = match RuntimeHandle::start_with_spec(spec_for_launch) {
@@ -2070,11 +2082,12 @@ mod tests {
     }
 
     #[test]
-    fn start_application_rejects_non_node_runtimes_for_now() {
+    fn start_application_resolves_python_through_the_managed_provider() {
         let supervisor = ApplicationSupervisor::new();
-        // Build a v2 manifest with a Python service to drive
-        // the runtime check. `start_application` must refuse
-        // it before the service slot is even created.
+        // Build a v2 manifest with a Python service. The supervisor
+        // now accepts Python and resolves it through the managed
+        // runtime provider; with no cached Python it must fail with
+        // `RuntimeNotAvailable` (Python has no ambient-PATH fallback).
         use crate::core::{
             application_manifest::ApplicationManifest,
             manifest_v2::{ApplicationManifestV2, RuntimeRequirements, ServiceSpec},
@@ -2115,8 +2128,12 @@ mod tests {
         let resolved = unified.resolve().expect("resolve python app");
         let result = supervisor.start_application("com.example.python", Path::new("."), &resolved);
         match result {
+            // The layered start path wraps the per-service error in
+            // `V2LaunchNotSupported`; the underlying cause is the
+            // managed provider reporting "runtime Python not available".
             Err(ApplicationSupervisorError::V2LaunchNotSupported(message)) => {
-                assert!(message.contains("Python"), "unexpected: {message}");
+                assert!(message.contains("runtime Python"), "unexpected: {message}");
+                assert!(message.contains("not available"), "unexpected: {message}");
             }
             other => panic!("expected V2LaunchNotSupported, got {other:?}"),
         }

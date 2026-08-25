@@ -46,8 +46,8 @@ use crate::{
         RuntimeKind as RuntimeKindV1, UpdateSource,
     },
     manifest_v2::{
-        ApplicationManifestV2, HealthKind, ManifestV2Error, RestartPolicyV2, ServiceHealth,
-        ServicePort, ServiceResources, ServiceRuntime, ServiceSpec,
+        ApplicationManifestV2, HealthKind, ManifestV2Error, RestartPolicyV2, RuntimeRequirements,
+        ServiceHealth, ServicePort, ServiceResources, ServiceRuntime, ServiceSpec,
     },
 };
 
@@ -448,6 +448,9 @@ pub struct ResolvedApplication {
     pub services: BTreeMap<String, ResolvedService>,
     pub mcp_servers: BTreeMap<String, crate::manifest_v2::McpServerSpec>,
     pub agent: Option<crate::agent::AgentSpec>,
+    /// App-level runtime version requirements (`runtime.node` /
+    /// `runtime.python` in v2). v1 projects the default (no pin).
+    pub runtime: RuntimeRequirements,
     pub permissions: EffectivePermissionRequest,
 }
 
@@ -482,6 +485,10 @@ impl ApplicationManifest {
                 .map(|manifest| manifest.mcp_servers.clone())
                 .unwrap_or_default(),
             agent: self.as_v2().and_then(|manifest| manifest.agent.clone()),
+            runtime: self
+                .as_v2()
+                .map(|manifest| manifest.runtime.clone())
+                .unwrap_or_default(),
             permissions,
         })
     }
@@ -1138,6 +1145,8 @@ services:
 
         assert_eq!(resolved.id, "com.alex.agent");
         assert!(resolved.frontend.is_none());
+        assert_eq!(resolved.runtime.node.as_deref(), Some("22"));
+        assert_eq!(resolved.runtime.python.as_deref(), Some("3.12"));
         assert_eq!(resolved.services.len(), 2);
         let api = resolved.services.get("api").expect("api");
         assert_eq!(api.depends_on, vec!["worker"]);

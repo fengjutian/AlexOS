@@ -360,14 +360,63 @@ impl RuntimeProvider {
         let archive = self.download_and_verify(package, triple)?;
         let extracted = self.extract(kind, &version, triple, &archive)?;
         let _ = fs::remove_file(&archive);
+        self.publish_extracted(kind, &version, triple, package, extracted)
+    }
 
-        // Atomically publish: extract to a sibling temp dir, then rename.
-        let parent = dest
-            .parent()
-            .ok_or_else(|| RuntimeProviderError::Io(std::io::Error::new(
+    /// Import an already-downloaded runtime archive (offline install).
+    /// Verifies the SHA-256 digest, extracts and publishes it under the
+    /// managed cache, then returns the resolved executable. Idempotent.
+    pub fn install_from_archive(
+        &self,
+        kind: ServiceRuntime,
+        triple: &TargetTriple,
+        package: &RuntimePackage,
+        archive: &Path,
+    ) -> Result<ResolvedRuntime, RuntimeProviderError> {
+        let version = Version::parse(&package.version)
+            .map_err(|error| RuntimeProviderError::InvalidVersionReq(error.to_string()))?;
+        let dest = self.version_dir(kind, &package.version, triple);
+        if dest.join(MANIFEST_FILE).is_file() {
+            let executable = executable_for(kind, &dest).ok_or_else(|| {
+                RuntimeProviderError::Verify(format!(
+                    "cached runtime at {} has no executable",
+                    dest.display()
+                ))
+            })?;
+            return Ok(ResolvedRuntime {
+                executable,
+                version: Some(package.version.clone()),
+                source: RuntimeSource::Managed,
+            });
+        }
+        let actual = sha256_file(archive)?;
+        if !actual.eq_ignore_ascii_case(&package.sha256) {
+            return Err(RuntimeProviderError::Verify(format!(
+                "sha256 mismatch: expected {}, got {}",
+                package.sha256, actual
+            )));
+        }
+        let extracted = self.extract(kind, &version, triple, archive)?;
+        self.publish_extracted(kind, &version, triple, package, extracted)
+    }
+
+    fn publish_extracted(
+        &self,
+        kind: ServiceRuntime,
+        version: &Version,
+        triple: &TargetTriple,
+        package: &RuntimePackage,
+        extracted: PathBuf,
+    ) -> Result<ResolvedRuntime, RuntimeProviderError> {
+        let dest = self.version_dir(kind, &package.version, triple);
+        // Atomically publish: move the extracted tree to a sibling temp
+        // dir, write the manifest, then rename onto the final location.
+        let parent = dest.parent().ok_or_else(|| {
+            RuntimeProviderError::Io(std::io::Error::new(
                 std::io::ErrorKind::InvalidInput,
                 "cache destination has no parent",
-            )))?;
+            ))
+        })?;
         fs::create_dir_all(parent)?;
         let temp = parent.join(format!(".installing-{}-{}", std::process::id(), version));
         if temp.exists() {
@@ -863,6 +912,53 @@ mod tests {
             .install(ServiceRuntime::Node, &TargetTriple::host(), &package)
             .unwrap_err();
         assert!(matches!(error, RuntimeProviderError::Verify(_)), "{error}");
+    }
+
+    #[test]
+    fn install_from_archive_imports_an_offline_package() {
+        let (temp, _provider) = provider();
+        let zip = node_zip();
+        let digest = {
+            let mut hasher = Sha256::new();
+            hasher.update(&zip);
+            hex(&hasher.finalize())
+        };
+        let archive = temp.path().join("node-offline.zip");
+        fs::write(&archive, &zip).unwrap();
+        let provider = RuntimeProvider {
+            cache_root: temp.path().join("runtimes"),
+            system_node: Arc::new(|| None),
+            downloader: Arc::new(MemoryDownloader {
+                bytes: BTreeMap::new(),
+            }),
+            max_versions: 4,
+        };
+        let package = RuntimePackage {
+            version: "22.14.0".to_owned(),
+            url: String::new(),
+            sha256: digest,
+        };
+        let resolved = provider
+            .install_from_archive(
+                ServiceRuntime::Node,
+                &TargetTriple::host(),
+                &package,
+                &archive,
+            )
+            .unwrap();
+        assert_eq!(resolved.source, RuntimeSource::Managed);
+        assert_eq!(resolved.version.as_deref(), Some("22.14.0"));
+
+        // Idempotent second import.
+        let again = provider
+            .install_from_archive(
+                ServiceRuntime::Node,
+                &TargetTriple::host(),
+                &package,
+                &archive,
+            )
+            .unwrap();
+        assert_eq!(again.executable, resolved.executable);
     }
 
     #[test]

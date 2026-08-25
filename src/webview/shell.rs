@@ -404,6 +404,7 @@ pub mod windows {
                     cache_dir: None,
                     service_name: "main".to_owned(),
                     limits: None,
+                    runtime_requirements: Default::default(),
                 };
                 let handle = RuntimeHandle::start_with_spec(spec)?;
                 let status = handle.status(Duration::from_secs(20))?;

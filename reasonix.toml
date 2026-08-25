@@ -1,0 +1,2 @@
+[permissions]
+allow = ["Bash=cd /mnt/d/github/AlexOS && perl -0pi -e 's/^(\\s*)restart: ServiceRestartDescriptor::default\\(\\),$/$1restart: ServiceRestartDescriptor::default(),\\n$1    resources: None,/mg' tests/core.rs && grep -c \"resources: None,\" tests/core.rs"]

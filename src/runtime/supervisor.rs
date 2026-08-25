@@ -19,6 +19,7 @@ use serde_json::Value;
 use thiserror::Error;
 
 use crate::core::manifest::{Backend, BackendMode, RuntimeKind};
+use crate::core::manifest_v2::RuntimeRequirements;
 use crate::container::isolation::IsolationHandle;
 use crate::container::model::ResourceLimits;
 
@@ -148,12 +149,11 @@ fn shutdown_grace_for(endpoint: &Option<ServiceEndpoint>) -> (BackendMode, Durat
 
 #[derive(Debug, Error)]
 pub enum RuntimeError {
-    #[error("Node.js was not found; set ALEX_NODE to the node executable")]
-    NodeNotFound,
-    #[error(
-        "Python runtime is not managed by Alex OS in this build; Phase 7 adds the managed Python provider"
-    )]
-    PythonNotManaged,
+    #[error("runtime {kind:?} {version_req:?} is not available in the managed cache or on PATH")]
+    RuntimeNotAvailable {
+        kind: crate::core::manifest_v2::ServiceRuntime,
+        version_req: Option<String>,
+    },
     #[error("failed to start runtime {executable}: {source}")]
     Start {
         executable: PathBuf,
@@ -253,6 +253,10 @@ pub struct RuntimeSpec {
     /// host-imposed limit. Populated by the v2 `ApplicationSupervisor`
     /// from the service's `resources` block.
     pub limits: Option<ResourceLimits>,
+    /// App-level runtime version requirements (`runtime.node` /
+    /// `runtime.python`). The supervisor passes the relevant entry to
+    /// the managed runtime provider when resolving the interpreter.
+    pub runtime_requirements: RuntimeRequirements,
 }
 
 fn default_service_name() -> String {
@@ -440,6 +444,7 @@ impl RuntimeHandle {
             data_dir: None,
             cache_dir: None,
             limits: None,
+            runtime_requirements: Default::default(),
         })
     }
 
@@ -838,6 +843,7 @@ impl RuntimeProcess {
             data_dir: None,
             cache_dir: None,
             limits: None,
+            runtime_requirements: Default::default(),
         };
         let logs = Arc::new(Mutex::new(VecDeque::new()));
         Self::start_with_spec(&spec, None, None, None, Arc::clone(&logs)).map(|(p, _)| p)
@@ -882,8 +888,20 @@ impl RuntimeProcess {
         // untrusted executables via the Phase 8 executable
         // allow-list — that is layered above this dispatch.
         let (executable, allow_native_entry) = match spec.backend.runtime {
-            RuntimeKind::Node => (resolve_node_executable()?, false),
-            RuntimeKind::Python => return Err(RuntimeError::PythonNotManaged),
+            RuntimeKind::Node => (
+                resolve_managed_runtime(
+                    crate::core::manifest_v2::ServiceRuntime::Node,
+                    spec.runtime_requirements.node.as_deref(),
+                )?,
+                false,
+            ),
+            RuntimeKind::Python => (
+                resolve_managed_runtime(
+                    crate::core::manifest_v2::ServiceRuntime::Python,
+                    spec.runtime_requirements.python.as_deref(),
+                )?,
+                false,
+            ),
             RuntimeKind::Native => (PathBuf::from(&spec.backend.entry), true),
         };
         let mut command = Command::new(&executable);
@@ -1647,25 +1665,30 @@ pub fn discover_node() -> Option<PathBuf> {
     find_on_path(if cfg!(windows) { "node.exe" } else { "node" })
 }
 
-/// Resolve the Node.js executable through the managed runtime provider:
-/// a versioned runtime from the managed cache is preferred, falling back
-/// to the ambient `ALEX_NODE` / `PATH` discovery. This is the seam that
-/// lets an operator later flip a service to `require_managed` so it stops
-/// depending on the user's PATH. `None`-version requests select the newest
-/// cached Node; version pinning from `runtime.node` is threaded in a
-/// follow-up slice.
-fn resolve_node_executable() -> Result<PathBuf, RuntimeError> {
+/// Resolve a service runtime through the managed runtime provider. For
+/// `Node` a versioned runtime from the managed cache is preferred,
+/// falling back to the ambient `ALEX_NODE` / `PATH` discovery; `Python`
+/// must come from the managed cache (`require_managed`), so a missing
+/// Python is reported instead of silently borrowing a system install.
+/// `version_req: None` selects the newest cached version.
+fn resolve_managed_runtime(
+    kind: crate::core::manifest_v2::ServiceRuntime,
+    version_req: Option<&str>,
+) -> Result<PathBuf, RuntimeError> {
     let provider = crate::runtime_provider::RuntimeProvider::system(Arc::new(discover_node));
     let request = crate::runtime_provider::RuntimeRequest {
-        kind: crate::core::manifest_v2::ServiceRuntime::Node,
-        version_req: None,
+        kind,
+        version_req: version_req.map(str::to_owned),
         triple: crate::runtime_provider::TargetTriple::host(),
-        require_managed: false,
+        require_managed: kind != crate::core::manifest_v2::ServiceRuntime::Node,
     };
     match provider.resolve(&request) {
         Ok(resolved) => Ok(resolved.executable),
         Err(crate::runtime_provider::RuntimeProviderError::NotAvailable { .. }) => {
-            Err(RuntimeError::NodeNotFound)
+            Err(RuntimeError::RuntimeNotAvailable {
+                kind,
+                version_req: version_req.map(str::to_owned),
+            })
         }
         Err(error) => Err(RuntimeError::Protocol(error.to_string())),
     }
@@ -1782,6 +1805,7 @@ mod lifecycle_tests {
             data_dir: None,
             cache_dir: None,
             limits: None,
+            runtime_requirements: Default::default(),
         };
         let policy = effective_policy(&spec);
         assert_eq!(policy.policy, "on-failure");
@@ -2107,6 +2131,7 @@ mod service_runtime_tests {
             data_dir: None,
             cache_dir: None,
             limits: None,
+            runtime_requirements: Default::default(),
         };
         let handle = RuntimeHandle::start_with_spec(spec).expect("service runtime starts");
         let status = handle
@@ -2227,6 +2252,7 @@ mod service_runtime_tests {
             data_dir: None,
             cache_dir: None,
             limits: None,
+            runtime_requirements: Default::default(),
         };
         let handle = RuntimeHandle::start_with_spec(spec).expect("RPC runtime starts");
         let original_pid = handle
@@ -2321,6 +2347,7 @@ mod service_runtime_tests {
             data_dir: Some(data_dir.clone()),
             cache_dir: None,
             limits: None,
+            runtime_requirements: Default::default(),
         };
         let handle = RuntimeHandle::start_with_spec(spec).expect("notes runtime starts");
         let status = handle
