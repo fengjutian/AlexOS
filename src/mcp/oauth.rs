@@ -61,6 +61,12 @@ pub struct TokenSet {
     pub expires_in: Option<u64>,
     #[serde(default)]
     pub scope: Option<String>,
+    #[serde(default)]
+    pub token_endpoint: Option<String>,
+    #[serde(default)]
+    pub client_id: Option<String>,
+    #[serde(default)]
+    pub resource: Option<String>,
 }
 
 pub struct OAuthClient {
@@ -181,7 +187,7 @@ impl OAuthClient {
         if secure_url(returned_issuer, "returned issuer")?.as_str() != pending.issuer {
             return Err(McpError::Protocol("OAuth issuer mismatch".into()));
         }
-        self.post_token(
+        let mut tokens = self.post_token(
             &pending.token_endpoint,
             &[
                 ("grant_type", "authorization_code"),
@@ -191,7 +197,11 @@ impl OAuthClient {
                 ("code_verifier", &pending.code_verifier),
                 ("resource", &pending.resource),
             ],
-        )
+        )?;
+        tokens.token_endpoint = Some(pending.token_endpoint.clone());
+        tokens.client_id = Some(pending.client_id.clone());
+        tokens.resource = Some(pending.resource.clone());
+        Ok(tokens)
     }
 
     pub fn refresh(
@@ -261,12 +271,48 @@ pub struct TokenVault {
 
 pub trait AccessTokenProvider: Send + Sync {
     fn access_token(&self) -> Result<Option<String>, McpError>;
+    fn refresh_access_token(&self, challenge: &AuthChallenge) -> Result<bool, McpError>;
+}
+
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct AuthChallenge {
+    pub resource_metadata: Option<String>,
+    pub scope: Option<String>,
+}
+
+pub fn parse_www_authenticate(value: &str) -> Result<AuthChallenge, McpError> {
+    let (scheme, parameters) = value.split_once(' ').unwrap_or((value, ""));
+    if !scheme.eq_ignore_ascii_case("bearer") {
+        return Err(McpError::Authorization(
+            "MCP server did not return a Bearer challenge".into(),
+        ));
+    }
+    let mut challenge = AuthChallenge {
+        resource_metadata: None,
+        scope: None,
+    };
+    for part in parameters.split(',') {
+        let Some((name, raw)) = part.trim().split_once('=') else {
+            continue;
+        };
+        let value = raw.trim().trim_matches('"');
+        match name.trim().to_ascii_lowercase().as_str() {
+            "resource_metadata" => {
+                secure_url(value, "resource metadata")?;
+                challenge.resource_metadata = Some(value.into());
+            }
+            "scope" => challenge.scope = Some(value.into()),
+            _ => {}
+        }
+    }
+    Ok(challenge)
 }
 
 #[derive(Clone)]
 pub struct VaultAccessTokenProvider {
     vault: TokenVault,
     account: String,
+    refresh_gate: Arc<std::sync::Mutex<()>>,
 }
 
 impl VaultAccessTokenProvider {
@@ -277,7 +323,11 @@ impl VaultAccessTokenProvider {
                 "invalid OAuth token account".into(),
             ));
         }
-        Ok(Self { vault, account })
+        Ok(Self {
+            vault,
+            account,
+            refresh_gate: Arc::new(std::sync::Mutex::new(())),
+        })
     }
 }
 
@@ -296,6 +346,34 @@ impl AccessTokenProvider for VaultAccessTokenProvider {
             ));
         }
         Ok(token)
+    }
+
+    fn refresh_access_token(&self, _: &AuthChallenge) -> Result<bool, McpError> {
+        let _gate = self
+            .refresh_gate
+            .lock()
+            .map_err(|_| McpError::Transport("OAuth refresh lock poisoned".into()))?;
+        let Some(previous) = self.vault.load(&self.account)? else {
+            return Ok(false);
+        };
+        let (Some(refresh_token), Some(endpoint), Some(client_id), Some(resource)) = (
+            previous.refresh_token.as_deref(),
+            previous.token_endpoint.as_deref(),
+            previous.client_id.as_deref(),
+            previous.resource.as_deref(),
+        ) else {
+            return Ok(false);
+        };
+        let mut tokens =
+            OAuthClient::default().refresh(endpoint, client_id, resource, refresh_token)?;
+        if tokens.refresh_token.is_none() {
+            tokens.refresh_token = previous.refresh_token;
+        }
+        tokens.token_endpoint = Some(endpoint.into());
+        tokens.client_id = Some(client_id.into());
+        tokens.resource = Some(resource.into());
+        self.vault.save(&self.account, &tokens)?;
+        Ok(true)
     }
 }
 

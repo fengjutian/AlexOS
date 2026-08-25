@@ -48,6 +48,8 @@ pub enum McpError {
     Protocol(String),
     #[error("MCP server error {code}: {message}")]
     Server { code: i64, message: String },
+    #[error("MCP authorization failed: {0}")]
+    Authorization(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -231,6 +233,7 @@ impl StreamableHttpTransport {
         }
         let agent: ureq::Agent = ureq::Agent::config_builder()
             .max_redirects(0)
+            .http_status_as_error(false)
             .timeout_global(Some(Duration::from_secs(60)))
             .build()
             .into();
@@ -253,6 +256,16 @@ impl StreamableHttpTransport {
     }
 
     fn post(&self, method: &str, params: &Value, value: &Value) -> Result<Option<Value>, McpError> {
+        self.post_attempt(method, params, value, true)
+    }
+
+    fn post_attempt(
+        &self,
+        method: &str,
+        params: &Value,
+        value: &Value,
+        allow_refresh: bool,
+    ) -> Result<Option<Value>, McpError> {
         let body =
             serde_json::to_vec(value).map_err(|error| McpError::Protocol(error.to_string()))?;
         if body.len() > MAX_MESSAGE_BYTES {
@@ -293,6 +306,25 @@ impl StreamableHttpTransport {
             .agent
             .run(request)
             .map_err(|error| McpError::Transport(error.to_string()))?;
+        if response.status() == ureq::http::StatusCode::UNAUTHORIZED {
+            let challenge = response
+                .headers()
+                .get("www-authenticate")
+                .and_then(|value| value.to_str().ok())
+                .ok_or_else(|| {
+                    McpError::Authorization("401 response omitted WWW-Authenticate".into())
+                })
+                .and_then(oauth::parse_www_authenticate)?;
+            if allow_refresh
+                && let Some(provider) = &self.access_tokens
+                && provider.refresh_access_token(&challenge)?
+            {
+                return self.post_attempt(method, params, value, false);
+            }
+            return Err(McpError::Authorization(
+                "authorization is required or refresh failed".into(),
+            ));
+        }
         if self.era == ProtocolEra::Legacy
             && let Some(session_id) = response
                 .headers()
