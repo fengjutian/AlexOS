@@ -96,6 +96,7 @@ impl crate::mcp::InputRequiredHandler for StreamingMcpInputHandler {
                     .lock()
                     .ok()
                     .and_then(|mut pending| pending.remove(&input_id));
+                validate_mrtr_response(method, &value)?;
                 return Ok(value);
             }
             if self.cancellation.is_cancelled() {
@@ -1276,6 +1277,7 @@ impl DaemonService {
         };
         for value in values.into_iter().filter(|value| value.enabled) {
             let service = self.clone();
+            let persisted = value.clone();
             let identity = format!("{}/{}", value.application, value.binding);
             let restore_identity = identity.clone();
             if let Err(error) = crate::runtime::task_executor::mcp_executor().submit(move || {
@@ -1306,6 +1308,10 @@ impl DaemonService {
                     eprintln!(
                         "alexd: failed to restore MCP connection {restore_identity}: {error}"
                     );
+                } else if let Some(configs) = &service.mcp_configs
+                    && let Err(error) = configs.upsert(persisted)
+                {
+                    eprintln!("alexd: failed to preserve MCP connection ownership: {error}");
                 }
             }) {
                 eprintln!("alexd: MCP restore queue rejected {identity}: {error}");
@@ -1431,13 +1437,39 @@ impl DaemonService {
         let client = base
             .with_input_handler(Arc::new(handler), 10)
             .map_err(|error| error.to_string())?;
+        let mut audit_entry =
+            crate::mcp::AuditLog::entry(stream_id, app_id, binding, name, "started");
+        if let Some(audit) = &self.mcp_audit {
+            audit.append(&audit_entry).map_err(|error| {
+                format!("MCP audit unavailable; interactive tool was not invoked: {error}")
+            })?;
+        }
+        let audit = self.mcp_audit.clone();
         let streams = Arc::clone(&self.streams);
         let worker_stream_id = stream_id.to_owned();
         let tool = name.to_owned();
         std::thread::Builder::new()
             .name("alex-mcp-mrtr".into())
             .spawn(move || {
+                let started_at = std::time::Instant::now();
                 let result = client.call_tool(&tool, arguments);
+                audit_entry.timestamp_ms = now_ms().unwrap_or_default();
+                audit_entry.phase = "finished".into();
+                audit_entry.duration_ms = Some(
+                    started_at
+                        .elapsed()
+                        .as_millis()
+                        .try_into()
+                        .unwrap_or(u64::MAX),
+                );
+                audit_entry.outcome =
+                    Some(if result.is_ok() { "success" } else { "failure" }.into());
+                if let Err(error) = &result {
+                    audit_entry.error_kind = Some(mcp_error_kind(error).into());
+                }
+                if let Some(audit) = audit {
+                    let _ = audit.append(&audit_entry);
+                }
                 if cancellation.is_cancelled() {
                     return;
                 }
@@ -1985,6 +2017,66 @@ fn push_stream_with_cancel(
     }
 }
 
+fn validate_mrtr_response(
+    method: &str,
+    value: &serde_json::Value,
+) -> Result<(), crate::mcp::McpError> {
+    let object = value
+        .as_object()
+        .ok_or_else(|| crate::mcp::McpError::Protocol("MRTR response must be an object".into()))?;
+    match method {
+        "elicitation/create" => {
+            if !object
+                .get("action")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|action| matches!(action, "accept" | "decline" | "cancel"))
+            {
+                return Err(crate::mcp::McpError::Protocol(
+                    "elicitation response has an invalid action".into(),
+                ));
+            }
+        }
+        "sampling/createMessage" => {
+            if !object
+                .get("role")
+                .and_then(serde_json::Value::as_str)
+                .is_some_and(|role| matches!(role, "assistant" | "user"))
+                || object.get("content").is_none()
+            {
+                return Err(crate::mcp::McpError::Protocol(
+                    "sampling response omitted role or content".into(),
+                ));
+            }
+        }
+        "roots/list" => {
+            if !object.get("roots").is_some_and(serde_json::Value::is_array) {
+                return Err(crate::mcp::McpError::Protocol(
+                    "roots response omitted roots".into(),
+                ));
+            }
+        }
+        _ => {
+            return Err(crate::mcp::McpError::Protocol(
+                "unsupported MRTR response method".into(),
+            ));
+        }
+    }
+    Ok(())
+}
+
+fn mcp_error_kind(error: &crate::mcp::McpError) -> &'static str {
+    match error {
+        crate::mcp::McpError::NotFound(_) => "not-found",
+        crate::mcp::McpError::Duplicate(_) => "duplicate",
+        crate::mcp::McpError::InvalidConfig(_) => "invalid-config",
+        crate::mcp::McpError::Transport(_) => "transport",
+        crate::mcp::McpError::Protocol(_) => "protocol",
+        crate::mcp::McpError::Server { .. } => "server",
+        crate::mcp::McpError::Authorization(_) => "authorization",
+        crate::mcp::McpError::InputRequired(_) => "input_required",
+    }
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -2013,6 +2105,30 @@ mod tests {
     }
 
     struct MockInferenceWorker;
+
+    struct MockMrtrTransport;
+    impl crate::mcp::RpcTransport for MockMrtrTransport {
+        fn request(
+            &self,
+            _id: u64,
+            method: &str,
+            params: serde_json::Value,
+        ) -> Result<serde_json::Value, crate::mcp::McpError> {
+            if method != "tools/call" {
+                return Ok(json!({}));
+            }
+            if params.get("inputResponses").is_none() {
+                Ok(
+                    json!({"resultType":"input_required","inputRequests":{"confirm":{"method":"elicitation/create","params":{"message":"Continue?"}}},"requestState":"state-1"}),
+                )
+            } else {
+                Ok(json!({"resultType":"complete","content":[{"type":"text","text":"done"}]}))
+            }
+        }
+        fn notify(&self, _: &str, _: serde_json::Value) -> Result<(), crate::mcp::McpError> {
+            Ok(())
+        }
+    }
     impl crate::model::InferenceWorker for MockInferenceWorker {
         fn kind(&self) -> &str {
             "mock"
@@ -2133,6 +2249,56 @@ mod tests {
                 .unwrap()
                 .is_empty()
         );
+    }
+
+    #[test]
+    fn daemon_bridges_mrtr_input_over_credit_stream() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")));
+        service
+            .mcp
+            .connect(
+                "com.example.app",
+                "tools",
+                crate::mcp::McpClient::new(
+                    Arc::new(MockMrtrTransport),
+                    crate::mcp::ProtocolEra::Modern,
+                ),
+            )
+            .unwrap();
+        let opened = service.handle(request(ControlCommand::McpCallToolInteractive {
+            app_id: "com.example.app".into(),
+            binding: "tools".into(),
+            stream_id: "mrtr-1".into(),
+            name: "confirm".into(),
+            arguments: json!({}),
+            allowed_input_methods: vec!["elicitation/create".into()],
+        }));
+        assert!(opened.ok, "{:?}", opened.error);
+        service.stream_credit("mrtr-1", 64 * 1024).unwrap();
+        let first = service
+            .streams
+            .pop_wait("mrtr-1", std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        let event: serde_json::Value = serde_json::from_slice(&first.data).unwrap();
+        assert_eq!(event["type"], "inputRequired");
+        let input_id = event["inputId"].as_str().unwrap();
+        service
+            .mcp_input_respond(
+                "com.example.app",
+                input_id,
+                json!({"action":"accept","content":{"confirmed":true}}),
+            )
+            .unwrap();
+        let second = service
+            .streams
+            .pop_wait("mrtr-1", std::time::Duration::from_secs(2))
+            .unwrap()
+            .unwrap();
+        let result: serde_json::Value = serde_json::from_slice(&second.data).unwrap();
+        assert_eq!(result["type"], "result");
+        assert_eq!(result["result"]["content"][0]["text"], "done");
     }
 
     #[test]

@@ -1573,11 +1573,19 @@ mod tests {
                 headers.push_str(&line.to_ascii_lowercase());
             }
             assert!(headers.contains("mcp-method: subscriptions/listen"));
+            let content_length = headers
+                .lines()
+                .find_map(|line| line.strip_prefix("content-length:"))
+                .and_then(|value| value.trim().parse::<usize>().ok())
+                .unwrap();
+            let mut request_body = vec![0; content_length];
+            reader.read_exact(&mut request_body).unwrap();
             let events = concat!(
                 "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/subscriptions/acknowledged\",\"params\":{}}\n\n",
                 "data: {\"jsonrpc\":\"2.0\",\"method\":\"notifications/tools/list_changed\",\"params\":{}}\n\n"
             );
             write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", events.len(), events).unwrap();
+            stream.flush().unwrap();
         });
         let client = McpClient::new(
             Arc::new(StreamableHttpTransport::new(&endpoint, ProtocolEra::Modern).unwrap()),
