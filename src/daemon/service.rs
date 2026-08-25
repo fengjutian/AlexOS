@@ -216,9 +216,8 @@ impl DaemonService {
         models
             .register_process_workers(&root.join("runtimes"))
             .map_err(|error| error.to_string())?;
-        let secret_resolver = crate::model::remote::SecretResolver::new(Arc::new(
-            crate::platform::secret::native(),
-        ));
+        let secret_resolver =
+            crate::model::remote::SecretResolver::new(Arc::new(crate::platform::secret::native()));
         let remote_router = crate::model::remote::RemoteProviderRouter::open(root, secret_resolver)
             .map_err(|error| error.to_string())?;
         models.set_remote(remote_router);
@@ -2241,7 +2240,11 @@ impl DaemonService {
         Ok(json!({ "configured": true }))
     }
 
-    fn model_secret_delete(&self, service: &str, account: &str) -> Result<serde_json::Value, String> {
+    fn model_secret_delete(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<serde_json::Value, String> {
         let reference = crate::model::remote::SecretRef {
             service: service.to_string(),
             account: account.to_string(),
@@ -2253,7 +2256,11 @@ impl DaemonService {
         Ok(json!({ "deleted": deleted }))
     }
 
-    fn model_secret_exists(&self, service: &str, account: &str) -> Result<serde_json::Value, String> {
+    fn model_secret_exists(
+        &self,
+        service: &str,
+        account: &str,
+    ) -> Result<serde_json::Value, String> {
         let reference = crate::model::remote::SecretRef {
             service: service.to_string(),
             account: account.to_string(),

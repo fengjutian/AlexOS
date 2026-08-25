@@ -513,10 +513,7 @@ impl ModelManager {
     /// model IDs are then routed through it transparently by [`Self::generate`]
     /// and [`Self::embed`].
     pub fn set_remote(&self, router: remote::RemoteProviderRouter) {
-        *self
-            .remote
-            .lock()
-            .expect("remote router lock poisoned") = Some(router);
+        *self.remote.lock().expect("remote router lock poisoned") = Some(router);
     }
 
     fn remote_router(&self) -> Result<remote::RemoteProviderRouter, ModelError> {

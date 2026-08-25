@@ -15,8 +15,8 @@ use std::{
     io::{BufRead, BufReader},
     path::{Path, PathBuf},
     sync::{
-        atomic::{AtomicBool, Ordering},
         Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
     },
     time::{Duration, Instant},
 };
@@ -25,8 +25,8 @@ use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
 
-use crate::platform::secret::{SecretStore, SecretStoreError};
 use crate::platform::PlatformServices;
+use crate::platform::secret::{SecretStore, SecretStoreError};
 
 use super::{EmbedRequest, EmbeddingResponse, GenerateEvent, GenerateRequest};
 
@@ -88,7 +88,9 @@ impl SecretRef {
                 return Err(format!("secret {label} exceeds 255 characters"));
             }
             if value.chars().any(|c| c.is_control() || c.is_whitespace()) {
-                return Err(format!("secret {label} contains a control or whitespace character"));
+                return Err(format!(
+                    "secret {label} contains a control or whitespace character"
+                ));
             }
         }
         Ok(())
@@ -357,7 +359,8 @@ pub struct ProviderConfigStore {
 
 impl ProviderConfigStore {
     pub fn open(root: &Path) -> Result<Self, ProviderError> {
-        std::fs::create_dir_all(root).map_err(|e| ProviderError::new(ProviderErrorKind::Transport, e.to_string()))?;
+        std::fs::create_dir_all(root)
+            .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, e.to_string()))?;
         let path = root.join("providers.json");
         if !path.exists() {
             atomic_json(
@@ -377,8 +380,12 @@ impl ProviderConfigStore {
     fn load(&self) -> Result<BTreeMap<String, RemoteProviderConfig>, ProviderError> {
         let bytes = std::fs::read(&self.path)
             .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, e.to_string()))?;
-        let index: ProviderIndex = serde_json::from_slice(&bytes)
-            .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, format!("invalid providers index: {e}")))?;
+        let index: ProviderIndex = serde_json::from_slice(&bytes).map_err(|e| {
+            ProviderError::new(
+                ProviderErrorKind::Transport,
+                format!("invalid providers index: {e}"),
+            )
+        })?;
         if index.schema_version != PROVIDERS_SCHEMA_VERSION {
             return Err(ProviderError::new(
                 ProviderErrorKind::Transport,
@@ -396,7 +403,10 @@ impl ProviderConfigStore {
         Ok(index.providers)
     }
 
-    fn save(&self, providers: &BTreeMap<String, RemoteProviderConfig>) -> Result<(), ProviderError> {
+    fn save(
+        &self,
+        providers: &BTreeMap<String, RemoteProviderConfig>,
+    ) -> Result<(), ProviderError> {
         atomic_json(
             &self.path,
             &ProviderIndex {
@@ -411,7 +421,9 @@ impl ProviderConfigStore {
     }
 
     pub fn upsert(&self, config: &RemoteProviderConfig) -> Result<(), ProviderError> {
-        config.validate().map_err(|e| ProviderError::new(ProviderErrorKind::InvalidRequest, e))?;
+        config
+            .validate()
+            .map_err(|e| ProviderError::new(ProviderErrorKind::InvalidRequest, e))?;
         let mut providers = self.load()?;
         providers.insert(config.id.clone(), config.clone());
         self.save(&providers)
@@ -556,7 +568,10 @@ impl RemoteProviderRouter {
         if let Ok(mut breakers) = self.breakers.lock() {
             breakers.remove(&config.id);
         }
-        self.last_errors.lock().ok().map(|mut m| m.remove(&config.id));
+        self.last_errors
+            .lock()
+            .ok()
+            .map(|mut m| m.remove(&config.id));
         Ok(())
     }
 
@@ -597,9 +612,15 @@ impl RemoteProviderRouter {
             .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, e.to_string()))
     }
 
-    fn provider_for_model(&self, model: &str) -> Result<(String, Arc<dyn RemoteModelProvider>), ProviderError> {
+    fn provider_for_model(
+        &self,
+        model: &str,
+    ) -> Result<(String, Arc<dyn RemoteModelProvider>), ProviderError> {
         let (provider_id, _) = parse_remote_model(model).ok_or_else(|| {
-            ProviderError::new(ProviderErrorKind::Unavailable, "model is not a remote model")
+            ProviderError::new(
+                ProviderErrorKind::Unavailable,
+                "model is not a remote model",
+            )
         })?;
         let providers = self.providers.lock().map_err(|_| {
             ProviderError::new(ProviderErrorKind::Transport, "provider registry poisoned")
@@ -614,7 +635,11 @@ impl RemoteProviderRouter {
     }
 
     pub fn health(&self, id: &str) -> ProviderHealth {
-        let config = self.store.list().ok().and_then(|c| c.into_iter().find(|c| c.id == id));
+        let config = self
+            .store
+            .list()
+            .ok()
+            .and_then(|c| c.into_iter().find(|c| c.id == id));
         let secret_configured = config
             .as_ref()
             .and_then(|c| self.resolver.exists(&c.secret_ref).ok())
@@ -630,7 +655,11 @@ impl RemoteProviderRouter {
             .lock()
             .ok()
             .and_then(|m| m.get(id).map(|d| d.as_millis() as u64));
-        let last_error = self.last_errors.lock().ok().and_then(|m| m.get(id).cloned());
+        let last_error = self
+            .last_errors
+            .lock()
+            .ok()
+            .and_then(|m| m.get(id).cloned());
         let status = match &config {
             None => ProviderStatus::Unreachable,
             Some(c) if !c.enabled => ProviderStatus::Disabled,
@@ -641,7 +670,10 @@ impl RemoteProviderRouter {
         };
         ProviderHealth {
             id: id.to_string(),
-            kind: config.as_ref().map(|c| c.kind).unwrap_or(ProviderKind::OpenAiCompatible),
+            kind: config
+                .as_ref()
+                .map(|c| c.kind)
+                .unwrap_or(ProviderKind::OpenAiCompatible),
             status,
             circuit,
             consecutive_failures,
@@ -673,11 +705,17 @@ impl RemoteProviderRouter {
             let mut attempt = 0u32;
             loop {
                 if cancel.load(Ordering::Acquire) {
-                    return Err(ProviderError::new(ProviderErrorKind::Cancelled, "generation cancelled"));
+                    return Err(ProviderError::new(
+                        ProviderErrorKind::Cancelled,
+                        "generation cancelled",
+                    ));
                 }
                 let mut first_token_seen = false;
                 let mut emitted = |event: GenerateEvent| -> Result<(), ProviderError> {
-                    if matches!(event, GenerateEvent::Delta { .. } | GenerateEvent::ToolCall { .. }) {
+                    if matches!(
+                        event,
+                        GenerateEvent::Delta { .. } | GenerateEvent::ToolCall { .. }
+                    ) {
                         first_token_seen = true;
                     }
                     emit(event)
@@ -702,7 +740,10 @@ impl RemoteProviderRouter {
                         attempt += 1;
                         let delay = retry_delay(&error, attempt);
                         if cancel.load(Ordering::Acquire) {
-                            return Err(ProviderError::new(ProviderErrorKind::Cancelled, "generation cancelled"));
+                            return Err(ProviderError::new(
+                                ProviderErrorKind::Cancelled,
+                                "generation cancelled",
+                            ));
                         }
                         std::thread::sleep(delay);
                     }
@@ -749,7 +790,12 @@ impl RemoteProviderRouter {
     }
 
     pub fn cancel(&self, request_id: &str) {
-        if let Some(cancel) = self.cancellations.lock().ok().and_then(|m| m.get(request_id).cloned()) {
+        if let Some(cancel) = self
+            .cancellations
+            .lock()
+            .ok()
+            .and_then(|m| m.get(request_id).cloned())
+        {
             cancel.store(true, Ordering::Release);
         }
     }
@@ -780,7 +826,9 @@ impl RemoteProviderRouter {
                 .breakers
                 .lock()
                 .expect("circuit breaker registry poisoned");
-            let breaker = breakers.entry(provider_id.to_string()).or_insert_with(CircuitBreaker::new);
+            let breaker = breakers
+                .entry(provider_id.to_string())
+                .or_insert_with(CircuitBreaker::new);
             if !breaker.allow() {
                 return Err(ProviderError::new(
                     ProviderErrorKind::Unavailable,
@@ -808,7 +856,12 @@ impl RemoteProviderRouter {
         }
     }
 
-    fn record_outcome<T>(&self, provider_id: &str, result: &Result<T, ProviderError>, started: Instant) {
+    fn record_outcome<T>(
+        &self,
+        provider_id: &str,
+        result: &Result<T, ProviderError>,
+        started: Instant,
+    ) {
         let elapsed = started.elapsed();
         if let Ok(mut latencies) = self.latencies.lock() {
             latencies.insert(provider_id.to_string(), elapsed);
@@ -903,7 +956,10 @@ impl OpenAiCompatibleProvider {
             Some((provider, name)) if provider == self.config.id => Ok(name),
             Some((provider, _)) => Err(ProviderError::new(
                 ProviderErrorKind::Unavailable,
-                format!("model {model_id:?} belongs to provider {provider:?}, not {}", self.config.id),
+                format!(
+                    "model {model_id:?} belongs to provider {provider:?}, not {}",
+                    self.config.id
+                ),
             )),
             None => Err(ProviderError::new(
                 ProviderErrorKind::InvalidRequest,
@@ -921,7 +977,10 @@ impl OpenAiCompatibleProvider {
     }
 
     fn chat_url(&self) -> String {
-        format!("{}/chat/completions", self.config.endpoint.trim_end_matches('/'))
+        format!(
+            "{}/chat/completions",
+            self.config.endpoint.trim_end_matches('/')
+        )
     }
     fn embed_url(&self) -> String {
         format!("{}/embeddings", self.config.endpoint.trim_end_matches('/'))
@@ -931,7 +990,10 @@ impl OpenAiCompatibleProvider {
         let mut request = self
             .agent
             .post(url)
-            .header("Authorization", format!("Bearer {}", String::from_utf8_lossy(secret)))
+            .header(
+                "Authorization",
+                format!("Bearer {}", String::from_utf8_lossy(secret)),
+            )
             .header("Content-Type", "application/json");
         if let Some(org) = &self.config.organization {
             request = request.header("OpenAI-Organization", org);
@@ -1057,12 +1119,19 @@ impl RemoteModelProvider for OpenAiCompatibleProvider {
             .limit(MAX_RESPONSE_BYTES)
             .read_to_string()
             .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, e.to_string()))?;
-        let value: Value = serde_json::from_str(&body)
-            .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, format!("invalid embedding response: {e}")))?;
+        let value: Value = serde_json::from_str(&body).map_err(|e| {
+            ProviderError::new(
+                ProviderErrorKind::Transport,
+                format!("invalid embedding response: {e}"),
+            )
+        })?;
         parse_embedding_response(request, &value)
     }
     fn health(&self) -> ProviderHealth {
-        let secret_configured = self.resolver.exists(&self.config.secret_ref).unwrap_or(false);
+        let secret_configured = self
+            .resolver
+            .exists(&self.config.secret_ref)
+            .unwrap_or(false);
         let status = if !self.config.enabled {
             ProviderStatus::Disabled
         } else if !secret_configured {
@@ -1087,17 +1156,16 @@ impl OpenAiCompatibleProvider {
     fn classify_transport(&self, secret: &[u8], error: ureq::Error) -> ProviderError {
         use ureq::Error;
         match error {
-            Error::StatusCode(status) => {
-                ProviderError::with_status(classify_status(status), status, format!("upstream returned HTTP {status}"))
-            }
+            Error::StatusCode(status) => ProviderError::with_status(
+                classify_status(status),
+                status,
+                format!("upstream returned HTTP {status}"),
+            ),
             Error::Io(io) => {
                 let message = self.redact(secret, &io.to_string());
                 if io.kind() == std::io::ErrorKind::TimedOut {
                     ProviderError::new(ProviderErrorKind::Timeout, message)
-                } else if io
-                    .to_string()
-                    .to_ascii_lowercase()
-                    .contains("certificate")
+                } else if io.to_string().to_ascii_lowercase().contains("certificate")
                     || io.to_string().to_ascii_lowercase().contains("tls")
                 {
                     ProviderError::new(ProviderErrorKind::TlsError, message)
@@ -1105,8 +1173,14 @@ impl OpenAiCompatibleProvider {
                     ProviderError::new(ProviderErrorKind::Connection, message)
                 }
             }
-            Error::Http(_) => ProviderError::new(ProviderErrorKind::Transport, self.redact(secret, &error.to_string())),
-            _ => ProviderError::new(ProviderErrorKind::Transport, self.redact(secret, &error.to_string())),
+            Error::Http(_) => ProviderError::new(
+                ProviderErrorKind::Transport,
+                self.redact(secret, &error.to_string()),
+            ),
+            _ => ProviderError::new(
+                ProviderErrorKind::Transport,
+                self.redact(secret, &error.to_string()),
+            ),
         }
     }
 
@@ -1123,23 +1197,37 @@ impl OpenAiCompatibleProvider {
             .limit(MAX_RESPONSE_BYTES)
             .read_to_string()
             .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, e.to_string()))?;
-        let value: Value = serde_json::from_str(&body)
-            .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, format!("invalid chat response: {e}")))?;
+        let value: Value = serde_json::from_str(&body).map_err(|e| {
+            ProviderError::new(
+                ProviderErrorKind::Transport,
+                format!("invalid chat response: {e}"),
+            )
+        })?;
         let choice = value
             .get("choices")
             .and_then(Value::as_array)
             .and_then(|c| c.first())
-            .ok_or_else(|| ProviderError::new(ProviderErrorKind::Transport, "chat response omitted choices"))?;
+            .ok_or_else(|| {
+                ProviderError::new(
+                    ProviderErrorKind::Transport,
+                    "chat response omitted choices",
+                )
+            })?;
         let message = choice.get("message").unwrap_or(&Value::Null);
         if let Some(content) = message.get("content").and_then(Value::as_str) {
             if !content.is_empty() {
-                emit(GenerateEvent::Delta { text: content.to_string() })?;
+                emit(GenerateEvent::Delta {
+                    text: content.to_string(),
+                })?;
             }
         }
         if let Some(tool_calls) = message.get("tool_calls").and_then(Value::as_array) {
             for tool_call in tool_calls {
                 let function = tool_call.get("function");
-                let name = function.and_then(|f| f.get("name")).and_then(Value::as_str).unwrap_or_default();
+                let name = function
+                    .and_then(|f| f.get("name"))
+                    .and_then(Value::as_str)
+                    .unwrap_or_default();
                 let arguments = function
                     .and_then(|f| f.get("arguments"))
                     .and_then(|a| a.as_str())
@@ -1154,15 +1242,26 @@ impl OpenAiCompatibleProvider {
             }
         }
         if let Some(usage) = value.get("usage") {
-            let input_tokens = usage.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0);
-            let output_tokens = usage.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0);
-            emit(GenerateEvent::Usage { input_tokens, output_tokens })?;
+            let input_tokens = usage
+                .get("prompt_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            let output_tokens = usage
+                .get("completion_tokens")
+                .and_then(Value::as_u64)
+                .unwrap_or(0);
+            emit(GenerateEvent::Usage {
+                input_tokens,
+                output_tokens,
+            })?;
         }
         let reason = choice
             .get("finish_reason")
             .and_then(Value::as_str)
             .unwrap_or("stop");
-        emit(GenerateEvent::Finish { reason: reason.to_string() })?;
+        emit(GenerateEvent::Finish {
+            reason: reason.to_string(),
+        })?;
         Ok(())
     }
 
@@ -1180,7 +1279,10 @@ impl OpenAiCompatibleProvider {
         let mut finished = false;
         loop {
             if cancel.load(Ordering::Acquire) {
-                return Err(ProviderError::new(ProviderErrorKind::Cancelled, "generation cancelled"));
+                return Err(ProviderError::new(
+                    ProviderErrorKind::Cancelled,
+                    "generation cancelled",
+                ));
             }
             let mut line = String::new();
             let read = reader
@@ -1224,33 +1326,57 @@ impl OpenAiCompatibleProvider {
         tool_calls: &mut BTreeMap<usize, ToolCallAccumulator>,
         emit: &mut dyn FnMut(GenerateEvent) -> Result<(), ProviderError>,
     ) -> Result<(), ProviderError> {
-        let value: Value = serde_json::from_str(data)
-            .map_err(|e| ProviderError::new(ProviderErrorKind::Transport, format!("invalid SSE chunk: {e}")))?;
+        let value: Value = serde_json::from_str(data).map_err(|e| {
+            ProviderError::new(
+                ProviderErrorKind::Transport,
+                format!("invalid SSE chunk: {e}"),
+            )
+        })?;
         if let Some(usage) = value.get("usage") {
             if usage.get("prompt_tokens").is_some() || usage.get("completion_tokens").is_some() {
-                let input_tokens = usage.get("prompt_tokens").and_then(Value::as_u64).unwrap_or(0);
-                let output_tokens = usage.get("completion_tokens").and_then(Value::as_u64).unwrap_or(0);
-                emit(GenerateEvent::Usage { input_tokens, output_tokens })?;
+                let input_tokens = usage
+                    .get("prompt_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                let output_tokens = usage
+                    .get("completion_tokens")
+                    .and_then(Value::as_u64)
+                    .unwrap_or(0);
+                emit(GenerateEvent::Usage {
+                    input_tokens,
+                    output_tokens,
+                })?;
             }
         }
-        let Some(choice) = value.get("choices").and_then(Value::as_array).and_then(|c| c.first()) else {
+        let Some(choice) = value
+            .get("choices")
+            .and_then(Value::as_array)
+            .and_then(|c| c.first())
+        else {
             return Ok(());
         };
         if let Some(delta) = choice.get("delta") {
             if let Some(content) = delta.get("content").and_then(Value::as_str) {
                 if !content.is_empty() {
-                    emit(GenerateEvent::Delta { text: content.to_string() })?;
+                    emit(GenerateEvent::Delta {
+                        text: content.to_string(),
+                    })?;
                 }
             }
             if let Some(chunks) = delta.get("tool_calls").and_then(Value::as_array) {
                 for tool_call in chunks {
-                    let index = tool_call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
+                    let index =
+                        tool_call.get("index").and_then(Value::as_u64).unwrap_or(0) as usize;
                     let entry = tool_calls.entry(index).or_default();
                     let function = tool_call.get("function");
-                    if let Some(name) = function.and_then(|f| f.get("name")).and_then(Value::as_str) {
+                    if let Some(name) = function.and_then(|f| f.get("name")).and_then(Value::as_str)
+                    {
                         entry.name.push_str(name);
                     }
-                    if let Some(arguments) = function.and_then(|f| f.get("arguments")).and_then(Value::as_str) {
+                    if let Some(arguments) = function
+                        .and_then(|f| f.get("arguments"))
+                        .and_then(Value::as_str)
+                    {
                         entry.arguments.push_str(arguments);
                     }
                 }
@@ -1268,7 +1394,9 @@ impl OpenAiCompatibleProvider {
                     })?;
                 }
             }
-            emit(GenerateEvent::Finish { reason: reason.to_string() })?;
+            emit(GenerateEvent::Finish {
+                reason: reason.to_string(),
+            })?;
         }
         Ok(())
     }
@@ -1305,18 +1433,31 @@ fn retry_after_header(headers: &ureq::http::HeaderMap) -> Option<Duration> {
     None
 }
 
-fn parse_embedding_response(request: &EmbedRequest, value: &Value) -> Result<EmbeddingResponse, ProviderError> {
-    let data = value
-        .get("data")
-        .and_then(Value::as_array)
-        .ok_or_else(|| ProviderError::new(ProviderErrorKind::Transport, "embedding response omitted data"))?;
+fn parse_embedding_response(
+    request: &EmbedRequest,
+    value: &Value,
+) -> Result<EmbeddingResponse, ProviderError> {
+    let data = value.get("data").and_then(Value::as_array).ok_or_else(|| {
+        ProviderError::new(
+            ProviderErrorKind::Transport,
+            "embedding response omitted data",
+        )
+    })?;
     let mut embeddings = Vec::with_capacity(data.len());
     for entry in data {
-        let index = entry.get("index").and_then(Value::as_u64).unwrap_or(embeddings.len() as u64) as usize;
+        let index = entry
+            .get("index")
+            .and_then(Value::as_u64)
+            .unwrap_or(embeddings.len() as u64) as usize;
         let values = entry
             .get("embedding")
             .and_then(Value::as_array)
-            .ok_or_else(|| ProviderError::new(ProviderErrorKind::Transport, "embedding entry omitted vector"))?
+            .ok_or_else(|| {
+                ProviderError::new(
+                    ProviderErrorKind::Transport,
+                    "embedding entry omitted vector",
+                )
+            })?
             .iter()
             .filter_map(Value::as_f64)
             .map(|v| v as f32)
@@ -1380,10 +1521,38 @@ mod tests {
 
     #[test]
     fn secret_ref_validation_rejects_empty_and_whitespace() {
-        assert!(SecretRef { service: "s".into(), account: "a".into() }.validate().is_ok());
-        assert!(SecretRef { service: "".into(), account: "a".into() }.validate().is_err());
-        assert!(SecretRef { service: "s".into(), account: "a b".into() }.validate().is_err());
-        assert!(SecretRef { service: "s".into(), account: "a\0b".into() }.validate().is_err());
+        assert!(
+            SecretRef {
+                service: "s".into(),
+                account: "a".into()
+            }
+            .validate()
+            .is_ok()
+        );
+        assert!(
+            SecretRef {
+                service: "".into(),
+                account: "a".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SecretRef {
+                service: "s".into(),
+                account: "a b".into()
+            }
+            .validate()
+            .is_err()
+        );
+        assert!(
+            SecretRef {
+                service: "s".into(),
+                account: "a\0b".into()
+            }
+            .validate()
+            .is_err()
+        );
     }
 
     #[test]
@@ -1455,8 +1624,12 @@ mod tests {
     fn retryability_classification() {
         assert!(ProviderError::with_status(ProviderErrorKind::ServerError, 500, "x").retryable());
         assert!(ProviderError::with_status(ProviderErrorKind::RateLimited, 429, "x").retryable());
-        assert!(!ProviderError::with_status(ProviderErrorKind::InvalidRequest, 400, "x").retryable());
-        assert!(!ProviderError::with_status(ProviderErrorKind::Authentication, 401, "x").retryable());
+        assert!(
+            !ProviderError::with_status(ProviderErrorKind::InvalidRequest, 400, "x").retryable()
+        );
+        assert!(
+            !ProviderError::with_status(ProviderErrorKind::Authentication, 401, "x").retryable()
+        );
     }
 
     #[test]
@@ -1468,7 +1641,8 @@ mod tests {
         }
         assert_eq!(breaker.snapshot().0, CircuitState::Open);
         assert!(!breaker.allow());
-        breaker.opened_at = Some(Instant::now() - CIRCUIT_BREAKER_COOLDOWN - Duration::from_secs(1));
+        breaker.opened_at =
+            Some(Instant::now() - CIRCUIT_BREAKER_COOLDOWN - Duration::from_secs(1));
         assert!(breaker.allow()); // half-open probe
         breaker.record_success();
         assert_eq!(breaker.snapshot(), (CircuitState::Closed, 0));

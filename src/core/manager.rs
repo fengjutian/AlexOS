@@ -1530,11 +1530,7 @@ impl ManagerRouter {
         match method {
             "manager.ai_overview" => match self.ai_overview() {
                 Ok(value) => json_response(&request.id, &value),
-                Err(error) => crate::ipc::Response::error(
-                    &request.id,
-                    "DAEMON_UNAVAILABLE",
-                    error,
-                ),
+                Err(error) => crate::ipc::Response::error(&request.id, "DAEMON_UNAVAILABLE", error),
             },
             "manager.list_apps" => match self.manager.list_apps() {
                 Ok(apps) => json_response(&request.id, &serde_json::json!({ "apps": apps })),
@@ -1730,7 +1726,9 @@ impl ManagerRouter {
             return Err("alexd returned a mismatched response".into());
         }
         if !response.ok {
-            return Err(response.error.unwrap_or_else(|| "alexd rejected request".into()));
+            return Err(response
+                .error
+                .unwrap_or_else(|| "alexd rejected request".into()));
         }
         response
             .result
@@ -1747,7 +1745,11 @@ impl ManagerRouter {
             crate::daemon::ControlCommand::ModelProviderHealth { provider_id: None },
         )?;
         let mut applications = Vec::new();
-        for app in self.manager.list_apps().map_err(|error| error.to_string())? {
+        for app in self
+            .manager
+            .list_apps()
+            .map_err(|error| error.to_string())?
+        {
             let mcp = self
                 .daemon_command(
                     &format!("mcp-{}", app.id),

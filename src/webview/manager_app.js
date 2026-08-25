@@ -635,6 +635,7 @@
   }
 
   function onHashChange() {
+    aiView.hidden = true;
     const route = parseHash();
     if (route.view === "detail" && route.id) {
       loadDetail(route.id);
@@ -684,6 +685,10 @@
   }
 
   backBtn.addEventListener("click", () => navigate("#/"));
+
+  $("apps-view-btn").addEventListener("click", () => navigate("#/"));
+  $("ai-view-btn").addEventListener("click", showAiView);
+  $("ai-refresh-btn").addEventListener("click", loadAiOverview);
 
   searchInput.addEventListener("input", (event) => {
     searchQuery = event.target.value;

@@ -348,6 +348,8 @@ mod route_tests {
         assert!(js.contains("manager.list_apps"));
         assert!(js.contains("manager.list_services"));
         assert!(js.contains("manager.set_permission"));
+        assert!(js.contains("manager.ai_overview"));
+        assert!(html.contains("AI Runtime"));
         assert!(
             js.contains("manager.read_audit_log"),
             "asset js missing audit IPC"

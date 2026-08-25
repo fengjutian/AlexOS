@@ -667,9 +667,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                     .unwrap_or_else(|| install_root.clone());
                 let manager =
                     LocalAppManager::open_with_trust(&install_root, permissions_root, trust_root)?;
-                let router = Arc::new(
-                    ManagerRouter::new(Arc::new(manager)).with_daemon_pipe(pipe),
-                );
+                let router = Arc::new(ManagerRouter::new(Arc::new(manager)).with_daemon_pipe(pipe));
                 manager_webview::run(router)?;
             }
         }

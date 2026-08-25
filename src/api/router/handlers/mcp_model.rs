@@ -793,7 +793,10 @@ impl ApiRouter {
 
     pub(crate) fn model_providers(&self) -> ApiResult {
         self.require_model_manage()?;
-        self.daemon_ai("model-providers", crate::daemon::ControlCommand::ModelProviders)
+        self.daemon_ai(
+            "model-providers",
+            crate::daemon::ControlCommand::ModelProviders,
+        )
     }
 
     pub(crate) fn model_provider_upsert(&self, params: &Value) -> ApiResult {

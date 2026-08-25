@@ -143,11 +143,17 @@ impl Permission {
             "mcp.listen" => Some("mcp.use"),
             "mcp.callToolInteractive" | "mcp.respondInput" | "mcp.presentInput" => Some("mcp.use"),
             "model.list" | "model.generate" | "model.cancel" | "model.embed" => Some("model.use"),
-            "model.import" | "model.load" | "model.unload" | "model.remove" | "model.providers"
-            | "model.providerUpsert" | "model.providerRemove" | "model.providerHealth"
-            | "model.secretSet" | "model.secretDelete" | "model.secretExists" => {
-                Some("model.manage")
-            }
+            "model.import"
+            | "model.load"
+            | "model.unload"
+            | "model.remove"
+            | "model.providers"
+            | "model.providerUpsert"
+            | "model.providerRemove"
+            | "model.providerHealth"
+            | "model.secretSet"
+            | "model.secretDelete"
+            | "model.secretExists" => Some("model.manage"),
             "agent.create" | "agent.start" | "agent.pause" | "agent.resume" | "agent.cancel"
             | "agent.status" | "agent.list" | "agent.approve" | "agent.deny" | "agent.history"
             | "agent.timeline" => Some("agent.run"),
