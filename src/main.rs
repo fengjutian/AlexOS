@@ -7,7 +7,7 @@ use alex::{
     authorization::{PermissionDecision, PermissionStore},
     dev,
     ipc::Request,
-    load_app,
+    load_app, load_application,
     manager::{LocalAppManager, ManagerRouter},
     manager_webview, package, plugin,
     runtime::{RuntimeHandle, RuntimeProcess, RuntimeSpec, compute_app_dirs},
@@ -576,8 +576,15 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Dev { path } => {
             require_webview2()?;
-            let app = load_app(&path)?;
-            dev::run(&path, app)?;
+            // `alex dev` accepts both v1 (`manifest.json`) and v2
+            // (`app.yaml`) packages. The unified loader picks the
+            // right one, and `dev::run_unified` projects a v2
+            // manifest onto a v1 `AppManifest` so the existing
+            // dev shell code path (which still speaks v1) keeps
+            // working unchanged. See `dev::project_v2_for_dev` for
+            // the projection rules.
+            let app = load_application(&path)?;
+            dev::run_unified(&path, app)?;
         }
         Commands::Manager {
             install_root,

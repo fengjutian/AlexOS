@@ -12,7 +12,15 @@ use std::path::{Path, PathBuf};
 
 use ignore::gitignore::{Gitignore, GitignoreBuilder};
 
-use crate::{AlexError, manifest::AppManifest};
+use crate::{
+    AlexError,
+    core::application_manifest::{ApplicationManifest, ServiceDescriptor},
+    manifest::{
+        AppManifest, Author, Backend, BackendMode, Frontend, FrontendBuild, HealthCheck,
+        Icons, PackageKind, RestartPolicy, RuntimeKind,
+    },
+    permission::Permission,
+};
 
 /// Build a `.alexignore` matcher rooted at `package_root`. Returns
 /// `None` when the file is absent or malformed — in both cases the
@@ -67,6 +75,171 @@ pub fn run(_package_root: &Path, _manifest: AppManifest) -> Result<(), AlexError
         "the 0.1 dev mode currently supports Windows only".into(),
     ))
 }
+
+/// `alex dev` entry point that accepts the unified
+/// [`ApplicationManifest`]. v1 manifests are forwarded to [`run`]
+/// unchanged. v2 manifests are projected onto a v1 [`AppManifest`]
+/// using the first declared service as the "main" backend, which is
+/// enough for the common dev loop (single service + frontend). A
+/// warning is printed when the v2 manifest declares multiple
+/// services so the developer knows only the first one is being
+/// hot-reloaded; multi-service dev mode is a future enhancement.
+pub fn run_unified(
+    package_root: &Path,
+    manifest: ApplicationManifest,
+) -> Result<(), AlexError> {
+    let v1 = match manifest {
+        ApplicationManifest::V1(m) => m,
+        ApplicationManifest::V2(_) => project_v2_for_dev(manifest),
+    };
+    run(package_root, v1)
+}
+
+/// Project a v2 [`ApplicationManifest`] onto a v1 [`AppManifest`]
+/// suitable for the existing dev shell. The first declared service
+/// becomes the "main" backend; the frontend entry, id, name, and
+/// version are preserved. v2-only permission descriptors (those
+/// containing a `:`) are dropped — they have no v1 permission
+/// key, so the dev shell would ignore them anyway.
+fn project_v2_for_dev(manifest: ApplicationManifest) -> AppManifest {
+    let v2 = manifest
+        .as_v2()
+        .expect("project_v2_for_dev called with a v1 manifest")
+        .clone();
+    let services = manifest.services();
+    if services.len() > 1 {
+        eprintln!(
+            "alex dev: v2 manifest declares {} services; only {:?} is being watched. \
+             Use `alex launch` + the daemon for multi-service hot reload.",
+            services.len(),
+            services[0].name,
+        );
+    }
+    let frontend_entry = manifest
+        .frontend()
+        .map(|frontend| frontend.entry)
+        .unwrap_or_default();
+    let backend = services.first().map(service_to_backend);
+    let permissions: Vec<Permission> = manifest
+        .permissions()
+        .into_iter()
+        .filter_map(|descriptor| {
+            if descriptor.name.contains(':') {
+                return None;
+            }
+            legacy_permission_from_name(&descriptor.name)
+        })
+        .collect();
+    AppManifest {
+        schema_version: 1,
+        kind: PackageKind::App,
+        id: v2.id,
+        name: v2.name,
+        version: v2.version,
+        description: None,
+        author: None,
+        icons: None,
+        homepage: None,
+        license: None,
+        update: None,
+        frontend: Frontend {
+            entry: frontend_entry,
+            build: None,
+        },
+        backend,
+        permissions,
+        extension_points: None,
+    }
+}
+
+fn service_to_backend(service: ServiceDescriptor) -> Backend {
+    let port = match service.port {
+        Some(value) => Some(value),
+        None => None,
+    };
+    let health_check = service.health.and_then(|health| {
+        if matches!(health.kind, crate::core::application_manifest::ServiceHealthKind::Http) {
+            health.path.map(|path| HealthCheck {
+                path,
+                timeout_ms: health.timeout_ms,
+            })
+        } else {
+            None
+        }
+    });
+    let restart = Some(RestartPolicy {
+        policy: match service.restart.policy {
+            crate::core::application_manifest::ServiceRestartPolicy::Never => "never".into(),
+            crate::core::application_manifest::ServiceRestartPolicy::OnFailure => "on-failure".into(),
+            crate::core::application_manifest::ServiceRestartPolicy::Always => "always".into(),
+        },
+        max_retries: service.restart.max_retries,
+    });
+    let mode = match service.mode {
+        crate::core::application_manifest::ServiceMode::Rpc => BackendMode::Rpc,
+        crate::core::application_manifest::ServiceMode::Service => BackendMode::Service,
+    };
+    let runtime = match service.runtime {
+        crate::manifest_v2::ServiceRuntime::Node => RuntimeKind::Node,
+        crate::manifest_v2::ServiceRuntime::Python => RuntimeKind::Python,
+        crate::manifest_v2::ServiceRuntime::Native => RuntimeKind::Native,
+    };
+    Backend {
+        runtime,
+        entry: service.command,
+        mode,
+        health_check,
+        restart,
+        port,
+        args: service.args,
+        env: service.env,
+    }
+}
+
+fn legacy_permission_from_name(name: &str) -> Option<Permission> {
+    use crate::permission::Permission;
+    match name {
+        "filesystem.read" => Some(Permission::FilesystemRead { paths: Vec::new() }),
+        "filesystem.write" => Some(Permission::FilesystemWrite { paths: Vec::new() }),
+        "filesystem.watch" => Some(Permission::FilesystemWatch { paths: Vec::new() }),
+        "filesystem.delete" => Some(Permission::FilesystemDelete { paths: Vec::new() }),
+        "filesystem.drop" => Some(Permission::FilesystemDrop),
+        "dialog.open" => Some(Permission::DialogOpen),
+        "dialog.save" => Some(Permission::DialogSave),
+        "clipboard.read" => Some(Permission::ClipboardRead),
+        "clipboard.write" => Some(Permission::ClipboardWrite),
+        "system.openExternal" => Some(Permission::OpenExternal { origins: Vec::new() }),
+        "storage" => Some(Permission::Storage),
+        "paths" => Some(Permission::Paths),
+        "window.manage" => Some(Permission::WindowManage),
+        "window.open" => Some(Permission::WindowOpen),
+        "notification.show" => Some(Permission::NotificationShow),
+        "menu.manage" => Some(Permission::MenuManage),
+        "tray.manage" => Some(Permission::TrayManage),
+        "shortcut.register" => Some(Permission::ShortcutRegister),
+        "runtime.invoke" => Some(Permission::RuntimeInvoke),
+        "runtime.manage" => Some(Permission::RuntimeManage),
+        "process.spawn" => Some(Permission::ProcessSpawn { executables: Vec::new() }),
+        "media.camera" => Some(Permission::MediaCamera),
+        "media.microphone" => Some(Permission::MediaMicrophone),
+        "geolocation" => Some(Permission::Geolocation),
+        "system.install" => Some(Permission::SystemInstall),
+        "system.uninstall" => Some(Permission::SystemUninstall),
+        "system.manageApps" => Some(Permission::SystemManageApps),
+        "system.manageExtensions" => Some(Permission::SystemManageExtensions),
+        "system.managePermissions" => Some(Permission::SystemManagePermissions),
+        "network.fetch" => Some(Permission::NetworkFetch { origins: Vec::new() }),
+        _ => None,
+    }
+}
+
+// `Author` and `Icons` are re-exported through `crate::manifest` so
+// the projection above can spell the field types in the v1
+// `AppManifest` literal without importing the re-export. Anchor
+// them so the `use` line stays used even if the projection grows
+// or shrinks.
+#[allow(dead_code)]
+fn _type_anchors(_: Author, _: Icons, _: FrontendBuild) {}
 
 #[cfg(all(windows, test))]
 #[allow(dead_code)]
