@@ -241,6 +241,248 @@ fn legacy_permission_from_name(name: &str) -> Option<Permission> {
 #[allow(dead_code)]
 fn _type_anchors(_: Author, _: Icons, _: FrontendBuild) {}
 
+#[cfg(test)]
+mod v2_projection_tests {
+    //! `alex dev` is the v1 `AppManifest` shape under the hood, so
+    //! the v2 path goes through a projection. These tests pin the
+    //! projection rules so a refactor of `project_v2_for_dev`
+    //! cannot silently drop a field the dev shell relies on.
+    //!
+    //! The tests build the `ApplicationManifest` programmatically
+    //! instead of going through `load_application` so the
+    //! projection is exercised in isolation — the YAML-side
+    //! validation (file existence, runtime version block, etc.)
+    //! has its own coverage in `application_manifest::tests`.
+    use std::collections::BTreeMap;
+
+    use crate::core::application_manifest::ApplicationManifest;
+    use crate::core::manifest_v2::{
+        ApplicationManifestV2, FrontendV2, HealthKind, RestartPolicyV2, RuntimeRequirements,
+        ServiceHealth, ServiceRuntime, ServiceSpec,
+    };
+
+    fn v2_manifest(
+        id: &str,
+        frontend: Option<&str>,
+        services: Vec<(&str, ServiceSpec)>,
+    ) -> ApplicationManifest {
+        let services_map: BTreeMap<String, ServiceSpec> = services
+            .into_iter()
+            .map(|(name, spec)| (name.to_owned(), spec))
+            .collect();
+        let v2 = ApplicationManifestV2 {
+            schema_version: 2,
+            id: id.to_owned(),
+            name: id.to_owned(),
+            version: "0.1.0".to_owned(),
+            frontend: frontend.map(|entry| FrontendV2 {
+                entry: entry.to_owned(),
+            }),
+            runtime: RuntimeRequirements {
+                node: Some("22".to_owned()),
+                python: None,
+            },
+            services: services_map,
+            storage: Vec::new(),
+            permissions: Default::default(),
+        };
+        ApplicationManifest::V2(v2)
+    }
+
+    fn service(
+        runtime: ServiceRuntime,
+        command: &str,
+        health: Option<ServiceHealth>,
+        restart_policy: RestartPolicyV2,
+        max_retries: u32,
+    ) -> ServiceSpec {
+        ServiceSpec {
+            runtime,
+            command: command.to_owned(),
+            args: Vec::new(),
+            depends_on: Vec::new(),
+            env: Default::default(),
+            port: None,
+            health,
+            restart: crate::core::manifest_v2::ServiceRestart {
+                policy: restart_policy,
+                max_retries,
+            },
+        }
+    }
+
+    #[test]
+    fn v2_with_one_service_projects_to_v1_backend() {
+        let unified = v2_manifest(
+            "com.alex.one",
+            Some("index.html"),
+            vec![(
+                "api",
+                service(
+                    ServiceRuntime::Node,
+                    "main.js",
+                    Some(ServiceHealth {
+                        kind: HealthKind::Http,
+                        path: Some("/health".to_owned()),
+                        interval_ms: 3000,
+                        timeout_ms: 1500,
+                    }),
+                    RestartPolicyV2::OnFailure,
+                    7,
+                ),
+            )],
+        );
+        let projected = super::project_v2_for_dev(unified);
+        let backend = projected.backend.expect("v1 backend should be set");
+        assert_eq!(projected.id, "com.alex.one");
+        assert_eq!(projected.frontend.entry, "index.html");
+        assert_eq!(backend.entry, "main.js");
+        let health = backend.health_check.expect("http health should project");
+        assert_eq!(health.path, "/health");
+        assert_eq!(health.timeout_ms, 1500);
+        let restart = backend.restart.expect("restart should project");
+        assert_eq!(restart.policy, "on-failure");
+        assert_eq!(restart.max_retries, 7);
+    }
+
+    #[test]
+    fn v2_with_process_health_projects_no_http_check() {
+        // v1 only models HTTP health checks; a v2 `process` health
+        // is projected to `None` so the dev shell treats the
+        // backend as a request/response runtime.
+        let unified = v2_manifest(
+            "com.alex.proc",
+            None,
+            vec![(
+                "api",
+                service(
+                    ServiceRuntime::Python,
+                    "main.py",
+                    Some(ServiceHealth {
+                        kind: HealthKind::Process,
+                        path: None,
+                        interval_ms: 5000,
+                        timeout_ms: 10_000,
+                    }),
+                    RestartPolicyV2::OnFailure,
+                    5,
+                ),
+            )],
+        );
+        let projected = super::project_v2_for_dev(unified);
+        let backend = projected.backend.expect("backend should be set");
+        assert!(backend.health_check.is_none());
+    }
+
+    #[test]
+    fn v2_uses_first_service_when_multiple_are_declared() {
+        // Multi-service dev mode is not supported in 0.1 (the
+        // `run_unified` wrapper logs a warning and projects only
+        // the first service). The projection itself should pick
+        // the first key in declaration order, not the first by
+        // name, so the dev can rely on `services: [api, worker]`
+        // mapping to "api" being watched.
+        let mut services_map = BTreeMap::new();
+        services_map.insert(
+            "api".to_owned(),
+            service(ServiceRuntime::Node, "main.js", None, RestartPolicyV2::OnFailure, 5),
+        );
+        services_map.insert(
+            "worker".to_owned(),
+            service(
+                ServiceRuntime::Python,
+                "worker.py",
+                None,
+                RestartPolicyV2::OnFailure,
+                5,
+            ),
+        );
+        let v2 = ApplicationManifestV2 {
+            schema_version: 2,
+            id: "com.alex.multi".to_owned(),
+            name: "multi".to_owned(),
+            version: "0.1.0".to_owned(),
+            frontend: Some(FrontendV2 {
+                entry: "index.html".to_owned(),
+            }),
+            runtime: RuntimeRequirements {
+                node: Some("22".to_owned()),
+                python: Some("3.12".to_owned()),
+            },
+            services: services_map,
+            storage: Vec::new(),
+            permissions: Default::default(),
+        };
+        let projected = super::project_v2_for_dev(ApplicationManifest::V2(v2));
+        let backend = projected.backend.expect("backend should be set");
+        assert_eq!(backend.entry, "main.js", "first service (api) should win");
+    }
+
+    #[test]
+    fn v2_runtime_kind_projects_one_to_one() {
+        // Node / Python / Native each have a direct v1
+        // counterpart; the projection must not lose the variant
+        // (e.g. collapsing Native to Node) because the dev shell
+        // uses the runtime kind to pick the spawn command.
+        for (v2_runtime, expected) in [
+            (ServiceRuntime::Node, crate::manifest::RuntimeKind::Node),
+            (ServiceRuntime::Python, crate::manifest::RuntimeKind::Python),
+            (ServiceRuntime::Native, crate::manifest::RuntimeKind::Native),
+        ] {
+            let unified = v2_manifest(
+                "com.alex.runtime",
+                None,
+                vec![(
+                    "api",
+                    service(v2_runtime, "main", None, RestartPolicyV2::OnFailure, 5),
+                )],
+            );
+            let projected = super::project_v2_for_dev(unified);
+            let backend = projected.backend.expect("backend should be set");
+            assert_eq!(backend.runtime, expected, "v2 {v2_runtime:?} should project to {expected:?}");
+        }
+    }
+
+    #[test]
+    fn v1_manifest_passes_through_run_unified() {
+        // `run_unified` for v1 should not project anything; the
+        // inner AppManifest is forwarded unchanged so the existing
+        // dev shell still sees the exact field layout it expects.
+        // We don't open a WebView here; we just confirm the v1
+        // arm of the dispatcher is reachable by feeding an
+        // `ApplicationManifest::V1` and asserting the
+        // `as_v1()` accessor still works.
+        let v1 = crate::manifest::AppManifest {
+            schema_version: 1,
+            kind: crate::manifest::PackageKind::App,
+            id: "com.alex.v1".to_owned(),
+            name: "v1".to_owned(),
+            version: "0.1.0".to_owned(),
+            description: None,
+            author: None,
+            icons: None,
+            homepage: None,
+            license: None,
+            update: None,
+            frontend: crate::manifest::Frontend {
+                entry: "index.html".to_owned(),
+                build: None,
+            },
+            backend: None,
+            permissions: Vec::new(),
+            extension_points: None,
+        };
+        let unified = ApplicationManifest::V1(v1);
+        // `run_unified` would call `run()` next; we don't want a
+        // WebView in the test. We instead assert the dispatcher
+        // picks the v1 arm and returns the inner manifest. The
+        // real `run()` call is covered by the windows-only
+        // `windows` test module.
+        let as_v1 = unified.as_v1().expect("v1 should round-trip");
+        assert_eq!(as_v1.id, "com.alex.v1");
+    }
+}
+
 #[cfg(all(windows, test))]
 #[allow(dead_code)]
 mod windows {

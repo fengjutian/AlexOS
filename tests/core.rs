@@ -1088,6 +1088,57 @@ fn manager_router_dispatch_json_rejects_oversized_messages() {
 }
 
 #[test]
+fn manager_router_read_audit_log_rejects_oversized_limit() {
+    // The audit log viewer for the App Manager UI caps the
+    // `limit` at 500 so a malformed page cannot ask the host to
+    // walk a multi-megabyte JSONL file on every tick. The
+    // dispatch must surface a clean `INVALID_PARAMS` error
+    // instead of silently clamping. The underlying
+    // `PermissionStore::recent_audit` already has its own
+    // coverage in `authorization.rs` for the parsing / empty
+    // / malformed-line paths.
+    let (_lock, workspace) = install_root();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    let router = ManagerRouter::new(Arc::new(manager));
+    let response = router.dispatch(crate::ipc::Request {
+        protocol: 1,
+        id: "audit-limit".to_owned(),
+        source: SYSTEM_IDENTITY.into(),
+        method: "manager.read_audit_log".to_owned(),
+        params: serde_json::json!({ "id": "com.example.demo", "limit": 50_000 }),
+        deadline_ms: None,
+    });
+    let error = response.error.expect("oversized limit should error");
+    assert_eq!(error.code, "INVALID_PARAMS");
+    assert!(
+        error.message.contains("limit"),
+        "error should mention `limit`, was {:?}",
+        error.message,
+    );
+}
+
+#[test]
+fn manager_router_read_audit_log_rejects_zero_limit() {
+    // `limit = 0` would always return an empty list, which is
+    // indistinguishable from "the audit log is empty" and
+    // almost always a UI bug. Reject it up front so the page
+    // sees a real error instead of a silent empty table.
+    let (_lock, workspace) = install_root();
+    let manager = LocalAppManager::open(workspace.path()).unwrap();
+    let router = ManagerRouter::new(Arc::new(manager));
+    let response = router.dispatch(crate::ipc::Request {
+        protocol: 1,
+        id: "audit-zero".to_owned(),
+        source: SYSTEM_IDENTITY.into(),
+        method: "manager.read_audit_log".to_owned(),
+        params: serde_json::json!({ "id": "com.example.demo", "limit": 0 }),
+        deadline_ms: None,
+    });
+    let error = response.error.expect("zero limit should error");
+    assert_eq!(error.code, "INVALID_PARAMS");
+}
+
+#[test]
 fn runtime_supervisor_stop_is_idempotent() {
     let supervisor = RuntimeSupervisor::default();
     let status = supervisor.stop("never-launched").unwrap();

@@ -633,7 +633,7 @@ mod tests {
 
     use crate::manager::{AppDetails, AppManager, AppSummary, InstallOptions, InstallSource, ManagerError, PermissionState, SignatureState, UninstallOptions};
     use crate::core::manifest::{AppManifest as V1AppManifest, Frontend, PackageKind};
-    use crate::authorization::PermissionDecision;
+    use crate::authorization::{AuditEntry, PermissionDecision};
     use std::path::{Path, PathBuf};
 
     /// Build a placeholder v1 manifest the test
@@ -829,6 +829,13 @@ mod tests {
         ) -> Result<(), ManagerError> {
             unimplemented!()
         }
+        fn recent_audit_log(
+            &self,
+            _id: &str,
+            _limit: usize,
+        ) -> Result<Vec<AuditEntry>, ManagerError> {
+            unimplemented!()
+        }
         fn registry_path(&self) -> &Path {
             Path::new(".")
         }
@@ -1005,6 +1012,7 @@ mod tests {
             fn list_services(&self, _id: &str) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, ManagerError> { Ok(Vec::new()) }
             fn permissions(&self, _id: &str) -> Result<Vec<PermissionState>, ManagerError> { Ok(Vec::new()) }
             fn set_permission(&self, _id: &str, _p: &str, _d: PermissionDecision) -> Result<(), ManagerError> { unimplemented!() }
+            fn recent_audit_log(&self, _id: &str, _limit: usize) -> Result<Vec<AuditEntry>, ManagerError> { Ok(Vec::new()) }
             fn registry_path(&self) -> &Path { Path::new(".") }
             fn install_root(&self) -> &Path { Path::new(".") }
         }

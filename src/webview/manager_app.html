@@ -83,6 +83,15 @@
           <div id="permissions" class="permissions-list"></div>
         </section>
 
+        <section class="panel" aria-labelledby="audit-heading">
+          <h2 id="audit-heading">Permission audit log</h2>
+          <p class="muted small">
+            Most recent decisions written to disk. Transient
+            &ldquo;Allow Once&rdquo; grants are not audited by design.
+          </p>
+          <div id="audit" class="audit-list"></div>
+        </section>
+
         <section class="panel" aria-labelledby="logs-heading">
           <h2 id="logs-heading">Recent logs (tail)</h2>
           <pre id="logs" class="logs" aria-live="polite"></pre>

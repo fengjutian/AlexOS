@@ -334,10 +334,12 @@ mod route_tests {
         assert!(html.contains("App Manager"), "asset html missing app manager title");
         assert!(html.contains("manager_app.js"));
         assert!(html.contains("manager_app.css"));
+        assert!(html.contains("audit-heading"), "asset html missing audit panel");
         let js = APP_JS;
         assert!(js.contains("manager.list_apps"));
         assert!(js.contains("manager.list_services"));
         assert!(js.contains("manager.set_permission"));
+        assert!(js.contains("manager.read_audit_log"), "asset js missing audit IPC");
         assert!(js.contains("file.path")); // WebView2 path accessor
     }
 }

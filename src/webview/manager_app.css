@@ -301,6 +301,42 @@ main { padding: 1.25rem; max-width: 64rem; margin: 0 auto; }
   color: var(--accent-fg);
 }
 
+/* Audit log */
+.audit-list { display: flex; flex-direction: column; gap: 0.25rem; }
+.audit-row {
+  display: grid;
+  grid-template-columns: 9.5rem minmax(0, 1fr) auto;
+  gap: 0.75rem;
+  align-items: center;
+  padding: 0.35rem 0.65rem;
+  background: var(--bg);
+  border: 1px solid var(--border);
+  border-radius: 0.35rem;
+  font-size: 0.85em;
+}
+.audit-row .timestamp {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  color: var(--fg-muted);
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+}
+.audit-row .name {
+  font-family: var(--mono);
+  font-size: 0.85em;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+.audit-empty,
+.audit-error {
+  padding: 0.6rem 0.85rem;
+  color: var(--fg-muted);
+  font-style: italic;
+}
+.audit-error { color: var(--danger); font-style: normal; }
+
 /* Logs */
 .logs {
   margin: 0;

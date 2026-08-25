@@ -230,11 +230,23 @@ impl PermissionStore {
         Ok(cleared)
     }
 
+    /// Maximum size of the live audit log file before rotation
+    /// kicks in. Mirrors [`crate::runtime::log_file::LOG_FILE_MAX_BYTES`]
+    /// so the per-service logs and the per-app audit log share
+    /// the same on-disk footprint policy (~2 MiB per stream once
+    /// the rotation is in place — live + one rotation).
+    pub const AUDIT_LOG_MAX_BYTES: u64 = 1024 * 1024;
+
     fn audit(
         &self,
         permission: &str,
         decision: PermissionDecision,
     ) -> Result<(), AuthorizationError> {
+        // Rotate before appending. The check is the size of the
+        // current live file, not "size + new line", so a single
+        // line slightly over the cap is allowed through; the
+        // next call rotates it.
+        rotate_audit_if_needed(&self.audit_path, Self::AUDIT_LOG_MAX_BYTES)?;
         let record = serde_json::json!({
             "timestampMs": SystemTime::now().duration_since(UNIX_EPOCH).unwrap_or_default().as_millis(),
             "appId": self.app_id,
@@ -322,6 +334,52 @@ pub struct AuditEntry {
     pub app_id: String,
     pub permission: String,
     pub decision: PermissionDecision,
+}
+
+/// Rotate the audit log at `path` if it is larger than `cap`
+/// bytes. The live file is moved to `<path>.1` (overwriting any
+/// prior rotation), and a fresh live file will be created on the
+/// next `set` call. The function is a no-op when the live file
+/// does not exist yet — the common case for a freshly installed
+/// app.
+///
+/// Single-rotation mirrors the per-service log file scheme in
+/// [`crate::runtime::log_file`]: one live + one backup, with the
+/// total on-disk footprint bounded at ~2 MiB per app. The
+/// function is a free helper so a future caller (e.g. a manual
+/// `alex permissions rotate` CLI subcommand) can re-use it
+/// without going through the `PermissionStore` API.
+fn rotate_audit_if_needed(path: &Path, cap: u64) -> std::io::Result<()> {
+    let metadata = match std::fs::metadata(path) {
+        Ok(metadata) => metadata,
+        Err(error) if error.kind() == std::io::ErrorKind::NotFound => return Ok(()),
+        Err(error) => return Err(error),
+    };
+    if metadata.len() <= cap {
+        return Ok(());
+    }
+    // `path.with_extension(...)` replaces the *last* extension
+    // on the file name. The audit file ends in `.jsonl`, so we
+    // ask for the rotation to end in `.jsonl.1` — that becomes
+    // `<app_id>.audit.jsonl.1`, not `<app_id>.audit.audit.jsonl.1`.
+    // A future rename of the audit format (e.g. `.ndjson`) would
+    // only need to update the literal below.
+    let rotated = path.with_extension("jsonl.1");
+    // `rename` on Windows refuses to overwrite an existing
+    // target; POSIX replaces it atomically. The explicit
+    // `remove_file` keeps the semantics identical on both
+    // platforms without depending on the libc behaviour.
+    let _ = std::fs::remove_file(&rotated);
+    if let Err(error) = std::fs::rename(path, &rotated) {
+        // A rotation failure must not block the user's
+        // `set_permission` call — the next write will succeed
+        // either way, and the next rotation attempt will retry.
+        eprintln!(
+            "alex authorization: audit rotation failed for {}: {error}",
+            path.display()
+        );
+    }
+    Ok(())
 }
 
 #[cfg(test)]

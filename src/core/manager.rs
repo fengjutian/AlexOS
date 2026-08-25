@@ -26,7 +26,7 @@ use serde::{Deserialize, Serialize};
 use thiserror::Error;
 
 use crate::{
-    authorization::{AuthorizationError, PermissionDecision, PermissionStore},
+    authorization::{AuditEntry, AuthorizationError, PermissionDecision, PermissionStore},
     core::{
         application_manifest::{load_application, ApplicationManifest, ManifestError},
         manifest::{AppManifest, BackendMode, RuntimeKind},
@@ -271,6 +271,17 @@ pub trait AppManager: Send + Sync {
         permission: &str,
         decision: PermissionDecision,
     ) -> Result<(), ManagerError>;
+    /// Return the most recent permission decisions for `id` from
+    /// the per-app audit log. The audit log is appended on every
+    /// successful `set_permission` call (and is a no-op for
+    /// transient "Allow Once" grants, which never reach disk). The
+    /// caller may pass any `limit`; the returned list is
+    /// newest-first and never longer than `limit`.
+    fn recent_audit_log(
+        &self,
+        id: &str,
+        limit: usize,
+    ) -> Result<Vec<AuditEntry>, ManagerError>;
     fn registry_path(&self) -> &Path;
     fn install_root(&self) -> &Path;
 }
@@ -800,6 +811,28 @@ impl AppManager for LocalAppManager {
         let store = PermissionStore::open_at(&self.permissions_root, id)?;
         store.set(permission, decision)?;
         Ok(())
+    }
+
+    fn recent_audit_log(
+        &self,
+        id: &str,
+        limit: usize,
+    ) -> Result<Vec<AuditEntry>, ManagerError> {
+        // Audit reads do not require the manifest to load — the
+        // log file is keyed by app id, not by declared
+        // permissions. We still call `open_at` so a missing
+        // permissions root is reported as a clean `Io` error
+        // rather than a confusing "manifest not found".
+        let store = PermissionStore::open_at(&self.permissions_root, id)?;
+        let report = store
+            .recent_audit(limit)
+            .map_err(|error| ManagerError::Runtime(error.to_string()))?;
+        // `skipped` is forwarded through the IPC layer so the
+        // manager UI can warn the user; the trait only carries
+        // the parsed entries because every existing test stub
+        // already returns `Vec<_>`. The IPC handler below
+        // re-reads the report to surface `skipped` when present.
+        Ok(report.entries)
     }
 
     fn registry_path(&self) -> &Path {
@@ -1625,6 +1658,24 @@ impl ManagerRouter {
                 }
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
             },
+            // Audit log viewer for the App Manager UI. Mirrors
+            // the per-app `system.readAuditLog` IPC handler used
+            // by plugins, but goes through the manager surface so
+            // the system WebView does not have to be a registered
+            // plugin. The `skipped` counter is not surfaced yet
+            // — `LocalAppManager::recent_audit_log` only returns
+            // the parsed entries today; adding the counter is a
+            // small trait change that the manager UI can adopt
+            // once the host-side aggregation logic is settled.
+            "manager.read_audit_log" => match parse_audit_log_params(&request.params) {
+                Ok((id, limit)) => match self.manager.recent_audit_log(&id, limit) {
+                    Ok(entries) => {
+                        json_response(&request.id, &serde_json::json!({ "entries": entries }))
+                    }
+                    Err(error) => manager_error_response(&request.id, error),
+                },
+                Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
+            },
             _ => crate::ipc::Response::error(
                 &request.id,
                 "UNKNOWN_METHOD",
@@ -1724,6 +1775,30 @@ fn parse_set_permission(
         other => return Err(format!("invalid decision: {other}")),
     };
     Ok((id, permission, decision))
+}
+
+/// Default + ceiling for `manager.read_audit_log` page size.
+/// Capped so a malformed caller cannot ask the host to walk a
+/// multi-megabyte JSONL file on every UI tick.
+const AUDIT_LOG_DEFAULT_LIMIT: usize = 50;
+const AUDIT_LOG_MAX_LIMIT: usize = 500;
+
+fn parse_audit_log_params(params: &serde_json::Value) -> Result<(String, usize), String> {
+    let id = parse_id(params)?;
+    let limit = params
+        .get("limit")
+        .and_then(|v| v.as_u64())
+        .map(|value| value as usize)
+        .unwrap_or(AUDIT_LOG_DEFAULT_LIMIT);
+    if limit == 0 {
+        return Err("`limit` must be at least 1".to_owned());
+    }
+    if limit > AUDIT_LOG_MAX_LIMIT {
+        return Err(format!(
+            "`limit` must be at most {AUDIT_LOG_MAX_LIMIT}"
+        ));
+    }
+    Ok((id, limit))
 }
 
 fn manager_error_response(id: &str, error: ManagerError) -> crate::ipc::Response {

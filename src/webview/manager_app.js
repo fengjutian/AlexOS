@@ -269,6 +269,7 @@
     $("detail-runtime").textContent = "";
     $("services").innerHTML = "";
     $("permissions").innerHTML = "";
+    $("audit").innerHTML = "";
     $("logs").textContent = "";
 
     try {
@@ -283,6 +284,7 @@
         : [];
       renderDetail(details, runtime);
       loadPermissions(id);
+      loadAuditLog(id);
     } catch (error) {
       currentDetail = null;
       currentServices = [];
@@ -468,6 +470,11 @@
               b.classList.toggle("active", isActive);
               b.setAttribute("aria-checked", isActive ? "true" : "false");
             }
+            // The set succeeded; the host appended a row to the
+            // audit log. Re-fetch it so the user sees their own
+            // decision at the top of the table without a manual
+            // refresh.
+            loadAuditLog(currentDetail.id);
           } catch (error) {
             showError(`set_permission ${permission}`, error);
           }
@@ -490,9 +497,68 @@
         ? services.services
         : [];
       renderDetail(details, runtime);
+      loadAuditLog(id);
     } catch (error) {
       showError(`Failed to refresh ${id}`, error);
     }
+  }
+
+  // -- Audit log -----------------------------------------------------------
+  // The audit log is loaded as part of the detail view and
+  // re-fetched after every `set_permission` so the user sees
+  // their own grant appear in the table without a manual
+  // refresh. A failure to load does not block the rest of the
+  // detail view — the audit panel just renders an error note.
+  const AUDIT_LIMIT = 50;
+
+  function formatTimestamp(ms) {
+    if (!ms) return "—";
+    const date = new Date(Number(ms));
+    if (isNaN(date.getTime())) return String(ms);
+    // Use the user's locale with seconds so two consecutive
+    // decisions are still distinguishable in the table.
+    return date.toLocaleString();
+  }
+
+  async function loadAuditLog(id) {
+    const container = $("audit");
+    container.innerHTML = `<p class="audit-empty">Loading…</p>`;
+    try {
+      const result = await call("manager.read_audit_log", {
+        id,
+        limit: AUDIT_LIMIT,
+      });
+      const entries = Array.isArray(result?.entries) ? result.entries : [];
+      renderAuditLog(entries);
+    } catch (error) {
+      const code = error?.code ? `[${error.code}] ` : "";
+      container.innerHTML = `<p class="audit-error">${escapeText(
+        code + (error?.message ?? error),
+      )}</p>`;
+    }
+  }
+
+  function renderAuditLog(entries) {
+    const container = $("audit");
+    if (!entries.length) {
+      container.innerHTML = `<p class="audit-empty">No audit entries yet. Grant or revoke a permission above to populate this view.</p>`;
+      return;
+    }
+    container.innerHTML = entries
+      .map((entry) => {
+        const decision = entry.decision ?? "prompt";
+        return `
+          <div class="audit-row" role="listitem">
+            <div class="timestamp" title="${escapeText(String(entry.timestampMs ?? ""))}">${escapeText(
+          formatTimestamp(entry.timestampMs),
+        )}</div>
+            <div class="name">${escapeText(entry.permission ?? "—")}</div>
+            <div>
+              <span class="badge ${stateClass(decision)}">${escapeText(decision)}</span>
+            </div>
+          </div>`;
+      })
+      .join("");
   }
 
   // -- Hash routing ---------------------------------------------------------
