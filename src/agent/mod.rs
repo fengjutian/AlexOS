@@ -181,6 +181,16 @@ pub enum AgentEvent {
     },
 }
 
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct AgentTimelineEntry {
+    pub sequence: u64,
+    pub timestamp_ms: u64,
+    pub generation: u64,
+    pub step: u32,
+    pub event: AgentEvent,
+}
+
 #[derive(Clone)]
 pub struct AgentManager {
     root: PathBuf,
@@ -188,6 +198,7 @@ pub struct AgentManager {
     mcp: crate::mcp::ConnectionManager,
     gates: Arc<Mutex<BTreeMap<String, Arc<Mutex<()>>>>>,
     cancellations: Arc<Mutex<BTreeMap<String, Arc<AtomicBool>>>>,
+    event_sequences: Arc<Mutex<BTreeMap<String, u64>>>,
 }
 
 impl AgentManager {
@@ -204,6 +215,7 @@ impl AgentManager {
             mcp,
             gates: Arc::new(Mutex::new(BTreeMap::new())),
             cancellations: Arc::new(Mutex::new(BTreeMap::new())),
+            event_sequences: Arc::new(Mutex::new(BTreeMap::new())),
         };
         manager.recover_interrupted()?;
         Ok(manager)
@@ -251,8 +263,8 @@ impl AgentManager {
                     code: "AGENT_RECOVERED".into(),
                     message: format!(
                         "recovered interrupted agent from {} to {}",
-                        state_name(previous),
-                        state_name(run.state)
+                        agent_state_name(previous),
+                        agent_state_name(run.state)
                     ),
                 },
             )?;
@@ -342,14 +354,52 @@ impl AgentManager {
         if !path.is_file() {
             return Ok(Vec::new());
         }
-        let mut events = fs::read_to_string(path)?
-            .lines()
-            .filter_map(|line| serde_json::from_str(line).ok())
+        let mut events = self
+            .timeline(application, run_id, limit)?
+            .into_iter()
+            .map(|entry| entry.event)
             .collect::<Vec<_>>();
         if events.len() > limit {
             events.drain(..events.len() - limit);
         }
         Ok(events)
+    }
+
+    pub fn timeline(
+        &self,
+        application: &str,
+        run_id: &str,
+        limit: usize,
+    ) -> Result<Vec<AgentTimelineEntry>, AgentError> {
+        let run = self.status(application, run_id)?;
+        if !(1..=1000).contains(&limit) {
+            return Err(AgentError::Invalid("timeline limit must be 1..=1000".into()));
+        }
+        let path = self.run_dir(run_id).join("events.jsonl");
+        if !path.is_file() {
+            return Ok(Vec::new());
+        }
+        let mut entries = fs::read_to_string(path)?
+            .lines()
+            .enumerate()
+            .filter_map(|(index, line)| {
+                serde_json::from_str::<AgentTimelineEntry>(line).ok().or_else(|| {
+                    serde_json::from_str::<AgentEvent>(line)
+                        .ok()
+                        .map(|event| AgentTimelineEntry {
+                            sequence: index as u64 + 1,
+                            timestamp_ms: 0,
+                            generation: run.generation,
+                            step: run.step,
+                            event,
+                        })
+                })
+            })
+            .collect::<Vec<_>>();
+        if entries.len() > limit {
+            entries.drain(..entries.len() - limit);
+        }
+        Ok(entries)
     }
 
     pub fn execute(
@@ -767,9 +817,26 @@ impl AgentManager {
     }
     fn append_event(&self, run: &AgentRun, event: &AgentEvent) -> Result<(), AgentError> {
         let path = self.run_dir(&run.id).join("events.jsonl");
+        let mut sequences = self
+            .event_sequences
+            .lock()
+            .map_err(|_| AgentError::Conflict("event sequence lock poisoned".into()))?;
+        let sequence = sequences.entry(run.id.clone()).or_insert_with(|| {
+            fs::read_to_string(&path)
+                .map(|contents| contents.lines().count() as u64)
+                .unwrap_or(0)
+        });
+        *sequence = sequence.saturating_add(1);
+        let entry = AgentTimelineEntry {
+            sequence: *sequence,
+            timestamp_ms: now_ms(),
+            generation: run.generation,
+            step: run.step,
+            event: event.clone(),
+        };
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        let encoded =
-            serde_json::to_vec(event).map_err(|error| AgentError::Invalid(error.to_string()))?;
+        let encoded = serde_json::to_vec(&entry)
+            .map_err(|error| AgentError::Invalid(error.to_string()))?;
         if encoded.len() > MAX_EVENT_BYTES {
             return Err(AgentError::Invalid("agent event exceeds 1 MiB".into()));
         }

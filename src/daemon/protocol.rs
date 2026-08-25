@@ -323,6 +323,12 @@ pub enum ControlCommand {
         #[serde(default = "default_audit_limit")]
         limit: usize,
     },
+    AgentTimeline {
+        app_id: String,
+        run_id: String,
+        #[serde(default = "default_audit_limit")]
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

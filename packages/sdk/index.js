@@ -315,6 +315,7 @@ export function createAlexClient(transport = browserTransport()) {
       status(runId, options) { return invoke("agent.status", { runId }, options); },
       async list(options) { const result = await invoke("agent.list", {}, options); return result.runs ?? []; },
       async history(runId, limit = 200, options) { const result = await invoke("agent.history", { runId, limit }, options); return result.events ?? []; },
+      async timeline(runId, limit = 200, options) { const result = await invoke("agent.timeline", { runId, limit }, options); return result.entries ?? []; },
     }),
     window: Object.freeze({
       async setTitle(title, options) {

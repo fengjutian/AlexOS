@@ -135,4 +135,16 @@ impl ApiRouter {
             },
         )
     }
+    pub(crate) fn agent_timeline(&self, params: &Value) -> ApiResult {
+        self.agent_permission()?;
+        let params: AgentHistoryParams = parse_params(params)?;
+        self.daemon_agent(
+            "agent-timeline",
+            crate::daemon::ControlCommand::AgentTimeline {
+                app_id: self.agent_app_id()?,
+                run_id: params.run_id,
+                limit: params.limit,
+            },
+        )
+    }
 }

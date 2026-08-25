@@ -53,6 +53,7 @@ Other APIs are `pause`, `resume`, `cancel`, `deny`, `status`, `list` and `histor
 
 - Each run carries a generation. Checkpoint writes use compare-and-swap semantics, so an old execution cannot overwrite a newer pause or cancellation.
 - A tool intent is checkpointed before the MCP call. Non-idempotent calls require approval, including recovery after interruption, and are never replayed blindly.
+- Opening the Daemon-owned run store recovers interrupted `running` and `waiting-tool` runs from their last durable checkpoint. Recovery advances the generation so stale workers cannot write back. Attempted non-idempotent tools return to `waiting-approval`; safe queued work can be started again by the controller.
 - Step, token, tool-call and wall-clock budgets fail the run immediately with a stable `AGENT_*` error event.
 - Application identity scopes status, history, approval and cancellation.
 - State is atomically replaced and capped at 8 MiB; individual events and initial messages are capped at 1 MiB.

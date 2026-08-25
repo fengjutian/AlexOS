@@ -129,6 +129,7 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "agent.status" => router.agent_status(p),
         "agent.list" => router.agent_list(),
         "agent.history" => router.agent_history(p),
+        "agent.timeline" => router.agent_timeline(p),
         "events.subscribe" => router.events_subscribe(&request.id, p, window_id),
         "events.unsubscribe" => router.events_unsubscribe(p),
         "process.spawn" => router.process_spawn(p),

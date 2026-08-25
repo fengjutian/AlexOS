@@ -417,6 +417,7 @@ export type AgentEvent =
   | { type: "usage"; usage: AgentRun["usage"] }
   | { type: "checkpoint"; step: number }
   | { type: "error"; code: string; message: string };
+export interface AgentTimelineEntry { sequence: number; timestampMs: number; generation: number; step: number; event: AgentEvent; }
 
 export interface AlexClient {
   invoke<K extends AlexMethodName>(method: K, params: AlexMethodMap[K]["params"], options?: InvokeOptions): Promise<AlexMethodMap[K]["result"]>;
@@ -532,6 +533,7 @@ export interface AlexClient {
     status(runId: string, options?: InvokeOptions): Promise<AgentRun>;
     list(options?: InvokeOptions): Promise<AgentRun[]>;
     history(runId: string, limit?: number, options?: InvokeOptions): Promise<AgentEvent[]>;
+    timeline(runId: string, limit?: number, options?: InvokeOptions): Promise<AgentTimelineEntry[]>;
   };
   readonly window: {
     setTitle(title: string, options?: InvokeOptions): Promise<void>;

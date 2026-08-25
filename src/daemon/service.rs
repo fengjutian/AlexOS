@@ -508,6 +508,11 @@ impl DaemonService {
                 run_id,
                 limit,
             } => self.agent_history(&app_id, &run_id, limit),
+            ControlCommand::AgentTimeline {
+                app_id,
+                run_id,
+                limit,
+            } => self.agent_timeline(&app_id, &run_id, limit),
         };
         match result {
             Ok(value) => ControlResponse::success(id, value),
@@ -2219,6 +2224,18 @@ impl DaemonService {
         self.agent_manager()?
             .history(app_id, run_id, limit)
             .map(|events| json!({"events":events}))
+            .map_err(|error| error.to_string())
+    }
+
+    fn agent_timeline(
+        &self,
+        app_id: &str,
+        run_id: &str,
+        limit: usize,
+    ) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .timeline(app_id, run_id, limit)
+            .map(|entries| json!({ "entries": entries }))
             .map_err(|error| error.to_string())
     }
 

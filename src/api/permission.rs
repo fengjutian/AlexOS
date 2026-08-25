@@ -145,7 +145,8 @@ impl Permission {
             "model.list" | "model.generate" | "model.cancel" => Some("model.use"),
             "model.import" | "model.load" | "model.unload" | "model.remove" => Some("model.manage"),
             "agent.create" | "agent.start" | "agent.pause" | "agent.resume" | "agent.cancel"
-            | "agent.status" | "agent.list" | "agent.approve" | "agent.deny" | "agent.history" => {
+            | "agent.status" | "agent.list" | "agent.approve" | "agent.deny" | "agent.history"
+            | "agent.timeline" => {
                 Some("agent.run")
             }
             "media.camera" => Some("media.camera"),
