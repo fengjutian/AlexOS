@@ -5,6 +5,7 @@ pub mod ipc;
 pub mod permission;
 pub mod permission_shim;
 mod router;
+mod runtime_client;
 
 // Flatten the router's public items onto `crate::api::*` so callers can
 // keep using `use crate::api::ApiRouter` after the move.

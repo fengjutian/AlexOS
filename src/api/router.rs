@@ -40,7 +40,7 @@ const MAX_INFLIGHT_PER_APP: usize = 32;
 pub struct ApiRouter {
     package_root: PathBuf,
     manifest: AppManifest,
-    runtime: Option<RuntimeHandle>,
+    runtime: Option<super::runtime_client::RuntimeClient>,
     permission_store: Option<PermissionStore>,
     native_host: Option<Arc<dyn NativeHost>>,
     desktop_services: Arc<dyn DesktopServices>,
@@ -133,7 +133,23 @@ impl ApiRouter {
     }
 
     pub fn with_runtime(mut self, runtime: RuntimeHandle) -> Self {
-        self.runtime = Some(runtime);
+        self.runtime = Some(super::runtime_client::RuntimeClient::local(runtime));
+        self
+    }
+
+    /// Route runtime operations through alexd. Development mode deliberately
+    /// keeps using `with_runtime`, while a production shell can use this
+    /// adapter without owning a backend process handle.
+    pub fn with_daemon_runtime(
+        mut self,
+        pipe: impl Into<String>,
+        service: impl Into<String>,
+    ) -> Self {
+        self.runtime = Some(super::runtime_client::RuntimeClient::daemon(
+            pipe,
+            self.manifest.id.clone(),
+            service,
+        ));
         self
     }
 

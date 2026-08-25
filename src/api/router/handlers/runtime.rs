@@ -50,10 +50,6 @@ impl ApiRouter {
             .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
         runtime
             .status(Duration::from_secs(2))
-            .and_then(|status| {
-                serde_json::to_value(status)
-                    .map_err(|error| RuntimeError::Protocol(error.to_string()))
-            })
             .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
     }
 
@@ -65,10 +61,6 @@ impl ApiRouter {
             .ok_or(("RUNTIME_UNAVAILABLE", "application has no backend".into()))?;
         runtime
             .restart(Duration::from_secs(5))
-            .and_then(|status| {
-                serde_json::to_value(status)
-                    .map_err(|error| RuntimeError::Protocol(error.to_string()))
-            })
             .map_err(|error| ("RUNTIME_FAILURE", error.to_string()))
     }
 
