@@ -6,6 +6,7 @@ mod desktop;
 mod dialog;
 mod events;
 mod filesystem;
+mod mcp_model;
 mod process_net;
 mod runtime;
 mod storage;

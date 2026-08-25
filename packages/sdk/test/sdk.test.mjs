@@ -26,6 +26,28 @@ test("typed namespaces map to Alex API methods", async () => {
   ]);
 });
 
+test("MCP and local model namespaces map to daemon-owned APIs", async () => {
+  const calls = [];
+  const client = createAlexClient({
+    async invoke(method, params) {
+      calls.push({ method, params });
+      if (method === "mcp.listTools") return { tools: [{ name: "echo", inputSchema: {} }] };
+      if (method === "model.list") return { models: [{ id: "local/tiny@1" }] };
+      return { content: [], isError: false };
+    },
+  });
+  assert.equal((await client.mcp.listTools("tools")).tools[0].name, "echo");
+  await client.mcp.callTool("tools", "echo", { text: "hello" });
+  assert.equal((await client.model.list())[0].id, "local/tiny@1");
+  await client.model.load("local/tiny@1", "llama-cpp");
+  assert.deepEqual(calls.map(({ method }) => method), [
+    "mcp.listTools",
+    "mcp.callTool",
+    "model.list",
+    "model.load",
+  ]);
+});
+
 test("app instance namespace uses the product-facing API", async () => {
   const calls = [];
   const client = createAlexClient({

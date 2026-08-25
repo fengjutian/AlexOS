@@ -146,11 +146,10 @@ impl DaemonService {
             ControlCommand::McpConnectStdio {
                 app_id,
                 binding,
-                package_root,
                 command,
                 args,
                 era,
-            } => self.mcp_connect_stdio(&app_id, &binding, &package_root, &command, &args, era),
+            } => self.mcp_connect_stdio(&app_id, &binding, &command, &args, era),
             ControlCommand::McpDisconnect { app_id, binding } => Ok(json!({
                 "disconnected": self.mcp.disconnect(&app_id, &binding)
             })),
@@ -771,17 +770,20 @@ impl DaemonService {
         &self,
         app_id: &str,
         binding: &str,
-        package_root: &str,
         command: &str,
         args: &[String],
         era: crate::mcp::ProtocolEra,
     ) -> Result<serde_json::Value, String> {
-        let transport = crate::mcp::StdioTransport::spawn(
-            std::path::Path::new(package_root),
-            std::path::Path::new(command),
-            args,
-        )
-        .map_err(|error| error.to_string())?;
+        let package_root = self
+            .manager
+            .as_ref()
+            .ok_or_else(|| "application manager unavailable".to_owned())?
+            .get_app(app_id)
+            .map_err(|error| error.to_string())?
+            .install_path;
+        let transport =
+            crate::mcp::StdioTransport::spawn(&package_root, std::path::Path::new(command), args)
+                .map_err(|error| error.to_string())?;
         let client = crate::mcp::McpClient::new(Arc::new(transport), era);
         let server = if era == crate::mcp::ProtocolEra::Legacy {
             Some(
@@ -1068,6 +1070,29 @@ fn now_ms() -> Option<u64> {
 mod tests {
     use super::*;
 
+    struct MockMcpTransport;
+    impl crate::mcp::RpcTransport for MockMcpTransport {
+        fn request(
+            &self,
+            _id: u64,
+            method: &str,
+            _params: serde_json::Value,
+        ) -> Result<serde_json::Value, crate::mcp::McpError> {
+            Ok(match method {
+                "tools/list" => json!({"tools":[{"name":"echo","inputSchema":{"type":"object"}}]}),
+                "tools/call" => json!({"content":[{"type":"text","text":"ok"}]}),
+                _ => json!({}),
+            })
+        }
+        fn notify(
+            &self,
+            _method: &str,
+            _params: serde_json::Value,
+        ) -> Result<(), crate::mcp::McpError> {
+            Ok(())
+        }
+    }
+
     fn persisted_service(name: &str, desired: DesiredState) -> crate::daemon::ServiceControlState {
         crate::daemon::ServiceControlState {
             service: name.into(),
@@ -1094,6 +1119,69 @@ mod tests {
             id: "test-1".into(),
             command,
         }
+    }
+
+    #[test]
+    fn daemon_owns_mcp_connections_and_tool_calls() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")));
+        service
+            .mcp
+            .connect(
+                "com.example.app",
+                "tools",
+                crate::mcp::McpClient::new(
+                    Arc::new(MockMcpTransport),
+                    crate::mcp::ProtocolEra::Modern,
+                ),
+            )
+            .unwrap();
+        let tools = service.handle(request(ControlCommand::McpListTools {
+            app_id: "com.example.app".into(),
+            binding: "tools".into(),
+            cursor: None,
+        }));
+        assert!(tools.ok);
+        assert_eq!(tools.result.unwrap()["tools"][0]["name"], "echo");
+        let called = service.handle(request(ControlCommand::McpCallTool {
+            app_id: "com.example.app".into(),
+            binding: "tools".into(),
+            name: "echo".into(),
+            arguments: json!({"text":"hello"}),
+        }));
+        assert!(called.ok);
+    }
+
+    #[test]
+    fn daemon_persists_imported_models_under_ai_root() {
+        use sha2::{Digest, Sha256};
+        let temp = tempfile::tempdir().unwrap();
+        let source = temp.path().join("tiny.gguf");
+        std::fs::write(&source, b"weights").unwrap();
+        let digest: String = Sha256::digest(b"weights")
+            .iter()
+            .map(|value| format!("{value:02x}"))
+            .collect();
+        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")))
+            .with_ai_root(temp.path())
+            .unwrap();
+        let imported = service.handle(request(ControlCommand::ModelImport {
+            source: source.to_string_lossy().into_owned(),
+            manifest: crate::model::ModelManifest {
+                id: "local/tiny@1".into(),
+                digest: format!("sha256:{digest}"),
+                size_bytes: 0,
+                format: "gguf".into(),
+                architecture: "llama".into(),
+                quantization: None,
+                license: None,
+                source: None,
+                compatible_workers: vec![],
+            },
+        }));
+        assert!(imported.ok, "{:?}", imported.error);
+        let listed = service.handle(request(ControlCommand::ModelList));
+        assert_eq!(listed.result.unwrap()["models"][0]["id"], "local/tiny@1");
     }
 
     #[test]

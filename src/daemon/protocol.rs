@@ -133,7 +133,6 @@ pub enum ControlCommand {
     McpConnectStdio {
         app_id: String,
         binding: String,
-        package_root: String,
         command: String,
         #[serde(default)]
         args: Vec<String>,
@@ -407,6 +406,48 @@ mod tests {
             ControlCommand::StreamCancel {
                 stream_id: "stream-1".into(),
                 reason: "user".into(),
+            },
+        ] {
+            let value = serde_json::to_value(&command).unwrap();
+            assert_eq!(
+                serde_json::from_value::<ControlCommand>(value).unwrap(),
+                command
+            );
+        }
+    }
+
+    #[test]
+    fn mcp_and_model_commands_round_trip() {
+        let model = crate::model::ModelManifest {
+            id: "local/tiny@1".into(),
+            digest: format!("sha256:{}", "0".repeat(64)),
+            size_bytes: 0,
+            format: "gguf".into(),
+            architecture: "llama".into(),
+            quantization: None,
+            license: None,
+            source: None,
+            compatible_workers: vec!["llama-cpp".into()],
+        };
+        for command in [
+            ControlCommand::McpListTools {
+                app_id: "com.example.app".into(),
+                binding: "files".into(),
+                cursor: None,
+            },
+            ControlCommand::McpCallTool {
+                app_id: "com.example.app".into(),
+                binding: "files".into(),
+                name: "read_file".into(),
+                arguments: serde_json::json!({"path":"README.md"}),
+            },
+            ControlCommand::ModelImport {
+                source: "model.gguf".into(),
+                manifest: model,
+            },
+            ControlCommand::ModelLoad {
+                model_id: "local/tiny@1".into(),
+                worker: "llama-cpp".into(),
             },
         ] {
             let value = serde_json::to_value(&command).unwrap();

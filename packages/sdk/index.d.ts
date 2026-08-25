@@ -329,6 +329,30 @@ export class AlexError extends Error {
   constructor(code: string, message: string, details?: unknown);
 }
 
+export interface McpConnectionInfo {
+  application: string;
+  binding: string;
+  era: "modern" | "legacy";
+}
+
+export interface McpTool {
+  name: string;
+  description?: string;
+  inputSchema: Record<string, unknown>;
+}
+
+export interface ModelManifest {
+  id: string;
+  digest: `sha256:${string}`;
+  sizeBytes: number;
+  format: string;
+  architecture: string;
+  quantization?: string;
+  license?: string;
+  source?: string;
+  compatibleWorkers?: string[];
+}
+
 export interface AlexClient {
   invoke<K extends AlexMethodName>(method: K, params: AlexMethodMap[K]["params"], options?: InvokeOptions): Promise<AlexMethodMap[K]["result"]>;
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
@@ -388,6 +412,28 @@ export interface AlexClient {
     status(options?: InvokeOptions): Promise<RuntimeStatus>;
     restart(options?: InvokeOptions): Promise<RuntimeStatus>;
     cancel(requestId: string, options?: InvokeOptions): Promise<{ cancelled: boolean }>;
+  };
+  readonly mcp: {
+    connections(options?: InvokeOptions): Promise<McpConnectionInfo[]>;
+    listTools(
+      binding: string,
+      cursor?: string,
+      options?: InvokeOptions,
+    ): Promise<{ tools: McpTool[]; nextCursor?: string }>;
+    callTool(
+      binding: string,
+      name: string,
+      input?: Record<string, unknown>,
+      options?: InvokeOptions,
+    ): Promise<{ content: unknown[]; isError: boolean; structuredContent?: unknown }>;
+  };
+  readonly model: {
+    list(options?: InvokeOptions): Promise<ModelManifest[]>;
+    import(source: string, manifest: ModelManifest, options?: InvokeOptions): Promise<ModelManifest>;
+    remove(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; removed: boolean }>;
+    load(modelId: string, worker: string, options?: InvokeOptions): Promise<{ modelId: string; worker: string; loaded: boolean }>;
+    unload(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; unloaded: boolean }>;
+    cancel(modelId: string, requestId: string, options?: InvokeOptions): Promise<{ modelId: string; requestId: string; cancelled: boolean }>;
   };
   readonly window: {
     setTitle(title: string, options?: InvokeOptions): Promise<void>;

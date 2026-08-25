@@ -195,6 +195,38 @@ export function createAlexClient(transport = browserTransport()) {
         return stream("runtime.invoke", { method, params }, options);
       },
     }),
+    mcp: Object.freeze({
+      async connections(options) {
+        return invoke("mcp.connections", {}, options);
+      },
+      async listTools(binding, cursor, options) {
+        return invoke("mcp.listTools", { binding, cursor }, options);
+      },
+      async callTool(binding, name, input = {}, options) {
+        return invoke("mcp.callTool", { binding, name, arguments: input }, options);
+      },
+    }),
+    model: Object.freeze({
+      async list(options) {
+        const result = await invoke("model.list", {}, options);
+        return result.models ?? [];
+      },
+      import(source, manifest, options) {
+        return invoke("model.import", { source, manifest }, options);
+      },
+      remove(modelId, options) {
+        return invoke("model.remove", { modelId }, options);
+      },
+      load(modelId, worker, options) {
+        return invoke("model.load", { modelId, worker }, options);
+      },
+      unload(modelId, options) {
+        return invoke("model.unload", { modelId }, options);
+      },
+      cancel(modelId, requestId, options) {
+        return invoke("model.cancel", { modelId, requestId }, options);
+      },
+    }),
     window: Object.freeze({
       async setTitle(title, options) {
         await invoke("window.setTitle", { title }, options);

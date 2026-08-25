@@ -134,6 +134,26 @@ impl RuntimeClient {
             )),
         }
     }
+
+    pub(crate) fn daemon_command(
+        &self,
+        operation: &str,
+        command: ControlCommand,
+    ) -> Option<Result<Value, RuntimeError>> {
+        match self {
+            Self::Local(_) => None,
+            Self::Daemon(client) => {
+                Some(client.command(&client.next_request_id(operation), command))
+            }
+        }
+    }
+
+    pub(crate) fn app_id(&self) -> Option<&str> {
+        match self {
+            Self::Local(_) => None,
+            Self::Daemon(client) => Some(&client.app_id),
+        }
+    }
 }
 
 pub(crate) struct DaemonRuntimeClient {
