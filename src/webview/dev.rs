@@ -87,9 +87,14 @@ pub fn run(_package_root: &Path, _manifest: AppManifest) -> Result<(), AlexError
 /// hot-reloaded; multi-service dev mode is a future enhancement.
 pub fn run_unified(package_root: &Path, manifest: ApplicationManifest) -> Result<(), AlexError> {
     let frontend_dev = manifest
-        .as_v2()
-        .and_then(|v2| v2.frontend.as_ref())
-        .and_then(|frontend| frontend.dev.clone());
+        .as_v1()
+        .and_then(|v1| v1.frontend.dev.clone())
+        .or_else(|| {
+            manifest
+                .as_v2()
+                .and_then(|v2| v2.frontend.as_ref())
+                .and_then(|frontend| frontend.dev.clone())
+        });
     let backend_dev = manifest
         .as_v2()
         .and_then(|v2| v2.services.values().next())
@@ -160,6 +165,7 @@ fn project_v2_for_dev(manifest: ApplicationManifest) -> AppManifest {
         frontend: Frontend {
             entry: frontend_entry,
             build: None,
+            dev: None,
         },
         backend,
         permissions,
@@ -509,6 +515,7 @@ mod v2_projection_tests {
             frontend: crate::manifest::Frontend {
                 entry: "index.html".to_owned(),
                 build: None,
+                dev: None,
             },
             backend: None,
             permissions: Vec::new(),

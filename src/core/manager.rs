@@ -2016,6 +2016,7 @@ fn v2_fallback_manifest(manifest: &ApplicationManifest) -> AppManifest {
         frontend: crate::manifest::Frontend {
             entry: frontend_entry,
             build: None,
+            dev: None,
         },
         backend: None,
         permissions,

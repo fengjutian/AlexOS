@@ -3276,6 +3276,7 @@ mod tests {
             frontend: Frontend {
                 entry: "index.html".into(),
                 build: None,
+                dev: None,
             },
             backend: None,
             permissions: Vec::new(),

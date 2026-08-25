@@ -102,6 +102,9 @@ pub struct Frontend {
     /// serves at runtime.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub build: Option<FrontendBuild>,
+    /// Optional development server descriptor used by `alex dev`.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub dev: Option<crate::manifest_v2::FrontendDev>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
