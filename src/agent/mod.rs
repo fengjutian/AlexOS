@@ -198,13 +198,66 @@ impl AgentManager {
     ) -> Result<Self, AgentError> {
         let root = root.into();
         fs::create_dir_all(&root)?;
-        Ok(Self {
+        let manager = Self {
             root,
             models,
             mcp,
             gates: Arc::new(Mutex::new(BTreeMap::new())),
             cancellations: Arc::new(Mutex::new(BTreeMap::new())),
-        })
+        };
+        manager.recover_interrupted()?;
+        Ok(manager)
+    }
+
+    fn recover_interrupted(&self) -> Result<(), AgentError> {
+        for entry in fs::read_dir(&self.root)? {
+            let path = entry?.path().join("state.json");
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(mut run) = read_json::<AgentRun>(&path) else {
+                continue;
+            };
+            let previous = run.state;
+            match run.state {
+                AgentState::Running => run.state = AgentState::Queued,
+                AgentState::WaitingTool => {
+                    if let Some(call) = run.pending_tool.as_mut()
+                        && call.attempted
+                        && !call.idempotent
+                    {
+                        call.approved = false;
+                        run.state = AgentState::WaitingApproval;
+                    } else {
+                        run.state = AgentState::Queued;
+                    }
+                }
+                _ => continue,
+            }
+            run.generation = run.generation.saturating_add(1);
+            run.updated_at_ms = now_ms();
+            run.last_error = None;
+            self.save(&run)?;
+            self.append_event(
+                &run,
+                &AgentEvent::State {
+                    state: run.state,
+                    generation: run.generation,
+                },
+            )?;
+            self.append_event(
+                &run,
+                &AgentEvent::Error {
+                    code: "AGENT_RECOVERED".into(),
+                    message: format!(
+                        "recovered interrupted agent from {} to {}",
+                        state_name(previous),
+                        state_name(run.state)
+                    ),
+                },
+            )?;
+        }
+        Ok(())
     }
 
     pub fn create(
@@ -1115,10 +1168,16 @@ mod tests {
             attempted: true,
         });
         manager.save(&interrupted).unwrap();
-        let recovered = manager
-            .execute("com.example.app", &run.id, &mut |_| Ok(()))
-            .unwrap();
+        let reopened = AgentManager::open(
+            temp.path().join("agents"),
+            manager.models.clone(),
+            manager.mcp.clone(),
+        )
+        .unwrap();
+        let recovered = reopened.status("com.example.app", &run.id).unwrap();
         assert_eq!(recovered.state, AgentState::WaitingApproval);
+        assert_eq!(recovered.generation, run.generation + 1);
         assert!(!recovered.pending_tool.unwrap().approved);
+        assert!(reopened.history("com.example.app", &run.id, 100).unwrap().iter().any(|event| matches!(event, AgentEvent::Error { code, .. } if code == "AGENT_RECOVERED")));
     }
 }
