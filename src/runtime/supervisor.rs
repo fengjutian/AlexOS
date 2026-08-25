@@ -1,5 +1,5 @@
 use std::{
-    collections::VecDeque,
+    collections::{HashMap, VecDeque},
     fmt::Write as _,
     io::{BufRead, BufReader, Write},
     net::TcpListener,
@@ -336,7 +336,15 @@ pub struct RuntimeProcess {
     child: Child,
     stdin: Option<ChildStdin>,
     stdout: Option<BufReader<ChildStdout>>,
+    rpc: Option<RpcChannel>,
     service: Option<ServiceState>,
+}
+
+type PendingResponse = mpsc::SyncSender<Result<Value, String>>;
+
+struct RpcChannel {
+    writer: Arc<Mutex<ChildStdin>>,
+    pending: Arc<Mutex<HashMap<String, PendingResponse>>>,
 }
 
 struct ServiceState {
@@ -364,6 +372,9 @@ enum RuntimeCommand {
         method: String,
         params: Value,
         response: mpsc::SyncSender<Result<Value, String>>,
+    },
+    CancelRequest {
+        id: String,
     },
     Status {
         response: mpsc::SyncSender<RuntimeStatus>,
@@ -448,13 +459,16 @@ impl RuntimeHandle {
         }
         let log_dir = auto_dirs.as_ref().map(|dirs| dirs.logs.clone());
         let logs = Arc::new(Mutex::new(VecDeque::new()));
-        let (process, endpoint) = RuntimeProcess::start_with_spec(
+        let (mut process, endpoint) = RuntimeProcess::start_with_spec(
             &spec,
             spec.data_dir.as_deref(),
             spec.cache_dir.as_deref(),
             log_dir.as_deref(),
             Arc::clone(&logs),
         )?;
+        if endpoint.is_none() {
+            process.enable_rpc_multiplexing()?;
+        }
         let pid = Arc::new(AtomicU32::new(process.id()));
         let (sender, receiver) = mpsc::channel();
         let manager_pid = Arc::clone(&pid);
@@ -492,12 +506,16 @@ impl RuntimeHandle {
                 response: tx,
             })
             .map_err(|_| RuntimeError::Protocol("runtime manager stopped".into()))?;
-        match receive(rx, timeout) {
-            Err(RuntimeError::Timeout(_)) => {
-                self.cancel();
+        match rx.recv_timeout(timeout) {
+            Ok(Ok(value)) => Ok(value),
+            Ok(Err(message)) => Err(RuntimeError::Protocol(message)),
+            Err(mpsc::RecvTimeoutError::Timeout) => {
+                let _ = self.sender.send(RuntimeCommand::CancelRequest { id: id.into() });
                 Err(RuntimeError::Timeout(timeout))
             }
-            result => result,
+            Err(mpsc::RecvTimeoutError::Disconnected) => {
+                Err(RuntimeError::Protocol("runtime manager stopped".into()))
+            }
         }
     }
 
@@ -576,7 +594,13 @@ fn runtime_manager(
                                 Some(&log_dir),
                                 Arc::clone(&logs),
                             ) {
-                                Ok((value, new_endpoint)) => {
+                                Ok((mut value, new_endpoint)) => {
+                                    if new_endpoint.is_none()
+                                        && let Err(error) = value.enable_rpc_multiplexing()
+                                    {
+                                        last_error = Some(error.to_string());
+                                        continue;
+                                    }
                                     current_pid.store(value.id(), Ordering::Release);
                                     process = Some(value);
                                     endpoint = new_endpoint;
@@ -607,7 +631,7 @@ fn runtime_manager(
                     })
                     .and_then(|runtime| {
                         runtime
-                            .invoke(&id, &method, &params)
+                            .begin_invoke(&id, &method, &params)
                             .map_err(|error| error.to_string())
                     });
                 if result.is_err()
@@ -621,7 +645,24 @@ fn runtime_manager(
                     current_pid.store(0, Ordering::Release);
                     last_exit_at = Some(Instant::now());
                 }
-                let _ = response.send(result);
+                match result {
+                    Ok(pending) => {
+                        thread::spawn(move || {
+                            let result = pending
+                                .recv()
+                                .unwrap_or_else(|_| Err("runtime response channel closed".into()));
+                            let _ = response.send(result);
+                        });
+                    }
+                    Err(error) => {
+                        let _ = response.send(Err(error));
+                    }
+                }
+            }
+            RuntimeCommand::CancelRequest { id } => {
+                if let Some(runtime) = process.as_mut() {
+                    let _ = runtime.cancel_request(&id);
+                }
             }
             RuntimeCommand::Status { response } => {
                 refresh(
@@ -665,13 +706,16 @@ fn runtime_manager(
                     Some(&log_dir),
                     Arc::clone(&logs),
                 )
-                .map(|(value, new_endpoint)| {
+                .and_then(|(mut value, new_endpoint)| {
+                    if new_endpoint.is_none() {
+                        value.enable_rpc_multiplexing()?;
+                    }
                     current_pid.store(value.id(), Ordering::Release);
                     process = Some(value);
                     endpoint = new_endpoint;
                     restart_count += 1;
                     last_error = None;
-                    snapshot(&process, &endpoint, restart_count, &last_error, &logs)
+                    Ok(snapshot(&process, &endpoint, restart_count, &last_error, &logs))
                 })
                 .map_err(|error| {
                     current_pid.store(0, Ordering::Release);
@@ -999,6 +1043,7 @@ impl RuntimeProcess {
                 child,
                 stdin,
                 stdout,
+                rpc: None,
                 service,
             },
             endpoint,
@@ -1028,66 +1073,140 @@ impl RuntimeProcess {
         Ok(self.child.try_wait()?)
     }
 
+    fn enable_rpc_multiplexing(&mut self) -> Result<(), RuntimeError> {
+        if self.rpc.is_some() {
+            return Ok(());
+        }
+        let stdin = self.stdin.take().ok_or_else(|| {
+            RuntimeError::Protocol("runtime stdin is unavailable".into())
+        })?;
+        let mut stdout = self.stdout.take().ok_or_else(|| {
+            RuntimeError::Protocol("runtime stdout is unavailable".into())
+        })?;
+        let pending = Arc::new(Mutex::new(HashMap::<String, PendingResponse>::new()));
+        let pending_for_reader = Arc::clone(&pending);
+        thread::Builder::new()
+            .name("alex-runtime-rpc-reader".into())
+            .spawn(move || {
+                let terminal_error = loop {
+                    let mut line = String::new();
+                    match stdout.read_line(&mut line) {
+                        Ok(0) => break "runtime closed stdout".to_string(),
+                        Err(error) => break format!("runtime stdout read failed: {error}"),
+                        Ok(_) => {}
+                    }
+                    let response: BackendResponse = match serde_json::from_str(&line) {
+                        Ok(value) => value,
+                        Err(error) => break format!("invalid backend response: {error}"),
+                    };
+                    if response.protocol != 1 {
+                        break format!("unsupported backend protocol {}", response.protocol);
+                    }
+                    let result = match (response.result, response.error) {
+                        (Some(value), None) => Ok(value),
+                        (None, Some(error)) => Err(format!("{}: {}", error.code, error.message)),
+                        _ => Err("response must contain exactly one of result or error".into()),
+                    };
+                    if let Some(sender) = pending_for_reader
+                        .lock()
+                        .ok()
+                        .and_then(|mut values| values.remove(&response.id))
+                    {
+                        let _ = sender.send(result);
+                    }
+                };
+                if let Ok(mut values) = pending_for_reader.lock() {
+                    for (_, sender) in values.drain() {
+                        let _ = sender.send(Err(terminal_error.clone()));
+                    }
+                }
+            })
+            .map_err(RuntimeError::Io)?;
+        self.rpc = Some(RpcChannel {
+            writer: Arc::new(Mutex::new(stdin)),
+            pending,
+        });
+        Ok(())
+    }
+
+    fn begin_invoke(
+        &mut self,
+        id: &str,
+        method: &str,
+        params: &Value,
+    ) -> Result<mpsc::Receiver<Result<Value, String>>, RuntimeError> {
+        if self.service.is_some() {
+            return Err(RuntimeError::Protocol(
+                "invoke is unavailable for service-mode backends".into(),
+            ));
+        }
+        if let Some(status) = self.child.try_wait()? {
+            return Err(RuntimeError::Protocol(format!("runtime already exited with {status}")));
+        }
+        if self.rpc.is_none() {
+            self.enable_rpc_multiplexing()?;
+        }
+        let rpc = self.rpc.as_ref().expect("RPC channel was initialized");
+        let (tx, rx) = mpsc::sync_channel(1);
+        {
+            let mut pending = rpc.pending.lock().map_err(|_| {
+                RuntimeError::Protocol("runtime pending request lock poisoned".into())
+            })?;
+            if pending.insert(id.to_string(), tx).is_some() {
+                return Err(RuntimeError::Protocol(format!("duplicate runtime request id: {id}")));
+            }
+        }
+        let write_result = (|| -> Result<(), RuntimeError> {
+            let mut stdin = rpc.writer.lock().map_err(|_| {
+                RuntimeError::Protocol("runtime stdin lock poisoned".into())
+            })?;
+            serde_json::to_writer(
+                &mut *stdin,
+                &BackendRequest { protocol: 1, id, method, params },
+            )
+            .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
+            stdin.write_all(b"\n")?;
+            stdin.flush()?;
+            Ok(())
+        })();
+        if let Err(error) = write_result {
+            if let Ok(mut pending) = rpc.pending.lock() {
+                pending.remove(id);
+            }
+            return Err(error);
+        }
+        Ok(rx)
+    }
+
+    fn cancel_request(&mut self, id: &str) -> Result<(), RuntimeError> {
+        let Some(rpc) = &self.rpc else { return Ok(()); };
+        if let Ok(mut pending) = rpc.pending.lock()
+            && let Some(sender) = pending.remove(id)
+        {
+            let _ = sender.send(Err("request cancelled".into()));
+        }
+        let mut stdin = rpc.writer.lock().map_err(|_| {
+            RuntimeError::Protocol("runtime stdin lock poisoned".into())
+        })?;
+        serde_json::to_writer(&mut *stdin, &serde_json::json!({
+            "protocol": 1, "type": "cancel", "id": id
+        }))
+        .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
+        stdin.write_all(b"\n")?;
+        stdin.flush()?;
+        Ok(())
+    }
+
     pub fn invoke(
         &mut self,
         id: &str,
         method: &str,
         params: &Value,
     ) -> Result<Value, RuntimeError> {
-        if self.service.is_some() {
-            return Err(RuntimeError::Protocol(
-                "invoke is unavailable for service-mode backends; talk to the backend over HTTP"
-                    .into(),
-            ));
-        }
-        if let Some(status) = self.child.try_wait()? {
-            return Err(RuntimeError::Protocol(format!(
-                "runtime already exited with {status}"
-            )));
-        }
-        let stdin = self
-            .stdin
-            .as_mut()
-            .ok_or_else(|| RuntimeError::Protocol("runtime stdin is unavailable".into()))?;
-        serde_json::to_writer(
-            &mut *stdin,
-            &BackendRequest {
-                protocol: 1,
-                id,
-                method,
-                params,
-            },
-        )
-        .map_err(|error| RuntimeError::Protocol(error.to_string()))?;
-        stdin.write_all(b"\n")?;
-        stdin.flush()?;
-        let mut line = String::new();
-        let stdout = self
-            .stdout
-            .as_mut()
-            .ok_or_else(|| RuntimeError::Protocol("runtime stdout is unavailable".into()))?;
-        if stdout.read_line(&mut line)? == 0 {
-            return Err(RuntimeError::Protocol(
-                "runtime closed stdout without a response".into(),
-            ));
-        }
-        let response: BackendResponse = serde_json::from_str(&line)
-            .map_err(|error| RuntimeError::Protocol(format!("invalid response: {error}")))?;
-        if response.protocol != 1 || response.id != id {
-            return Err(RuntimeError::Protocol(
-                "backend response identity mismatch".into(),
-            ));
-        }
-        match (response.result, response.error) {
-            (Some(result), None) => Ok(result),
-            (None, Some(error)) => Err(RuntimeError::Backend {
-                code: error.code,
-                message: error.message,
-            }),
-            _ => Err(RuntimeError::Protocol(
-                "response must contain exactly one of result or error".into(),
-            )),
-        }
+        self.begin_invoke(id, method, params)?
+            .recv()
+            .map_err(|_| RuntimeError::Protocol("runtime response channel closed".into()))?
+            .map_err(RuntimeError::Protocol)
     }
 
     pub fn stop(&mut self) -> Result<(), RuntimeError> {
@@ -1120,7 +1239,12 @@ impl RuntimeProcess {
         }
         match mode {
             BackendMode::Rpc => {
-                if let Some(stdin) = self.stdin.as_mut() {
+                if let Some(rpc) = &self.rpc {
+                    if let Ok(mut stdin) = rpc.writer.lock() {
+                        let _ = stdin.write_all(b"{\"protocol\":1,\"type\":\"shutdown\"}\n");
+                        let _ = stdin.flush();
+                    }
+                } else if let Some(stdin) = self.stdin.as_mut() {
                     let _ = stdin.write_all(b"{\"protocol\":1,\"type\":\"shutdown\"}\n");
                     let _ = stdin.flush();
                 }
@@ -1968,6 +2092,77 @@ mod service_runtime_tests {
         // Tear down so the next test can claim a fresh port.
         let _ = handle.cancel();
         let _ = handle.status(Duration::from_secs(2));
+    }
+
+    #[test]
+    #[serial_test::serial]
+    fn runtime_handle_multiplexes_and_cancels_without_killing_backend() {
+        if discover_node().is_none() {
+            eprintln!("skipping: Node.js not available");
+            return;
+        }
+        let package_root = PathBuf::from(env!("CARGO_MANIFEST_DIR"))
+            .join("examples")
+            .join("hello");
+        let manifest: crate::manifest::AppManifest = serde_json::from_str(
+            &std::fs::read_to_string(package_root.join("manifest.json")).expect("read manifest"),
+        )
+        .expect("parse manifest");
+        let spec = RuntimeSpec {
+            app_id: manifest.id,
+            package_root,
+            backend: manifest.backend.expect("backend present"),
+            service_name: default_service_name(),
+            data_dir: None,
+            cache_dir: None,
+        };
+        let handle = RuntimeHandle::start_with_spec(spec).expect("RPC runtime starts");
+        let original_pid = handle
+            .status(Duration::from_secs(2))
+            .expect("status")
+            .pid
+            .expect("pid");
+
+        let slow_handle = handle.clone();
+        let slow = thread::spawn(move || {
+            slow_handle.invoke(
+                "slow",
+                "test.delay",
+                &serde_json::json!({"ms": 300, "marker": "slow"}),
+                Duration::from_secs(2),
+            )
+        });
+        thread::sleep(Duration::from_millis(25));
+        let started = Instant::now();
+        let fast = handle
+            .invoke(
+                "fast",
+                "test.delay",
+                &serde_json::json!({"ms": 5, "marker": "fast"}),
+                Duration::from_secs(1),
+            )
+            .expect("fast request succeeds while slow request is pending");
+        assert_eq!(fast["marker"], "fast");
+        assert!(started.elapsed() < Duration::from_millis(200));
+        assert_eq!(slow.join().expect("slow thread").expect("slow result")["marker"], "slow");
+
+        let timeout = handle.invoke(
+            "hang",
+            "test.hang",
+            &serde_json::json!({}),
+            Duration::from_millis(50),
+        );
+        assert!(matches!(timeout, Err(RuntimeError::Timeout(_))));
+        let greet = handle
+            .invoke(
+                "after-cancel",
+                "hello.greet",
+                &serde_json::json!({"name": "Multiplex"}),
+                Duration::from_secs(1),
+            )
+            .expect("backend remains usable after request cancellation");
+        assert_eq!(greet["pid"], original_pid);
+        assert_eq!(greet["message"], "Hello, Multiplex!");
     }
 
     /// End-to-end: launch the `examples/notes` Express + SQLite

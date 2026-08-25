@@ -2,8 +2,9 @@ const readline = require("node:readline");
 
 console.error("Alex Hello backend started");
 const input = readline.createInterface({ input: process.stdin });
+const active = new Map();
 
-input.on("line", (line) => {
+input.on("line", async (line) => {
   let request;
   try {
     request = JSON.parse(line);
@@ -13,11 +14,33 @@ input.on("line", (line) => {
       process.exitCode = 0;
       return;
     }
+    if (request.type === "cancel") {
+      active.get(request.id)?.abort();
+      active.delete(request.id);
+      return;
+    }
+    const controller = new AbortController();
+    active.set(request.id, controller);
     let result;
     switch (request.method) {
       case "test.hang":
         console.error("Starting cancellable hanging request");
-        return;
+        await new Promise((resolve, reject) => {
+          controller.signal.addEventListener("abort", () => reject(
+            Object.assign(new Error("Request cancelled"), { code: "CANCELLED" }),
+          ), { once: true });
+        });
+        break;
+      case "test.delay":
+        await new Promise((resolve, reject) => {
+          const timer = setTimeout(resolve, request.params.ms ?? 0);
+          controller.signal.addEventListener("abort", () => {
+            clearTimeout(timer);
+            reject(Object.assign(new Error("Request cancelled"), { code: "CANCELLED" }));
+          }, { once: true });
+        });
+        result = { marker: request.params.marker, pid: process.pid };
+        break;
       case "hello.greet":
         result = { message: `Hello, ${request.params.name ?? "Alex"}!`, pid: process.pid };
         break;
@@ -36,5 +59,7 @@ input.on("line", (line) => {
       id: request?.id ?? "unknown",
       error: { code: error.code ?? "BACKEND_ERROR", message: error.message },
     })}\n`);
+  } finally {
+    if (request?.id) active.delete(request.id);
   }
 });
