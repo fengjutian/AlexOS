@@ -1056,6 +1056,8 @@ pub struct PersistedConnection {
     pub transport: PersistedTransport,
     #[serde(default = "default_enabled")]
     pub enabled: bool,
+    #[serde(default)]
+    pub managed_by_manifest: bool,
 }
 
 fn default_enabled() -> bool {
@@ -1496,6 +1498,7 @@ mod tests {
                 token_account: None,
             },
             enabled: true,
+            managed_by_manifest: false,
         };
         store.upsert(connection.clone()).unwrap();
         assert_eq!(

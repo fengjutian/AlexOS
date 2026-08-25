@@ -950,6 +950,7 @@ impl DaemonService {
                     args: args.to_vec(),
                 },
                 enabled: true,
+                managed_by_manifest: false,
             })
         {
             self.mcp.disconnect(app_id, binding);
@@ -976,56 +977,107 @@ impl DaemonService {
             .filter(|connection| connection.application == app_id)
             .map(|connection| connection.binding)
             .collect::<std::collections::BTreeSet<_>>();
-        for (binding, spec) in resolved.mcp_servers {
-            if connected.contains(&binding) {
-                if self
-                    .mcp
-                    .get(app_id, &binding)
-                    .and_then(|client| client.ping())
-                    .is_ok()
-                {
-                    continue;
-                }
-                // A declared binding that no longer answers health probes is
-                // replaced from its manifest configuration. This also updates
-                // persisted configuration after endpoint/command changes.
-                self.mcp_disconnect(app_id, &binding)?;
-            }
-            match spec {
-                crate::core::manifest_v2::McpServerSpec::Stdio {
-                    command,
-                    args,
-                    legacy,
-                } => {
-                    self.mcp_connect_stdio(
-                        app_id,
-                        &binding,
-                        &command,
-                        &args,
+        let desired = resolved
+            .mcp_servers
+            .into_iter()
+            .map(|(binding, spec)| {
+                let (era, transport) = match spec {
+                    crate::core::manifest_v2::McpServerSpec::Stdio {
+                        command,
+                        args,
+                        legacy,
+                    } => (
                         if legacy {
                             crate::mcp::ProtocolEra::Legacy
                         } else {
                             crate::mcp::ProtocolEra::Modern
                         },
-                    )?;
+                        crate::mcp::PersistedTransport::Stdio { command, args },
+                    ),
+                    crate::core::manifest_v2::McpServerSpec::StreamableHttp {
+                        endpoint,
+                        token_account,
+                        legacy,
+                    } => (
+                        if legacy {
+                            crate::mcp::ProtocolEra::Legacy
+                        } else {
+                            crate::mcp::ProtocolEra::Modern
+                        },
+                        crate::mcp::PersistedTransport::StreamableHttp {
+                            endpoint,
+                            token_account,
+                        },
+                    ),
+                };
+                (
+                    binding.clone(),
+                    crate::mcp::PersistedConnection {
+                        application: app_id.into(),
+                        binding,
+                        era,
+                        transport,
+                        enabled: true,
+                        managed_by_manifest: true,
+                    },
+                )
+            })
+            .collect::<std::collections::BTreeMap<_, _>>();
+        if let Some(configs) = &self.mcp_configs {
+            for stale in configs
+                .list()
+                .map_err(|error| error.to_string())?
+                .into_iter()
+                .filter(|value| {
+                    value.application == app_id
+                        && value.managed_by_manifest
+                        && !desired.contains_key(&value.binding)
+                })
+            {
+                self.mcp_disconnect(app_id, &stale.binding)?;
+            }
+        }
+        for (binding, expected) in desired {
+            let stored = self
+                .mcp_configs
+                .as_ref()
+                .map(|configs| configs.get(app_id, &binding))
+                .transpose()
+                .map_err(|error| error.to_string())?
+                .flatten();
+            let healthy = connected.contains(&binding)
+                && self
+                    .mcp
+                    .get(app_id, &binding)
+                    .and_then(|client| client.ping())
+                    .is_ok();
+            if stored.as_ref() == Some(&expected) && healthy {
+                continue;
+            }
+            if connected.contains(&binding) {
+                self.mcp_disconnect(app_id, &binding)?;
+            }
+            match &expected.transport {
+                crate::mcp::PersistedTransport::Stdio { command, args } => {
+                    self.mcp_connect_stdio(app_id, &binding, command, args, expected.era)?;
                 }
-                crate::core::manifest_v2::McpServerSpec::StreamableHttp {
+                crate::mcp::PersistedTransport::StreamableHttp {
                     endpoint,
                     token_account,
-                    legacy,
                 } => {
                     self.mcp_connect_http(
                         app_id,
                         &binding,
-                        &endpoint,
-                        if legacy {
-                            crate::mcp::ProtocolEra::Legacy
-                        } else {
-                            crate::mcp::ProtocolEra::Modern
-                        },
+                        endpoint,
+                        expected.era,
                         token_account.as_deref(),
                     )?;
                 }
+            }
+            if let Some(configs) = &self.mcp_configs {
+                configs
+                    .upsert(expected)
+                    .map_err(|error| error.to_string())?;
             }
         }
         Ok(())
@@ -1073,6 +1125,7 @@ impl DaemonService {
                     token_account: token_account.map(str::to_owned),
                 },
                 enabled: true,
+                managed_by_manifest: false,
             })
         {
             self.mcp.disconnect(app_id, binding);
@@ -1865,6 +1918,7 @@ mod tests {
                     token_account: None,
                 },
                 enabled: true,
+                managed_by_manifest: false,
             })
             .unwrap();
         let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")))
