@@ -571,6 +571,26 @@ impl ApplicationSupervisor {
                 )));
             }
         }
+        // 0.4 honest policy gate: the 0.1 supervisor cannot yet enforce
+        // the v2 filesystem / network / shell permission policies, so a
+        // manifest that declares them is refused instead of silently
+        // running without the boundaries the author asked for.
+        let declared_policies: Vec<&str> = resolved
+            .permissions
+            .descriptors
+            .iter()
+            .map(|descriptor| descriptor.name.as_str())
+            .filter(|name| {
+                name.starts_with("fs:") || name.starts_with("net:") || name.starts_with("shell:")
+            })
+            .collect();
+        if !declared_policies.is_empty() {
+            return Err(ApplicationSupervisorError::V2LaunchNotSupported(format!(
+                "manifest declares permission policies ({}) that the 0.1 supervisor cannot \
+                 enforce; refusing to launch rather than silently run without them",
+                declared_policies.join(", ")
+            )));
+        }
         let layers = start_layers(&services)
             .map_err(|error| ApplicationSupervisorError::V2LaunchNotSupported(error.to_string()))?;
         let per_app = config.effective_per_app();
@@ -781,6 +801,14 @@ impl ApplicationSupervisor {
         service.status = ServiceStatus::Starting;
         service.last_error = None;
         let backend = service_descriptor_to_backend(service_name, spec);
+        // 0.4 / §3.1 host-global limits: services without declared
+        // quotas inherit `ALEX_DEFAULT_LIMITS` when the operator set it,
+        // so a host can cap untrusted backends without per-app opt-in.
+        let limits = match spec.resources.as_ref() {
+            Some(resources) => Some(resources_to_limits(resources)),
+            None => default_host_limits()
+                .map_err(ApplicationSupervisorError::V2LaunchNotSupported)?,
+        };
         let spec_for_launch = RuntimeSpec {
             app_id: app_id.to_owned(),
             package_root: install_root.to_path_buf(),
@@ -788,7 +816,7 @@ impl ApplicationSupervisor {
             service_name: service_name.to_owned(),
             data_dir: None,
             cache_dir: None,
-            limits: spec.resources.as_ref().map(resources_to_limits),
+            limits,
             runtime_requirements: application.runtime_requirements.clone(),
         };
         drop(guard);
@@ -1841,6 +1869,56 @@ fn resources_to_limits(resources: &ServiceResourcesDescriptor) -> crate::contain
     }
 }
 
+/// Host-global default resource limits, sourced from
+/// `ALEX_DEFAULT_LIMITS` (e.g. `memory=1024,processes=16,cpu=50`).
+/// Applied only to services that declare no per-service `resources`.
+/// Unset / empty env → `None`. Malformed values are surfaced as errors
+/// so a misconfigured host fails loudly instead of silently uncapping.
+fn default_host_limits() -> Result<Option<crate::container::ResourceLimits>, String> {
+    let Some(value) = std::env::var_os("ALEX_DEFAULT_LIMITS") else {
+        return Ok(None);
+    };
+    parse_default_limits(&value.to_string_lossy())
+}
+
+fn parse_default_limits(value: &str) -> Result<Option<crate::container::ResourceLimits>, String> {
+    let trimmed = value.trim();
+    if trimmed.is_empty() {
+        return Ok(None);
+    }
+    let mut limits = crate::container::ResourceLimits::default();
+    let mut seen = false;
+    for part in trimmed.split(',') {
+        let part = part.trim();
+        if part.is_empty() {
+            continue;
+        }
+        let Some((key, raw)) = part.split_once('=') else {
+            return Err(format!("invalid ALEX_DEFAULT_LIMITS entry {part:?}"));
+        };
+        let parsed: u32 = raw
+            .trim()
+            .parse()
+            .map_err(|_| format!("invalid ALEX_DEFAULT_LIMITS value {raw:?}"))?;
+        match key.trim() {
+            "memory" => {
+                limits.memory_mb = Some(parsed);
+                seen = true;
+            }
+            "processes" => {
+                limits.processes = Some(parsed);
+                seen = true;
+            }
+            "cpu" => {
+                limits.cpu_percent = Some(parsed);
+                seen = true;
+            }
+            other => return Err(format!("unknown ALEX_DEFAULT_LIMITS key {other:?}")),
+        }
+    }
+    Ok(seen.then_some(limits))
+}
+
 #[cfg(test)]
 #[allow(dead_code)] // helper functions only used by some tests in the module
 mod tests {
@@ -1916,6 +1994,20 @@ mod tests {
         assert_eq!(limits.cpu_percent, Some(50));
         assert_eq!(limits.processes, Some(4));
         assert_eq!(limits.data_quota_mb, Some(1024));
+    }
+
+    #[test]
+    fn default_host_limits_parse_and_reject() {
+        let limits = parse_default_limits("memory=1024,processes=16,cpu=50").unwrap().unwrap();
+        assert_eq!(limits.memory_mb, Some(1024));
+        assert_eq!(limits.processes, Some(16));
+        assert_eq!(limits.cpu_percent, Some(50));
+        assert!(parse_default_limits("").unwrap().is_none());
+        assert!(parse_default_limits("memory=bad").is_err());
+        assert!(parse_default_limits("disk=1").is_err());
+        let partial = parse_default_limits("processes=4").unwrap().unwrap();
+        assert_eq!(partial.processes, Some(4));
+        assert_eq!(partial.memory_mb, None);
     }
 
     #[test]
@@ -2133,6 +2225,63 @@ mod tests {
             Err(ApplicationSupervisorError::V2LaunchNotSupported(message)) => {
                 assert!(message.contains("runtime Python"), "unexpected: {message}");
                 assert!(message.contains("not available"), "unexpected: {message}");
+            }
+            other => panic!("expected V2LaunchNotSupported, got {other:?}"),
+        }
+    }
+
+    #[test]
+    fn start_application_refuses_unescorted_policy_declarations() {
+        let supervisor = ApplicationSupervisor::new();
+        use crate::core::{
+            application_manifest::ApplicationManifest,
+            manifest_v2::{ApplicationManifestV2, RuntimeRequirements, ServiceSpec},
+        };
+        let mut services = BTreeMap::new();
+        services.insert(
+            "worker".to_owned(),
+            ServiceSpec {
+                runtime: V2Runtime::Node,
+                command: "main.js".into(),
+                args: Vec::new(),
+                depends_on: Vec::new(),
+                env: BTreeMap::new(),
+                port: None,
+                health: None,
+                restart: Default::default(),
+                dev: None,
+                resources: None,
+            },
+        );
+        let manifest = ApplicationManifestV2 {
+            schema_version: 2,
+            id: "com.example.policy".into(),
+            name: "policy".into(),
+            version: "0.1.0".into(),
+            frontend: None,
+            runtime: RuntimeRequirements {
+                node: Some("22".into()),
+                python: None,
+            },
+            services,
+            mcp_servers: BTreeMap::new(),
+            agent: None,
+            storage: Vec::new(),
+            permissions: crate::core::manifest_v2::PermissionPolicy {
+                filesystem: Default::default(),
+                network: crate::core::manifest_v2::NetworkPermissions {
+                    allow: vec!["https://example.com".into()],
+                },
+                shell: Default::default(),
+            },
+        };
+        let unified = ApplicationManifest::V2(manifest);
+        let resolved = unified.resolve().expect("resolve policy app");
+        let result = supervisor.start_application("com.example.policy", Path::new("."), &resolved);
+        match result {
+            Err(ApplicationSupervisorError::V2LaunchNotSupported(message)) => {
+                assert!(message.contains("permission policies"), "unexpected: {message}");
+                assert!(message.contains("net:allow:https://example.com"), "unexpected: {message}");
             }
             other => panic!("expected V2LaunchNotSupported, got {other:?}"),
         }

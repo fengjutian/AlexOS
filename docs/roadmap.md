@@ -60,16 +60,24 @@ nav_order: 4
 - [已完成] 应用默认不依赖用户 PATH：`require_managed` 已建模；Node 启动路径经 provider 解析
   （受管缓存优先、系统回退保留）；`runtime.node` / `runtime.python` 版本钉定已线程化到启动路径；
 - [已完成] Python 服务 dispatch 经 provider（managed-only，无系统回退）；离线 Runtime 包导入
-  CLI（`alex runtime import` / `alex runtime list`）；
+  CLI（`alex runtime import` / `alex runtime list` / `alex runtime install <url>` 下载安装）；
 - [未做] `dataQuotaMb` 磁盘配额硬性 enforcement（需 0.3 volume/ACL 层）；受管运行时下载的
-  真实 catalog/服务端集成测试。
+  真实 catalog/服务端集成测试（下载/校验/解包/回收已用内存 downloader + 合成 ZIP 单测覆盖）。
 
 ### 0.4 Backend 安全边界
 
-- Restricted Token、Job Object、ACL 和可执行文件白名单组合；
-- backend 文件、进程和网络策略强制执行；
-- capabilities 诚实报告不可用边界；
-- 权限撤销与审计覆盖实际服务进程。
+- [已完成基础] 可执行文件白名单（`src/core/exec_allowlist.rs`：package-relative path + SHA-256 双匹配；
+  空白名单 = 拒绝所有 Native service；supervisor 对 `runtime: native` 强制检查）；
+- [已完成基础] 服务级 `dataQuotaMb` 启动时配额闸门（超限拒绝启动；运行中增长仍需 0.3 volume/ACL 层硬配额）；
+- [已完成] capabilities 诚实报告（`PlatformCapabilities.exec_allowlist` + `system.capabilities` 上报
+  `filesystemSandbox` / `networkSandbox` / `execAllowlist` 等真实边界）；
+- [已完成] 政策声明拒绝闸门：manifest 声明 `filesystem` / `network` / `shell` 政策但宿主尚不能
+  强制时，`start_application` 拒绝启动（诚实不静默降级）；宿主全局默认限额
+  `ALEX_DEFAULT_LIMITS`（`memory=` / `processes=` / `cpu=`）应用到未声明 resources 的服务；
+- [未做] Restricted Token、Job Object、ACL 三者组合（Job Object 已用于资源限制与进程树清理，
+  Restricted Token / ACL 尚未接入 service 启动路径）；
+- [未做] backend 文件、进程和网络策略强制执行（当前为「声明即拒绝」，未到「声明即强制」）；
+- [未做] 权限撤销与审计覆盖实际服务进程。
 
 以下旧 P0/P1/P2 内容保留为历史细分任务；若与上述顺序冲突，以上述 Runtime MVP 为准。
 

@@ -365,8 +365,27 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 
 限制：
 
-- `dataQuotaMb` 磁盘配额仍为 reporting-only（需 0.3 volume/ACL 层）；
+- `dataQuotaMb` 磁盘配额为启动时闸门（超限拒绝启动）；运行中增长仍无硬性 ACL/volume 限制（需 0.3 volume/ACL 层）；
 - 受管运行时下载无真实 catalog/服务端集成测试（下载/校验/解包/回收经内存 downloader + 合成 ZIP 单测覆盖）。
+
+### 2.12 Backend 安全边界（0.4 部分）
+
+已实现：
+
+- Native service 可执行文件白名单（`src/core/exec_allowlist.rs`）：`<ALEX_DATA_DIR>/AlexOS/exec-allowlist.json`
+  中按 package-relative path + SHA-256 双匹配；空白名单 = 拒绝所有 Native service（安全默认）；
+  supervisor 对 `runtime: native` 强制检查，拒绝时报 `ExecNotAllowlisted`；
+- 服务级 `dataQuotaMb` 启动时配额闸门（`data_usage_mb` 递归统计，超限拒绝启动并报 `QuotaExceeded`）；
+- capabilities 诚实报告：`PlatformCapabilities` 新增 `exec_allowlist`，`system.capabilities` 上报
+  `filesystemSandbox` / `networkSandbox` / `execAllowlist` / `processTreeLimits` 等真实边界
+  （filesystem/network sandbox 在 0.1 supervisor 路径为 `false`，诚实不夸大）。
+
+限制：
+
+- Restricted Token 与 ACL 尚未接入 service 启动路径（`grant_restricted_path` / `RestrictedJobProvider`
+  已存在，供 0.3/0.4 接线）；
+- backend 文件、进程和网络策略在 0.1 supervisor 路径未强制（容器路径 `enforce_policy` 已有雏形）；
+- 权限撤销与审计尚未覆盖实际运行中的服务进程。
 
 ## 关联文档
 

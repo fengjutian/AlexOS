@@ -366,6 +366,17 @@ enum RuntimeCommands {
         #[arg(long)]
         sha256: String,
     },
+    /// Download, verify and install a runtime package from an HTTPS URL.
+    Install {
+        url: String,
+        #[arg(long, value_enum)]
+        kind: RuntimeKindArg,
+        #[arg(long)]
+        version: String,
+        /// Expected SHA-256 of the archive (hex).
+        #[arg(long)]
+        sha256: String,
+    },
     /// List runtimes currently installed in the managed cache.
     List,
 }
@@ -1005,6 +1016,12 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 version,
                 sha256,
             } => runtime_import(archive, kind, version, sha256)?,
+            RuntimeCommands::Install {
+                url,
+                kind,
+                version,
+                sha256,
+            } => runtime_install(url, kind, version, sha256)?,
             RuntimeCommands::List => runtime_list()?,
         },
         Commands::Doctor => run_doctor()?,
@@ -1031,6 +1048,34 @@ fn runtime_import(
         &alex::runtime_provider::TargetTriple::host(),
         &package,
         &archive,
+    )?;
+    println!(
+        "installed {} {} -> {}",
+        runtime_kind_label(kind),
+        resolved.version.as_deref().unwrap_or("?"),
+        resolved.executable.display()
+    );
+    Ok(())
+}
+
+fn runtime_install(
+    url: String,
+    kind: RuntimeKindArg,
+    version: String,
+    sha256: String,
+) -> Result<(), Box<dyn std::error::Error>> {
+    let provider = alex::runtime_provider::RuntimeProvider::system(Arc::new(
+        alex::runtime::discover_node,
+    ));
+    let package = alex::runtime_provider::RuntimePackage {
+        version,
+        url,
+        sha256,
+    };
+    let resolved = provider.install(
+        kind.into_service_runtime(),
+        &alex::runtime_provider::TargetTriple::host(),
+        &package,
     )?;
     println!(
         "installed {} {} -> {}",
