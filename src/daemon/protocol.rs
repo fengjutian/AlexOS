@@ -279,6 +279,30 @@ pub enum ControlCommand {
     ModelEmbed {
         request: crate::model::EmbedRequest,
     },
+    ModelProviders,
+    ModelProviderUpsert {
+        config: crate::model::remote::RemoteProviderConfig,
+    },
+    ModelProviderRemove {
+        provider_id: String,
+    },
+    ModelProviderHealth {
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        provider_id: Option<String>,
+    },
+    ModelSecretSet {
+        service: String,
+        account: String,
+        secret: crate::model::remote::SecretValue,
+    },
+    ModelSecretDelete {
+        service: String,
+        account: String,
+    },
+    ModelSecretExists {
+        service: String,
+        account: String,
+    },
     AgentCreate {
         app_id: String,
         spec: crate::agent::AgentSpec,

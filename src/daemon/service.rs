@@ -216,6 +216,12 @@ impl DaemonService {
         models
             .register_process_workers(&root.join("runtimes"))
             .map_err(|error| error.to_string())?;
+        let secret_resolver = crate::model::remote::SecretResolver::new(Arc::new(
+            crate::platform::secret::native(),
+        ));
+        let remote_router = crate::model::remote::RemoteProviderRouter::open(root, secret_resolver)
+            .map_err(|error| error.to_string())?;
+        models.set_remote(remote_router);
         self.agents = Some(
             crate::agent::AgentManager::open(root.join("agents"), models.clone(), self.mcp.clone())
                 .map_err(|error| error.to_string())?

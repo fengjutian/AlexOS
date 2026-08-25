@@ -16,6 +16,8 @@ use thiserror::Error;
 
 use crate::platform::PlatformServices;
 
+pub mod remote;
+
 const INDEX_SCHEMA_VERSION: u32 = 1;
 const WORKER_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
 
@@ -494,6 +496,7 @@ pub struct ModelManager {
     store: ModelStore,
     workers: Arc<Mutex<BTreeMap<String, Arc<dyn InferenceWorker>>>>,
     loaded: Arc<Mutex<BTreeMap<String, String>>>,
+    remote: Arc<Mutex<Option<remote::RemoteProviderRouter>>>,
 }
 
 impl ModelManager {
@@ -502,7 +505,26 @@ impl ModelManager {
             store,
             workers: Arc::new(Mutex::new(BTreeMap::new())),
             loaded: Arc::new(Mutex::new(BTreeMap::new())),
+            remote: Arc::new(Mutex::new(None)),
         }
+    }
+
+    /// Attach the daemon-owned remote provider router. `remote/<provider>/<model>`
+    /// model IDs are then routed through it transparently by [`Self::generate`]
+    /// and [`Self::embed`].
+    pub fn set_remote(&self, router: remote::RemoteProviderRouter) {
+        *self
+            .remote
+            .lock()
+            .expect("remote router lock poisoned") = Some(router);
+    }
+
+    fn remote_router(&self) -> Result<remote::RemoteProviderRouter, ModelError> {
+        self.remote
+            .lock()
+            .map_err(|_| ModelError::Worker("remote router lock poisoned".into()))?
+            .clone()
+            .ok_or_else(|| ModelError::Worker("remote providers are not configured".into()))
     }
     pub fn register_worker(&self, worker: Arc<dyn InferenceWorker>) -> Result<(), ModelError> {
         let kind = worker.kind().to_owned();
@@ -585,6 +607,19 @@ impl ModelManager {
         request: &GenerateRequest,
         emit: &mut dyn FnMut(GenerateEvent) -> Result<(), ModelError>,
     ) -> Result<(), ModelError> {
+        if request.model.starts_with("remote/") {
+            let router = self.remote_router()?;
+            return router
+                .generate(request, &mut |event| {
+                    emit(event).map_err(|error| {
+                        remote::ProviderError::new(
+                            remote::ProviderErrorKind::Transport,
+                            error.to_string(),
+                        )
+                    })
+                })
+                .map_err(|error| ModelError::Worker(error.to_string()));
+        }
         let worker_kind = self
             .loaded
             .lock()
@@ -595,6 +630,12 @@ impl ModelManager {
         self.worker(&worker_kind)?.generate(request, emit)
     }
     pub fn embed(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError> {
+        if request.model.starts_with("remote/") {
+            let router = self.remote_router()?;
+            return router
+                .embed(request)
+                .map_err(|error| ModelError::Worker(error.to_string()));
+        }
         let worker_kind = self
             .loaded
             .lock()
@@ -605,6 +646,10 @@ impl ModelManager {
         self.worker(&worker_kind)?.embed(request)
     }
     pub fn cancel(&self, model_id: &str, request_id: &str) -> Result<(), ModelError> {
+        if model_id.starts_with("remote/") {
+            self.remote_router()?.cancel(request_id);
+            return Ok(());
+        }
         let worker_kind = self
             .loaded
             .lock()
