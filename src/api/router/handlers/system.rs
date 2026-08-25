@@ -169,6 +169,7 @@ impl ApiRouter {
                 "processTreeLimits": platform_capabilities.process_tree_limits,
                 "filesystemSandbox": platform_capabilities.filesystem_sandbox,
                 "networkSandbox": platform_capabilities.network_sandbox,
+                "execAllowlist": platform_capabilities.exec_allowlist,
                 "oci": platform_capabilities.oci,
             },
         }))

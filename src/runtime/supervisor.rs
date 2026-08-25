@@ -169,6 +169,10 @@ pub enum RuntimeError {
     Timeout(Duration),
     #[error("failed to apply runtime isolation: {0}")]
     Isolation(String),
+    #[error("native executable is not allowlisted: {0}")]
+    ExecNotAllowlisted(String),
+    #[error("service data dir exceeds quota: {used_mb} MiB used, {quota_mb} MiB allowed")]
+    QuotaExceeded { used_mb: u64, quota_mb: u32 },
     #[error("service backend did not report ready within {0:?}")]
     ServiceReadyTimeout(Duration),
     #[error("no free port available in service range 28000-28999")]
@@ -476,6 +480,16 @@ impl RuntimeHandle {
             }
             if spec.cache_dir.is_none() {
                 spec.cache_dir = Some(dirs.cache.clone());
+            }
+        }
+        // 0.4 / 0.3 dataQuotaMb: refuse to launch when the service's
+        // data directory already exceeds its declared soft quota. This
+        // is a launch-time gate, not an ACL-grade hard quota (which
+        // needs the volume/ACL layer); it stops a repeatedly-over-quota
+        // app from growing further without operator action.
+        if let Some(quota_mb) = spec.limits.as_ref().and_then(|limits| limits.data_quota_mb) {
+            if let Some(data_dir) = spec.data_dir.as_deref() {
+                check_data_quota(data_dir, quota_mb)?;
             }
         }
         let log_dir = auto_dirs.as_ref().map(|dirs| dirs.logs.clone());
@@ -902,7 +916,16 @@ impl RuntimeProcess {
                 )?,
                 false,
             ),
-            RuntimeKind::Native => (PathBuf::from(&spec.backend.entry), true),
+            RuntimeKind::Native => {
+                // 0.4 executable allowlist: Native services are refused
+                // unless the host allowlists the exact path + sha256.
+                let allowlist = crate::core::exec_allowlist::load_host()
+                    .map_err(|error| RuntimeError::ExecNotAllowlisted(error.to_string()))?;
+                allowlist
+                    .check(&spec.package_root, &spec.backend.entry)
+                    .map_err(|error| RuntimeError::ExecNotAllowlisted(error.to_string()))?;
+                (spec.package_root.join(&spec.backend.entry), true)
+            }
         };
         let mut command = Command::new(&executable);
         if allow_native_entry {
@@ -1731,6 +1754,38 @@ fn find_on_path(name: &str) -> Option<PathBuf> {
     })
 }
 
+/// Recursively sum the bytes under `path`, rounded **up** to MiB so a
+/// non-empty directory never reports 0 MiB.
+fn data_usage_mb(path: &Path) -> u64 {
+    fn walk(dir: &Path, total: &mut u64) {
+        let Ok(entries) = std::fs::read_dir(dir) else {
+            return;
+        };
+        for entry in entries.flatten() {
+            let path = entry.path();
+            if path.is_dir() {
+                walk(&path, total);
+            } else if let Ok(metadata) = entry.metadata() {
+                *total = total.saturating_add(metadata.len());
+            }
+        }
+    }
+    let mut total = 0_u64;
+    walk(path, &mut total);
+    total.div_ceil(1024 * 1024)
+}
+
+/// Launch-time data-directory quota gate. Only checks the current
+/// usage; a running process can still grow past the quota (the hard
+/// ACL/volume enforcement arrives with the 0.3 volume layer).
+fn check_data_quota(data_dir: &Path, quota_mb: u32) -> Result<(), RuntimeError> {
+    let used = data_usage_mb(data_dir);
+    if used > u64::from(quota_mb) {
+        return Err(RuntimeError::QuotaExceeded { used_mb: used, quota_mb });
+    }
+    Ok(())
+}
+
 #[cfg(windows)]
 fn terminate_process_tree(pid: u32) -> bool {
     use std::os::windows::process::CommandExt;
@@ -2005,6 +2060,24 @@ mod service_runtime_tests {
         let a = generate_runtime_token();
         let b = generate_runtime_token();
         assert_ne!(a, b);
+    }
+
+    #[test]
+    fn data_quota_gate_measures_and_enforces() {
+        let temp = tempfile::tempdir().unwrap();
+        let data = temp.path().join("data");
+        std::fs::create_dir_all(&data).unwrap();
+        // 2 MiB + 1 byte → rounds up to 3 MiB.
+        std::fs::write(data.join("big.bin"), vec![0_u8; 2 * 1024 * 1024 + 1]).unwrap();
+        assert_eq!(data_usage_mb(&data), 3);
+        assert!(matches!(
+            check_data_quota(&data, 2),
+            Err(RuntimeError::QuotaExceeded {
+                used_mb: 3,
+                quota_mb: 2
+            })
+        ));
+        check_data_quota(&data, 3).unwrap();
     }
 
     #[test]

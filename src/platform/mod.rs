@@ -27,6 +27,10 @@ pub struct PlatformCapabilities {
     pub process_tree_limits: bool,
     pub filesystem_sandbox: bool,
     pub network_sandbox: bool,
+    /// Host enforces the Native-service executable allowlist (path +
+    /// sha256). `true` on the Windows host; an empty allowlist denies
+    /// every Native launch.
+    pub exec_allowlist: bool,
     pub oci: bool,
 }
 

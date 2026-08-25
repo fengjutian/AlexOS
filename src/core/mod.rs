@@ -1,6 +1,7 @@
 //! App lifecycle: manifest, pack/install, AppManager, updates, trust, plugins.
 
 pub mod application_manifest;
+pub mod exec_allowlist;
 pub mod manager;
 pub mod manifest;
 pub mod manifest_v2;

@@ -22,6 +22,7 @@ impl PlatformServices for NativePlatform {
             process_tree_limits: false,
             filesystem_sandbox: false,
             network_sandbox: false,
+            exec_allowlist: false,
             oci: false,
         }
     }
