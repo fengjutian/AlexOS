@@ -119,6 +119,20 @@ enum Commands {
         #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
         pipe: String,
     },
+    /// Invoke an RPC method on a service owned by the Alex Runtime daemon.
+    InvokeService {
+        id: String,
+        method: String,
+        #[arg(long, default_value = "main")]
+        service: String,
+        /// JSON value passed to the service method.
+        #[arg(long, default_value = "{}")]
+        arguments: String,
+        #[arg(long, default_value_t = 30_000)]
+        timeout_ms: u64,
+        #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
+        pipe: String,
+    },
     /// Gracefully stop application backends and shut down alexd.
     Shutdown {
         #[arg(long, default_value = alex::daemon::DEFAULT_PIPE_NAME)]
@@ -565,6 +579,24 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         Commands::ListServices { id, pipe } => daemon_command(
             &pipe,
             alex::daemon::ControlCommand::ListServices { app_id: id },
+        )?,
+        Commands::InvokeService {
+            id,
+            method,
+            service,
+            arguments,
+            timeout_ms,
+            pipe,
+        } => daemon_command(
+            &pipe,
+            alex::daemon::ControlCommand::InvokeService {
+                app_id: id,
+                service,
+                method,
+                arguments: serde_json::from_str(&arguments)
+                    .map_err(|error| format!("invalid --arguments JSON: {error}"))?,
+                timeout_ms,
+            },
         )?,
         Commands::Shutdown { pipe } => {
             daemon_command(&pipe, alex::daemon::ControlCommand::Shutdown)?
