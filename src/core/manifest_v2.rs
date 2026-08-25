@@ -494,9 +494,15 @@ mcpServers:
     transport: streamable-http
     endpoint: https://mcp.example.test/v1
     tokenAccount: com.example.mcp/remote
+agent:
+  model: local/test@1
+  tools:
+    - { binding: local, name: echo, idempotent: true }
+  budget: { maxSteps: 8, maxTokens: 1000, maxToolCalls: 4, maxWallTimeMs: 60000 }
 "#,
         );
         assert_eq!(manifest.mcp_servers.len(), 2);
+        assert_eq!(manifest.agent.as_ref().unwrap().model, "local/test@1");
         manifest.validate(temp.path()).unwrap();
     }
 

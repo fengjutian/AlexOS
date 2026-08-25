@@ -435,6 +435,7 @@ impl DaemonService {
                 stream_id,
                 request,
             } => self.model_generate(&app_id, &stream_id, request),
+            ControlCommand::ModelEmbed { request } => self.model_embed(request),
             ControlCommand::AgentCreate {
                 app_id,
                 spec,
@@ -1856,6 +1857,19 @@ impl DaemonService {
         Ok(json!({ "streamId": stream_id, "requestId": response_request_id }))
     }
 
+    fn model_embed(
+        &self,
+        request: crate::model::EmbedRequest,
+    ) -> Result<serde_json::Value, String> {
+        self.model_manager()?
+            .embed(&request)
+            .and_then(|response| {
+                serde_json::to_value(response)
+                    .map_err(|error| crate::model::ModelError::Worker(error.to_string()))
+            })
+            .map_err(|error| error.to_string())
+    }
+
     fn agent_manager(&self) -> Result<&crate::agent::AgentManager, String> {
         self.agents
             .as_ref()
@@ -2323,6 +2337,27 @@ mod tests {
             })?;
             emit(crate::model::GenerateEvent::Finish {
                 reason: "stop".into(),
+            })
+        }
+        fn embed(
+            &self,
+            request: &crate::model::EmbedRequest,
+        ) -> Result<crate::model::EmbeddingResponse, crate::model::ModelError> {
+            Ok(crate::model::EmbeddingResponse {
+                request_id: request.request_id.clone(),
+                model: request.model.clone(),
+                embeddings: request
+                    .input
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| crate::model::Embedding {
+                        index,
+                        values: vec![1.0],
+                    })
+                    .collect(),
+                usage: crate::model::EmbedUsage {
+                    input_tokens: request.input.len() as u64,
+                },
             })
         }
         fn cancel(&self, _request_id: &str) -> Result<(), crate::model::ModelError> {

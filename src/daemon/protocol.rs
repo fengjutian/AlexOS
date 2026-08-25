@@ -265,6 +265,9 @@ pub enum ControlCommand {
         stream_id: String,
         request: crate::model::GenerateRequest,
     },
+    ModelEmbed {
+        request: crate::model::EmbedRequest,
+    },
     AgentCreate {
         app_id: String,
         spec: crate::agent::AgentSpec,
@@ -601,6 +604,14 @@ mod tests {
             ControlCommand::ModelLoad {
                 model_id: "local/tiny@1".into(),
                 worker: "llama-cpp".into(),
+            },
+            ControlCommand::ModelEmbed {
+                request: crate::model::EmbedRequest {
+                    request_id: "embed-1".into(),
+                    model: "local/tiny@1".into(),
+                    input: vec!["hello".into()],
+                    options: serde_json::json!({}),
+                },
             },
         ] {
             let value = serde_json::to_value(&command).unwrap();

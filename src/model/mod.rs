@@ -220,6 +220,40 @@ pub enum GenerateEvent {
     },
 }
 
+/// One embedding request. `input` is a batch of texts so a RAG-style
+/// application can vectorize several chunks in one worker round-trip.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmbedRequest {
+    pub request_id: String,
+    pub model: String,
+    pub input: Vec<String>,
+    #[serde(default)]
+    pub options: Value,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct Embedding {
+    pub index: usize,
+    pub values: Vec<f32>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmbedUsage {
+    pub input_tokens: u64,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct EmbeddingResponse {
+    pub request_id: String,
+    pub model: String,
+    pub embeddings: Vec<Embedding>,
+    pub usage: EmbedUsage,
+}
+
 pub trait InferenceWorker: Send + Sync {
     fn kind(&self) -> &str;
     fn load(&self, model: &ModelManifest, blob: &Path) -> Result<(), ModelError>;
@@ -228,6 +262,7 @@ pub trait InferenceWorker: Send + Sync {
         request: &GenerateRequest,
         emit: &mut dyn FnMut(GenerateEvent) -> Result<(), ModelError>,
     ) -> Result<(), ModelError>;
+    fn embed(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError>;
     fn cancel(&self, request_id: &str) -> Result<(), ModelError>;
     fn unload(&self, model_id: &str) -> Result<(), ModelError>;
 }
@@ -413,6 +448,27 @@ impl InferenceWorker for ProcessInferenceWorker {
             }
         }
     }
+    fn embed(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError> {
+        let _operation = self
+            .operation
+            .lock()
+            .map_err(|_| ModelError::Worker("worker operation lock poisoned".into()))?;
+        self.send(&serde_json::json!({"protocol":1,"type":"embed","request":request}))?;
+        let value = self.receive()?;
+        if value.get("requestId").and_then(Value::as_str) != Some(&request.request_id) {
+            return Err(ModelError::Worker(
+                "worker response requestId mismatch".into(),
+            ));
+        }
+        let response: EmbeddingResponse = serde_json::from_value(
+            value
+                .get("response")
+                .cloned()
+                .ok_or_else(|| ModelError::Worker("worker response omitted response".into()))?,
+        )
+        .map_err(|error| ModelError::Worker(error.to_string()))?;
+        Ok(response)
+    }
     fn cancel(&self, request_id: &str) -> Result<(), ModelError> {
         self.send(&serde_json::json!({"protocol":1,"type":"cancel","requestId":request_id}))
     }
@@ -537,6 +593,16 @@ impl ModelManager {
             .cloned()
             .ok_or_else(|| ModelError::Worker("model is not loaded".into()))?;
         self.worker(&worker_kind)?.generate(request, emit)
+    }
+    pub fn embed(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError> {
+        let worker_kind = self
+            .loaded
+            .lock()
+            .map_err(|_| ModelError::Worker("loaded registry lock poisoned".into()))?
+            .get(&request.model)
+            .cloned()
+            .ok_or_else(|| ModelError::Worker("model is not loaded".into()))?;
+        self.worker(&worker_kind)?.embed(request)
     }
     pub fn cancel(&self, model_id: &str, request_id: &str) -> Result<(), ModelError> {
         let worker_kind = self
@@ -695,6 +761,41 @@ mod tests {
             Err(ModelError::DigestMismatch { .. })
         ));
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn embed_types_round_trip_through_json() {
+        let request = EmbedRequest {
+            request_id: "embed-1".into(),
+            model: "local/tiny@1".into(),
+            input: vec!["hello".into(), "world".into()],
+            options: serde_json::json!({}),
+        };
+        let response = EmbeddingResponse {
+            request_id: "embed-1".into(),
+            model: "local/tiny@1".into(),
+            embeddings: vec![
+                Embedding {
+                    index: 0,
+                    values: vec![0.5, -0.5],
+                },
+                Embedding {
+                    index: 1,
+                    values: vec![1.0, 0.0],
+                },
+            ],
+            usage: EmbedUsage { input_tokens: 2 },
+        };
+        assert_eq!(
+            serde_json::from_value::<EmbedRequest>(serde_json::to_value(&request).unwrap())
+                .unwrap(),
+            request
+        );
+        assert_eq!(
+            serde_json::from_value::<EmbeddingResponse>(serde_json::to_value(&response).unwrap())
+                .unwrap(),
+            response
+        );
     }
 
     #[test]

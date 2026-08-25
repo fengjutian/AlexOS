@@ -351,6 +351,9 @@ impl AgentManager {
         if matches!(run.state, AgentState::Completed | AgentState::Cancelled) {
             return Ok(run);
         }
+        if run.state == AgentState::WaitingApproval {
+            return Ok(run);
+        }
         if run.state == AgentState::WaitingTool
             && run.pending_tool.as_ref().is_some_and(|call| !call.approved)
         {
@@ -541,6 +544,12 @@ impl AgentManager {
         Ok(run)
     }
     pub fn pause(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
+        if matches!(
+            self.status(application, run_id)?.state,
+            AgentState::Completed | AgentState::Cancelled
+        ) {
+            return Err(AgentError::Conflict("terminal run cannot be paused".into()));
+        }
         if let Ok(values) = self.cancellations.lock()
             && let Some(token) = values.get(run_id)
         {
@@ -549,6 +558,15 @@ impl AgentManager {
         self.set_terminalish(application, run_id, AgentState::Paused)
     }
     pub fn cancel(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
+        let current = self.status(application, run_id)?;
+        if current.state == AgentState::Completed {
+            return Err(AgentError::Conflict(
+                "completed run cannot be cancelled".into(),
+            ));
+        }
+        if current.state == AgentState::Cancelled {
+            return Ok(current);
+        }
         if let Ok(values) = self.cancellations.lock()
             && let Some(token) = values.get(run_id)
         {
@@ -888,6 +906,17 @@ mod tests {
                     reason: "tool-call".into(),
                 })
             }
+        }
+        fn embed(
+            &self,
+            request: &crate::model::EmbedRequest,
+        ) -> Result<crate::model::EmbeddingResponse, crate::model::ModelError> {
+            Ok(crate::model::EmbeddingResponse {
+                request_id: request.request_id.clone(),
+                model: request.model.clone(),
+                embeddings: vec![],
+                usage: crate::model::EmbedUsage { input_tokens: 0 },
+            })
         }
         fn cancel(&self, _: &str) -> Result<(), crate::model::ModelError> {
             Ok(())
