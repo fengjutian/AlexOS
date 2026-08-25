@@ -180,7 +180,6 @@
       "agent.list",
       "agent.history",
       "agent.timeline",
-      "agent.timeline",
       "events.subscribe",
       "events.unsubscribe",
       "system.instances.create",

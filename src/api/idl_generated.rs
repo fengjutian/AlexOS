@@ -99,6 +99,7 @@ pub const ALWAYS: &[&str] = &[
     "agent.status",
     "agent.list",
     "agent.history",
+    "agent.timeline",
     "events.subscribe",
     "events.unsubscribe",
     "system.instances.create",
@@ -763,6 +764,13 @@ pub const METHODS: &[MethodDescriptor] = &[
     },
     MethodDescriptor {
         name: "agent.history",
+        domain: "agent",
+        availability: "always",
+        permission: "agent.run",
+        execution: "blocking",
+    },
+    MethodDescriptor {
+        name: "agent.timeline",
         domain: "agent",
         availability: "always",
         permission: "agent.run",

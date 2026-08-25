@@ -85,9 +85,8 @@ impl crate::agent::AgentNativeTools for DaemonAgentNativeTools {
                     .state
                     .load()
                     .map_err(|error| crate::agent::AgentError::Tool(error.to_string()))?;
-                Ok(serde_json::to_value(state.applications.get(application)).map_err(|error| {
-                    crate::agent::AgentError::Tool(error.to_string())
-                })?)
+                Ok(serde_json::to_value(state.applications.get(application))
+                    .map_err(|error| crate::agent::AgentError::Tool(error.to_string()))?)
             }
             _ => Err(crate::agent::AgentError::Tool(format!(
                 "unknown Alex native tool {name:?}"

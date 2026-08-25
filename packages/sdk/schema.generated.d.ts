@@ -108,6 +108,7 @@ export type AlexCapability =
   | "agent.status"
   | "agent.list"
   | "agent.history"
+  | "agent.timeline"
   | "events.subscribe"
   | "events.unsubscribe"
   | "system.instances.create"
@@ -234,6 +235,7 @@ export interface AlexMethodMap {
   "agent.status": { params: AgentRunId; result: JsonValue };
   "agent.list": { params: Empty; result: { "runs": Array<JsonValue> } };
   "agent.history": { params: { "runId": string; "limit"?: number }; result: { "events": Array<JsonValue> } };
+  "agent.timeline": { params: { "runId": string; "limit"?: number }; result: { "entries": Array<JsonValue> } };
   "events.subscribe": { params: { "event": string; "filter"?: { [key: string]: unknown } }; result: { "subscriptionId": string; "event": string } };
   "events.unsubscribe": { params: { "subscriptionId": string }; result: { "removed": boolean } };
   "system.instances.create": { params: { "appId": string; "appVersion": string; "instanceId"?: string; "isolation"?: "process" | "job" | "appcontainer" | "wsl-oci" }; result: ContainerView };

@@ -390,7 +390,9 @@ impl AgentManager {
     ) -> Result<Vec<AgentTimelineEntry>, AgentError> {
         let run = self.status(application, run_id)?;
         if !(1..=1000).contains(&limit) {
-            return Err(AgentError::Invalid("timeline limit must be 1..=1000".into()));
+            return Err(AgentError::Invalid(
+                "timeline limit must be 1..=1000".into(),
+            ));
         }
         let path = self.run_dir(run_id).join("events.jsonl");
         if !path.is_file() {
@@ -400,17 +402,19 @@ impl AgentManager {
             .lines()
             .enumerate()
             .filter_map(|(index, line)| {
-                serde_json::from_str::<AgentTimelineEntry>(line).ok().or_else(|| {
-                    serde_json::from_str::<AgentEvent>(line)
-                        .ok()
-                        .map(|event| AgentTimelineEntry {
-                            sequence: index as u64 + 1,
-                            timestamp_ms: 0,
-                            generation: run.generation,
-                            step: run.step,
-                            event,
+                serde_json::from_str::<AgentTimelineEntry>(line)
+                    .ok()
+                    .or_else(|| {
+                        serde_json::from_str::<AgentEvent>(line).ok().map(|event| {
+                            AgentTimelineEntry {
+                                sequence: index as u64 + 1,
+                                timestamp_ms: 0,
+                                generation: run.generation,
+                                step: run.step,
+                                event,
+                            }
                         })
-                })
+                    })
             })
             .collect::<Vec<_>>();
         if entries.len() > limit {
@@ -517,7 +521,9 @@ impl AgentManager {
                 let value = if call.binding == "alex" {
                     self.native_tools
                         .as_ref()
-                        .ok_or_else(|| AgentError::Tool("Alex native tools are unavailable".into()))?
+                        .ok_or_else(|| {
+                            AgentError::Tool("Alex native tools are unavailable".into())
+                        })?
                         .call(
                             application,
                             &call.name,
@@ -864,8 +870,8 @@ impl AgentManager {
             event: event.clone(),
         };
         let mut file = OpenOptions::new().create(true).append(true).open(path)?;
-        let encoded = serde_json::to_vec(&entry)
-            .map_err(|error| AgentError::Invalid(error.to_string()))?;
+        let encoded =
+            serde_json::to_vec(&entry).map_err(|error| AgentError::Invalid(error.to_string()))?;
         if encoded.len() > MAX_EVENT_BYTES {
             return Err(AgentError::Invalid("agent event exceeds 1 MiB".into()));
         }
@@ -903,8 +909,7 @@ pub fn validate_spec(spec: &AgentSpec) -> Result<(), AgentError> {
     }
     for tool in &spec.tools {
         if tool.binding == "alex"
-            && (!matches!(tool.name.as_str(), "system.info" | "runtime.status")
-                || !tool.idempotent)
+            && (!matches!(tool.name.as_str(), "system.info" | "runtime.status") || !tool.idempotent)
         {
             return Err(AgentError::Invalid(
                 "Alex native tools must be a supported read-only idempotent tool".into(),
