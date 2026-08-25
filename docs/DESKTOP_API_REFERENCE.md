@@ -85,6 +85,14 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `model.unload` | always | method-specific | blocking |
 | `model.cancel` | always | method-specific | blocking |
 | `model.generate` | always | method-specific | blocking |
+| `model.embed` | always | method-specific | blocking |
+| `model.providers` | always | method-specific | blocking |
+| `model.providerUpsert` | always | method-specific | blocking |
+| `model.providerRemove` | always | method-specific | blocking |
+| `model.providerHealth` | always | method-specific | blocking |
+| `model.secretSet` | always | method-specific | blocking |
+| `model.secretDelete` | always | method-specific | blocking |
+| `model.secretExists` | always | method-specific | blocking |
 | `agent.create` | always | agent.run | blocking |
 | `agent.start` | always | agent.run | blocking |
 | `agent.pause` | always | agent.run | blocking |
@@ -124,6 +132,6 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `shortcuts.unregister` | nativeDesktop | shortcuts | native |
 | `shortcuts.list` | nativeDesktop | shortcuts | native |
 
-Typed JSON Schema coverage: 119/119 methods.
+Typed JSON Schema coverage: 127/127 methods.
 
 Common errors: `INVALID_PARAMS`, `PERMISSION_DENIED`, `OPERATION_FAILED`, `DEADLINE_EXCEEDED`, `HOST_BUSY`, `METHOD_NOT_FOUND`.

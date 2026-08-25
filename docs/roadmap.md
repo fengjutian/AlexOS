@@ -6,9 +6,13 @@ nav_order: 4
 
 # Alex OS 路线图
 
-> 本路线图已按 [`product-requirements.md`](./product-requirements.md) 重新排序。近期唯一主线是
-> `Application Package + Process Manager + Runtime Manager + Permission Manager`；Native Shell、
-> macOS GUI、完整 OCI、Model、MCP 和 Registry 延后。
+> 本路线图已按 [`product-requirements.md`](./product-requirements.md) 重新排序。两条主线**并行**：
+>
+> 1. **Runtime MVP（0.1 P0）** — Application Package + Process Manager + Runtime Manager + Permission Manager；
+> 2. **AI Runtime（0.2 主线）** — Model + MCP + Agent，按 [`ai-runtime-implementation.md`](./ai-runtime-implementation.md) 实施，
+>    当前已在 `src/agent/`、`src/mcp/`、`src/model/` 并行落地，并由 [`status.md`](./status.md) §1.1 末尾与 §2 维护事实描述。
+>
+> 延后项不变：Native Shell 切换、macOS GUI、完整 OCI 适配、Registry / Store。
 
 ## P0：Alex Runtime MVP
 

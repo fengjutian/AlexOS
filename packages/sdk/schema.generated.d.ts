@@ -7,6 +7,8 @@ export type ModelManifest = { "id": string; "digest": string; "sizeBytes": numbe
 export type AgentSpec = { "model": string; "systemPrompt"?: string; "tools"?: Array<{ "binding": string; "name": string; "idempotent"?: boolean; "requireApproval"?: boolean }>; "budget"?: { "maxSteps"?: number; "maxTokens"?: number; "maxToolCalls"?: number; "maxWallTimeMs"?: number } };
 export type UpdateTask = { "id": string; "appId": string; "manifestUrl": string; "channel": "stable" | "beta" | "dev"; "state": string; "stage": string; "progress": number; "error": string | null };
 export type JsonValue = unknown;
+export type SecretRef = { "service": string; "account": string };
+export type ProviderConfig = { "id": string; "kind": "open-ai-compatible" | "anthropic" | "gemini"; "endpoint": string; "secretRef": SecretRef; "defaultModel"?: string | null; "organization"?: string | null; "timeoutMs"?: number; "maxRetries"?: number; "enabled"?: boolean };
 export type PathInput = { "path": string };
 export type FileGrant = { "path": string; "token": string; "ops": Array<"read" | "write">; "expiresAt": number };
 export type FileStat = { "path": string; "type": "file" | "directory" | "symlink" | "other"; "size": number; "readOnly": boolean; "modifiedMs"?: number | null };
@@ -98,6 +100,14 @@ export type AlexCapability =
   | "model.unload"
   | "model.cancel"
   | "model.generate"
+  | "model.embed"
+  | "model.providers"
+  | "model.providerUpsert"
+  | "model.providerRemove"
+  | "model.providerHealth"
+  | "model.secretSet"
+  | "model.secretDelete"
+  | "model.secretExists"
   | "agent.create"
   | "agent.start"
   | "agent.pause"
@@ -225,6 +235,14 @@ export interface AlexMethodMap {
   "model.unload": { params: ModelId; result: { "modelId": string; "unloaded": boolean } };
   "model.cancel": { params: { "modelId": string; "requestId": string }; result: { "modelId": string; "requestId": string; "cancelled": boolean } };
   "model.generate": { params: { "model": string; "messages": Array<JsonValue>; "options"?: JsonValue }; result: { "streamId": string; "requestId": string } };
+  "model.embed": { params: { "model": string; "input": Array<string>; "options"?: JsonValue }; result: JsonValue };
+  "model.providers": { params: Empty; result: { "providers": Array<ProviderConfig> } };
+  "model.providerUpsert": { params: { "config": ProviderConfig }; result: ProviderConfig };
+  "model.providerRemove": { params: { "providerId": string }; result: { "providerId": string; "removed": boolean } };
+  "model.providerHealth": { params: { "providerId"?: string }; result: { "providers": Array<JsonValue> } };
+  "model.secretSet": { params: { "service": string; "account": string; "secret": string }; result: { "configured": boolean } };
+  "model.secretDelete": { params: SecretRef; result: { "deleted": boolean } };
+  "model.secretExists": { params: SecretRef; result: { "exists": boolean } };
   "agent.create": { params: { "spec": AgentSpec; "messages"?: Array<JsonValue> }; result: JsonValue };
   "agent.start": { params: AgentRunId; result: { "runId": string; "streamId": string } };
   "agent.pause": { params: AgentRunId; result: JsonValue };

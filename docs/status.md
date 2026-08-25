@@ -7,15 +7,27 @@ nav_order: 3
 # Alex OS 实现状态
 
 > 产品已经重新定位为 **Alex Runtime / AI Application Runtime Infrastructure**。正式产品范围见
-> [`product-requirements.md`](./product-requirements.md)。当前代码仍是旧架构原型：没有常驻
-> `alexd`、多服务编排、受管 Runtime 和 backend 级权限强制，因此不能宣称已经完成 Runtime MVP。
+> [`product-requirements.md`](./product-requirements.md)。Runtime MVP 关键件已在
+> `src/daemon/`、`src/runtime/`、`src/api/`、`src/core/` 落地，常驻 `alex daemon`、
+> Manifest v2 多服务编排、Service 反代、Job Object 进程树清理均已 wired 并通过测试；
+> 剩余缺口（daemon 跨用户拒绝的真实 CI 验证、签名安装器、`alex dev` React 模板、
+> 受管 Node Runtime、UI 安全闭环）见 [`roadmap.md`](./roadmap.md) P0 §0.1 与 §3。
+> 当前不应宣称已对外可分发，但代码已不再是"无 daemon 的原型"。
 
 > 本文档是 Alex OS 当前代码能够支持的行为的**事实性描述**。任何"已实现"都对应 `src/` 下的
 > 具体路径。未实现 / 计划中的内容在 [`roadmap.md`](./roadmap.md) 中。
 >
-> 更新基线：Alex OS `0.1.0`，Windows + WebView2 + Node.js 原型。0.1 切片 1-4 全部落地：
-> 每个 App 现在可以长期运行独立的 Node.js 服务（Express / WebSocket / SQLite / 定时任务），
-> 前端通过 `alex://app/api/*` 内部反向代理访问服务，端口由 host 分配，token 由 host 注入。
+> 更新基线：Alex OS `0.1.0`，Windows + WebView2 + Node.js。Runtime MVP 0.1 切片 1-4
+> 全部落地：每个 App 现在可以长期运行独立的 Node.js 服务（Express / WebSocket / SQLite
+> / 定时任务），前端通过 `alex://app/api/*` 内部反向代理访问服务，端口由 host 分配，
+> token 由 host 注入。
+>
+> AI Runtime 主线（Agent / MCP / Model / Secret / Manager overview UI）已在 `src/agent/`、
+> `src/mcp/`、`src/model/`、`src/api/router/handlers/agent.rs` 等位置并行落地，协议与
+> 安全边界见 [`ai-runtime-implementation.md`](./ai-runtime-implementation.md)。
+>
+> 实际代码基线（2026-08-25）：`src/` 96 个 `.rs` 文件，`cargo test -p alex --lib`
+> 335/335 passed。
 >
 > 最初愿景中的 Python、Rust 插件、跨平台和 Store 仍属于路线图，不应出现在当前版本能力承诺中。
 
