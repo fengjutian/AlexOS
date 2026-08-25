@@ -138,6 +138,12 @@ pub enum ControlCommand {
         args: Vec<String>,
         era: crate::mcp::ProtocolEra,
     },
+    McpConnectHttp {
+        app_id: String,
+        binding: String,
+        endpoint: String,
+        era: crate::mcp::ProtocolEra,
+    },
     McpDisconnect {
         app_id: String,
         binding: String,
@@ -435,6 +441,12 @@ mod tests {
             compatible_workers: vec!["llama-cpp".into()],
         };
         for command in [
+            ControlCommand::McpConnectHttp {
+                app_id: "com.example.app".into(),
+                binding: "remote-search".into(),
+                endpoint: "https://mcp.example.test/v1".into(),
+                era: crate::mcp::ProtocolEra::Modern,
+            },
             ControlCommand::McpListTools {
                 app_id: "com.example.app".into(),
                 binding: "files".into(),

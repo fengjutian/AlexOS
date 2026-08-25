@@ -9,11 +9,13 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicU64, Ordering},
     },
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
 use serde_json::{Value, json};
 use thiserror::Error;
+use url::Url;
 
 pub const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 pub const LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -66,6 +68,180 @@ pub struct ToolCallResult {
 pub trait RpcTransport: Send + Sync {
     fn request(&self, id: u64, method: &str, params: Value) -> Result<Value, McpError>;
     fn notify(&self, method: &str, params: Value) -> Result<(), McpError>;
+}
+
+/// MCP Streamable HTTP transport. Alex accepts HTTPS endpoints and plain HTTP
+/// only for loopback development servers. Redirects are disabled so an allowed
+/// endpoint cannot redirect a request to another origin.
+pub struct StreamableHttpTransport {
+    endpoint: Url,
+    agent: ureq::Agent,
+    protocol_version: &'static str,
+    session_id: Mutex<Option<String>>,
+}
+
+impl StreamableHttpTransport {
+    pub fn new(endpoint: &str, era: ProtocolEra) -> Result<Self, McpError> {
+        let endpoint =
+            Url::parse(endpoint).map_err(|error| McpError::InvalidConfig(error.to_string()))?;
+        let loopback = endpoint
+            .host_str()
+            .and_then(|host| host.parse::<std::net::IpAddr>().ok())
+            .is_some_and(|address| address.is_loopback())
+            || endpoint.host_str() == Some("localhost");
+        if endpoint.scheme() != "https" && !(endpoint.scheme() == "http" && loopback) {
+            return Err(McpError::InvalidConfig(
+                "MCP HTTP endpoint must use HTTPS (HTTP is loopback-only)".into(),
+            ));
+        }
+        if endpoint.username() != ""
+            || endpoint.password().is_some()
+            || endpoint.fragment().is_some()
+        {
+            return Err(McpError::InvalidConfig(
+                "MCP endpoint cannot contain credentials or a fragment".into(),
+            ));
+        }
+        let agent: ureq::Agent = ureq::Agent::config_builder()
+            .max_redirects(0)
+            .timeout_global(Some(Duration::from_secs(60)))
+            .build()
+            .into();
+        Ok(Self {
+            endpoint,
+            agent,
+            protocol_version: match era {
+                ProtocolEra::Modern => MODERN_PROTOCOL_VERSION,
+                ProtocolEra::Legacy => LEGACY_PROTOCOL_VERSION,
+            },
+            session_id: Mutex::new(None),
+        })
+    }
+
+    fn post(&self, value: &Value) -> Result<Option<Value>, McpError> {
+        let body =
+            serde_json::to_vec(value).map_err(|error| McpError::Protocol(error.to_string()))?;
+        if body.len() > MAX_MESSAGE_BYTES {
+            return Err(McpError::Protocol("outbound message exceeds 1 MiB".into()));
+        }
+        let mut request = ureq::http::Request::builder()
+            .method(ureq::http::Method::POST)
+            .uri(self.endpoint.as_str())
+            .header("content-type", "application/json")
+            .header("accept", "application/json, text/event-stream")
+            .header("mcp-protocol-version", self.protocol_version);
+        if let Some(session_id) = self
+            .session_id
+            .lock()
+            .map_err(|_| McpError::Transport("HTTP session lock poisoned".into()))?
+            .as_deref()
+        {
+            request = request.header("mcp-session-id", session_id);
+        }
+        let request = request
+            .body(body)
+            .map_err(|error| McpError::Transport(error.to_string()))?;
+        let mut response = self
+            .agent
+            .run(request)
+            .map_err(|error| McpError::Transport(error.to_string()))?;
+        if let Some(session_id) = response
+            .headers()
+            .get("mcp-session-id")
+            .and_then(|value| value.to_str().ok())
+        {
+            if session_id.len() > 1024 || session_id.contains(['\r', '\n']) {
+                return Err(McpError::Protocol("invalid MCP session id".into()));
+            }
+            *self
+                .session_id
+                .lock()
+                .map_err(|_| McpError::Transport("HTTP session lock poisoned".into()))? =
+                Some(session_id.to_owned());
+        }
+        if response.status() == ureq::http::StatusCode::ACCEPTED
+            || response.status() == ureq::http::StatusCode::NO_CONTENT
+        {
+            return Ok(None);
+        }
+        let content_type = response
+            .headers()
+            .get("content-type")
+            .and_then(|value| value.to_str().ok())
+            .unwrap_or("")
+            .to_ascii_lowercase();
+        let mut bytes = Vec::new();
+        response
+            .body_mut()
+            .as_reader()
+            .take((MAX_MESSAGE_BYTES + 1) as u64)
+            .read_to_end(&mut bytes)
+            .map_err(|error| McpError::Transport(error.to_string()))?;
+        if bytes.len() > MAX_MESSAGE_BYTES {
+            return Err(McpError::Protocol("inbound message exceeds 1 MiB".into()));
+        }
+        if content_type.starts_with("text/event-stream") {
+            let mut first = None;
+            for line in String::from_utf8(bytes)
+                .map_err(|error| McpError::Protocol(error.to_string()))?
+                .lines()
+            {
+                if let Some(data) = line.strip_prefix("data:") {
+                    let value: Value = serde_json::from_str(data.trim())
+                        .map_err(|error| McpError::Protocol(error.to_string()))?;
+                    if value.get("id").is_some() {
+                        return Ok(Some(value));
+                    }
+                    first.get_or_insert(value);
+                }
+            }
+            return first
+                .map(Some)
+                .ok_or_else(|| McpError::Protocol("SSE response omitted a data event".into()));
+        }
+        if !content_type.starts_with("application/json") {
+            return Err(McpError::Protocol(format!(
+                "unsupported MCP response content type {content_type:?}"
+            )));
+        }
+        serde_json::from_slice(&bytes)
+            .map(Some)
+            .map_err(|error| McpError::Protocol(error.to_string()))
+    }
+
+    fn response_result(value: Value, id: u64) -> Result<Value, McpError> {
+        if value.get("id").and_then(Value::as_u64) != Some(id) {
+            return Err(McpError::Protocol("response id mismatch".into()));
+        }
+        if let Some(error) = value.get("error") {
+            return Err(McpError::Server {
+                code: error.get("code").and_then(Value::as_i64).unwrap_or(-32603),
+                message: error
+                    .get("message")
+                    .and_then(Value::as_str)
+                    .unwrap_or("unknown MCP error")
+                    .into(),
+            });
+        }
+        value
+            .get("result")
+            .cloned()
+            .ok_or_else(|| McpError::Protocol("response omitted result and error".into()))
+    }
+}
+
+impl RpcTransport for StreamableHttpTransport {
+    fn request(&self, id: u64, method: &str, params: Value) -> Result<Value, McpError> {
+        let response = self
+            .post(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?
+            .ok_or_else(|| McpError::Protocol("request received no response body".into()))?;
+        Self::response_result(response, id)
+    }
+
+    fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
+        self.post(&json!({"jsonrpc":"2.0","method":method,"params":params}))?;
+        Ok(())
+    }
 }
 
 pub struct StdioTransport {
@@ -384,5 +560,98 @@ mod tests {
         manager.connect("com.example.one", "files", client).unwrap();
         assert!(manager.get("com.example.two", "files").is_err());
         assert_eq!(manager.list().len(), 1);
+    }
+
+    #[test]
+    fn http_transport_rejects_insecure_remote_and_embedded_credentials() {
+        assert!(
+            StreamableHttpTransport::new("http://example.com/mcp", ProtocolEra::Modern).is_err()
+        );
+        assert!(
+            StreamableHttpTransport::new(
+                "https://user:secret@example.com/mcp",
+                ProtocolEra::Modern
+            )
+            .is_err()
+        );
+        assert!(
+            StreamableHttpTransport::new("http://127.0.0.1:9000/mcp", ProtocolEra::Modern).is_ok()
+        );
+    }
+
+    #[test]
+    fn http_transport_validates_json_rpc_response_identity() {
+        assert_eq!(
+            StreamableHttpTransport::response_result(
+                json!({"jsonrpc":"2.0","id":7,"result":{"ok":true}}),
+                7
+            )
+            .unwrap(),
+            json!({"ok":true})
+        );
+        assert!(
+            StreamableHttpTransport::response_result(
+                json!({"jsonrpc":"2.0","id":8,"result":{}}),
+                7
+            )
+            .is_err()
+        );
+    }
+
+    #[test]
+    fn http_transport_posts_protocol_headers_and_reads_sse() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            let (stream, _) = listener.accept().unwrap();
+            let mut reader = BufReader::new(stream);
+            let mut request_line = String::new();
+            reader.read_line(&mut request_line).unwrap();
+            let mut content_length = 0;
+            let mut saw_protocol = false;
+            loop {
+                let mut line = String::new();
+                reader.read_line(&mut line).unwrap();
+                if line == "\r\n" {
+                    break;
+                }
+                let lower = line.to_ascii_lowercase();
+                if let Some(value) = lower.strip_prefix("content-length:") {
+                    content_length = value.trim().parse::<usize>().unwrap();
+                }
+                if lower.starts_with("mcp-protocol-version: 2026-07-28") {
+                    saw_protocol = true;
+                }
+            }
+            let mut body = vec![0; content_length];
+            reader.read_exact(&mut body).unwrap();
+            assert!(request_line.starts_with("POST /mcp HTTP/1.1"));
+            assert!(saw_protocol);
+            assert_eq!(
+                serde_json::from_slice::<Value>(&body).unwrap()["method"],
+                "tools/list"
+            );
+            let response_body =
+                "data: {\"jsonrpc\":\"2.0\",\"id\":7,\"result\":{\"tools\":[]}}\n\n";
+            let stream = reader.get_mut();
+            write!(
+                stream,
+                "HTTP/1.1 200 OK\r\nContent-Type: text/event-stream\r\nMcp-Session-Id: session-1\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}",
+                response_body.len(),
+                response_body
+            )
+            .unwrap();
+            stream.flush().unwrap();
+        });
+        let transport = StreamableHttpTransport::new(&endpoint, ProtocolEra::Modern).unwrap();
+        assert_eq!(
+            transport.request(7, "tools/list", json!({})).unwrap(),
+            json!({"tools":[]})
+        );
+        assert_eq!(
+            transport.session_id.lock().unwrap().as_deref(),
+            Some("session-1")
+        );
+        server.join().unwrap();
     }
 }

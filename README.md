@@ -12,6 +12,8 @@ Runtime 在不同平台负责安装、服务编排、进程、运行时、权限
 
 Model、MCP 与 Agent 的完整技术实施顺序、协议、安全边界和验收标准见
 [docs/ai-runtime-implementation.md](docs/ai-runtime-implementation.md)。
+本地推理进程的实现协议见
+[docs/model-worker-protocol.md](docs/model-worker-protocol.md)。
 
 详细的实现状态、限制和未开发功能见
 [docs/status.md](docs/status.md) 和 [docs/roadmap.md](docs/roadmap.md)。

@@ -17,6 +17,7 @@ use thiserror::Error;
 use crate::platform::PlatformServices;
 
 const INDEX_SCHEMA_VERSION: u32 = 1;
+const WORKER_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
 
 #[derive(Debug, Error)]
 pub enum ModelError {
@@ -242,6 +243,19 @@ pub struct ProcessInferenceWorker {
     operation: Mutex<()>,
 }
 
+/// Daemon-owned description of a local inference runtime. Descriptors live at
+/// `runtimes/model-workers/<kind>/worker.json`; the executable is resolved
+/// relative to that directory and cannot escape it.
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct WorkerDescriptor {
+    pub schema_version: u32,
+    pub kind: String,
+    pub command: PathBuf,
+    #[serde(default)]
+    pub args: Vec<String>,
+}
+
 impl ProcessInferenceWorker {
     pub fn spawn(
         kind: impl Into<String>,
@@ -445,6 +459,41 @@ impl ModelManager {
             .insert(kind, worker);
         Ok(())
     }
+    pub fn register_process_workers(&self, runtimes_root: &Path) -> Result<usize, ModelError> {
+        let workers_root = runtimes_root.join("model-workers");
+        if !workers_root.exists() {
+            fs::create_dir_all(&workers_root)?;
+            return Ok(0);
+        }
+        let mut directories = fs::read_dir(&workers_root)?
+            .filter_map(Result::ok)
+            .filter(|entry| entry.file_type().is_ok_and(|kind| kind.is_dir()))
+            .map(|entry| entry.path())
+            .collect::<Vec<_>>();
+        directories.sort();
+
+        let mut registered = 0;
+        for root in directories {
+            let descriptor_path = root.join("worker.json");
+            if !descriptor_path.is_file() {
+                continue;
+            }
+            let descriptor: WorkerDescriptor = serde_json::from_slice(&fs::read(&descriptor_path)?)
+                .map_err(|error| {
+                    ModelError::InvalidMetadata(format!("{}: {error}", descriptor_path.display()))
+                })?;
+            validate_worker_descriptor(&descriptor, &root)?;
+            let worker = ProcessInferenceWorker::spawn(
+                descriptor.kind,
+                &root,
+                &descriptor.command,
+                &descriptor.args,
+            )?;
+            self.register_worker(Arc::new(worker))?;
+            registered += 1;
+        }
+        Ok(registered)
+    }
     pub fn list(&self) -> Result<Vec<ModelManifest>, ModelError> {
         self.store.list()
     }
@@ -525,6 +574,40 @@ impl ModelManager {
             .cloned()
             .ok_or_else(|| ModelError::Worker(format!("worker {kind:?} is not registered")))
     }
+}
+
+fn validate_worker_descriptor(
+    descriptor: &WorkerDescriptor,
+    root: &Path,
+) -> Result<(), ModelError> {
+    if descriptor.schema_version != WORKER_DESCRIPTOR_SCHEMA_VERSION {
+        return Err(ModelError::InvalidMetadata(format!(
+            "unsupported worker descriptor schema {}",
+            descriptor.schema_version
+        )));
+    }
+    let directory_kind = root
+        .file_name()
+        .and_then(|value| value.to_str())
+        .unwrap_or_default();
+    if descriptor.kind != directory_kind
+        || descriptor.kind.is_empty()
+        || descriptor.kind.len() > 64
+        || !descriptor
+            .kind
+            .chars()
+            .all(|value| value.is_ascii_alphanumeric() || "._-".contains(value))
+    {
+        return Err(ModelError::InvalidMetadata(
+            "worker kind must match its directory name".into(),
+        ));
+    }
+    if descriptor.command.as_os_str().is_empty() {
+        return Err(ModelError::InvalidMetadata(
+            "worker command is empty".into(),
+        ));
+    }
+    Ok(())
 }
 
 fn validate_model_id(id: &str) -> Result<(), ModelError> {
@@ -612,5 +695,51 @@ mod tests {
             Err(ModelError::DigestMismatch { .. })
         ));
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn process_worker_discovery_is_daemon_owned_and_scoped() {
+        let temp = tempfile::tempdir().unwrap();
+        let runtimes = temp.path().join("runtimes");
+        let worker_root = runtimes.join("model-workers").join("mock");
+        fs::create_dir_all(&worker_root).unwrap();
+        #[cfg(windows)]
+        let (system_command, local_command, args) = (
+            PathBuf::from(r"C:\Windows\System32\cmd.exe"),
+            PathBuf::from("worker.exe"),
+            vec!["/Q".into(), "/K".into()],
+        );
+        #[cfg(not(windows))]
+        let (system_command, local_command, args) = (
+            PathBuf::from("/bin/cat"),
+            PathBuf::from("worker"),
+            Vec::new(),
+        );
+        fs::copy(&system_command, worker_root.join(&local_command)).unwrap();
+        atomic_json(
+            &worker_root.join("worker.json"),
+            &WorkerDescriptor {
+                schema_version: 1,
+                kind: "mock".into(),
+                command: local_command,
+                args,
+            },
+        )
+        .unwrap();
+        let manager = ModelManager::new(ModelStore::open(temp.path().join("models")).unwrap());
+        assert_eq!(manager.register_process_workers(&runtimes).unwrap(), 1);
+        assert!(manager.worker("mock").is_ok());
+    }
+
+    #[test]
+    fn worker_descriptor_kind_must_match_directory() {
+        let descriptor = WorkerDescriptor {
+            schema_version: 1,
+            kind: "other".into(),
+            command: "worker".into(),
+            args: Vec::new(),
+        };
+        let error = validate_worker_descriptor(&descriptor, Path::new("mock")).unwrap_err();
+        assert!(error.to_string().contains("directory name"));
     }
 }

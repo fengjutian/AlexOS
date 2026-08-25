@@ -55,7 +55,11 @@ impl DaemonService {
     pub fn with_ai_root(mut self, root: &std::path::Path) -> Result<Self, String> {
         let store = crate::model::ModelStore::open(root.join("models"))
             .map_err(|error| error.to_string())?;
-        self.models = Some(crate::model::ModelManager::new(store));
+        let models = crate::model::ModelManager::new(store);
+        models
+            .register_process_workers(&root.join("runtimes"))
+            .map_err(|error| error.to_string())?;
+        self.models = Some(models);
         Ok(self)
     }
 
@@ -150,6 +154,12 @@ impl DaemonService {
                 args,
                 era,
             } => self.mcp_connect_stdio(&app_id, &binding, &command, &args, era),
+            ControlCommand::McpConnectHttp {
+                app_id,
+                binding,
+                endpoint,
+                era,
+            } => self.mcp_connect_http(&app_id, &binding, &endpoint, era),
             ControlCommand::McpDisconnect { app_id, binding } => Ok(json!({
                 "disconnected": self.mcp.disconnect(&app_id, &binding)
             })),
@@ -806,6 +816,37 @@ impl DaemonService {
             "application": app_id,
             "binding": binding,
             "era": era,
+            "server": server,
+        }))
+    }
+
+    fn mcp_connect_http(
+        &self,
+        app_id: &str,
+        binding: &str,
+        endpoint: &str,
+        era: crate::mcp::ProtocolEra,
+    ) -> Result<serde_json::Value, String> {
+        let transport = crate::mcp::StreamableHttpTransport::new(endpoint, era)
+            .map_err(|error| error.to_string())?;
+        let client = crate::mcp::McpClient::new(Arc::new(transport), era);
+        let server = if era == crate::mcp::ProtocolEra::Legacy {
+            Some(
+                client
+                    .initialize_legacy()
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
+        self.mcp
+            .connect(app_id, binding, client)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({
+            "application": app_id,
+            "binding": binding,
+            "era": era,
+            "transport": "streamable-http",
             "server": server,
         }))
     }
