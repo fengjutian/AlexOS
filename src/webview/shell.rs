@@ -253,7 +253,32 @@ pub mod windows {
             self.secondary_windows
         }
 
+        fn confirm_permission(
+            &self,
+            app_name: &str,
+            permission: &str,
+        ) -> Result<bool, NativeError> {
+            self.request_confirmation(
+                "Alex OS Permission Request",
+                &format!(
+                    "{app_name} requests permission:\n\n{permission}\n\nAllow this application to use it?"
+                ),
+                Duration::from_secs(600),
+            )
+        }
+
         fn confirm_mrtr(&self, title: &str, message: &str) -> Result<bool, NativeError> {
+            self.request_confirmation(title, message, Duration::from_secs(600))
+        }
+    }
+
+    impl WindowHost {
+        fn request_confirmation(
+            &self,
+            title: &str,
+            message: &str,
+            timeout: Duration,
+        ) -> Result<bool, NativeError> {
             let (reply_tx, reply_rx) = std::sync::mpsc::sync_channel(1);
             self.proxy
                 .send_event(UserEvent::MrtrPrompt(
@@ -263,8 +288,8 @@ pub mod windows {
                 ))
                 .map_err(|_| NativeError::Failed("window event loop is closed".into()))?;
             reply_rx
-                .recv_timeout(Duration::from_secs(600))
-                .map_err(|_| NativeError::Failed("MRTR prompt timed out".into()))?
+                .recv_timeout(timeout)
+                .map_err(|_| NativeError::Failed("native confirmation timed out".into()))?
         }
     }
 

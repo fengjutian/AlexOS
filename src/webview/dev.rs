@@ -778,6 +778,16 @@ mod windows {
                         let _ = webview.evaluate_script(&script);
                     }
                 }
+                Event::UserEvent(UserEvent::MrtrPrompt(title, message, reply)) => {
+                    use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
+                    let result = MessageDialog::new()
+                        .set_level(MessageLevel::Warning)
+                        .set_title(title)
+                        .set_description(message)
+                        .set_buttons(MessageButtons::YesNo)
+                        .show();
+                    let _ = reply.send(Ok(matches!(result, MessageDialogResult::Yes)));
+                }
                 Event::UserEvent(UserEvent::Host(command, reply)) => {
                     let result = match command {
                         HostCommand::SetWindowTitle(title) => {

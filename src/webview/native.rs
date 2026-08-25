@@ -24,6 +24,11 @@ pub enum HostCommand {
 pub trait NativeHost: Send + Sync {
     fn execute(&self, command: HostCommand) -> Result<(), NativeError>;
 
+    /// Ask for a first-use permission decision on the host UI thread.
+    fn confirm_permission(&self, _app_name: &str, _permission: &str) -> Result<bool, NativeError> {
+        Err(NativeError::Unsupported)
+    }
+
     fn confirm_mrtr(&self, _title: &str, _message: &str) -> Result<bool, NativeError> {
         Err(NativeError::Unsupported)
     }

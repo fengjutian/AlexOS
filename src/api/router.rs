@@ -492,9 +492,18 @@ impl ApiRouter {
                         format_permission_decision("prompt", name, &self.manifest.name)
                     );
                 }
+                // WebView IPC is dispatched from a worker thread. Native dialogs
+                // must be marshalled to the host UI thread on Windows; a direct
+                // rfd call there can fail silently and turn Prompt into Denied.
                 let granted = self
-                    .desktop_services
-                    .confirm_permission(&self.manifest.name, name)
+                    .native_host
+                    .as_ref()
+                    .and_then(|host| host.confirm_permission(&self.manifest.name, name).ok())
+                    .or_else(|| {
+                        self.desktop_services
+                            .confirm_permission(&self.manifest.name, name)
+                            .ok()
+                    })
                     .unwrap_or(false);
                 let decision = if granted {
                     PermissionDecision::Granted
