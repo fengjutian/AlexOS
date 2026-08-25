@@ -353,6 +353,12 @@ export interface ModelManifest {
   compatibleWorkers?: string[];
 }
 
+export type ModelGenerateEvent =
+  | { type: "delta"; text: string }
+  | { type: "toolCall"; name: string; arguments: unknown }
+  | { type: "usage"; inputTokens: number; outputTokens: number }
+  | { type: "finish"; reason: string };
+
 export interface AlexClient {
   invoke<K extends AlexMethodName>(method: K, params: AlexMethodMap[K]["params"], options?: InvokeOptions): Promise<AlexMethodMap[K]["result"]>;
   invoke<T = unknown>(method: string, params?: unknown, options?: InvokeOptions): Promise<T>;
@@ -434,6 +440,10 @@ export interface AlexClient {
     load(modelId: string, worker: string, options?: InvokeOptions): Promise<{ modelId: string; worker: string; loaded: boolean }>;
     unload(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; unloaded: boolean }>;
     cancel(modelId: string, requestId: string, options?: InvokeOptions): Promise<{ modelId: string; requestId: string; cancelled: boolean }>;
+    generate(
+      request: { model: string; messages: unknown[]; options?: Record<string, unknown> },
+      options?: StreamOptions,
+    ): AsyncIterable<ModelGenerateEvent>;
   };
   readonly window: {
     setTitle(title: string, options?: InvokeOptions): Promise<void>;

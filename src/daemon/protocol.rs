@@ -174,6 +174,11 @@ pub enum ControlCommand {
         model_id: String,
         request_id: String,
     },
+    ModelGenerate {
+        app_id: String,
+        stream_id: String,
+        request: crate::model::GenerateRequest,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

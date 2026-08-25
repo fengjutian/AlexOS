@@ -102,6 +102,7 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "model.load" => router.model_load(p),
         "model.unload" => router.model_unload(p),
         "model.cancel" => router.model_cancel(p),
+        "model.generate" => router.model_generate(&request.id, p),
         "events.subscribe" => router.events_subscribe(&request.id, p, window_id),
         "events.unsubscribe" => router.events_unsubscribe(p),
         "process.spawn" => router.process_spawn(p),

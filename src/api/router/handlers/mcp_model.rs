@@ -44,6 +44,15 @@ struct ModelImportParams {
     manifest: crate::model::ModelManifest,
 }
 
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelGenerateParams {
+    model: String,
+    messages: Vec<Value>,
+    #[serde(default)]
+    options: Value,
+}
+
 impl ApiRouter {
     fn daemon_ai(&self, operation: &str, command: crate::daemon::ControlCommand) -> ApiResult {
         self.runtime
@@ -205,6 +214,36 @@ impl ApiRouter {
             crate::daemon::ControlCommand::ModelCancel {
                 model_id: p.model_id,
                 request_id: p.request_id,
+            },
+        )
+    }
+
+    pub(crate) fn model_generate(&self, request_id: &str, params: &Value) -> ApiResult {
+        let params: ModelGenerateParams = parse_params(params)?;
+        self.model_use_scope(Some(&params.model))?;
+        let runtime = self.runtime.as_ref().ok_or((
+            "DAEMON_UNAVAILABLE",
+            "model generation requires alexd".into(),
+        ))?;
+        let app_id = runtime
+            .app_id()
+            .ok_or((
+                "DAEMON_UNAVAILABLE",
+                "model generation requires alexd".into(),
+            ))?
+            .to_owned();
+        let stream_id = format!("model:{app_id}:{request_id}");
+        self.daemon_ai(
+            "model-generate",
+            crate::daemon::ControlCommand::ModelGenerate {
+                app_id,
+                stream_id,
+                request: crate::model::GenerateRequest {
+                    request_id: request_id.into(),
+                    model: params.model,
+                    messages: params.messages,
+                    options: params.options,
+                },
             },
         )
     }

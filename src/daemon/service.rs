@@ -175,6 +175,11 @@ impl DaemonService {
                 model_id,
                 request_id,
             } => self.model_cancel(&model_id, &request_id),
+            ControlCommand::ModelGenerate {
+                app_id,
+                stream_id,
+                request,
+            } => self.model_generate(&app_id, &stream_id, request),
         };
         match result {
             Ok(value) => ControlResponse::success(id, value),
@@ -888,6 +893,64 @@ impl DaemonService {
             .cancel(model_id, request_id)
             .map(|_| json!({ "modelId": model_id, "requestId": request_id, "cancelled": true }))
             .map_err(|error| error.to_string())
+    }
+
+    fn model_generate(
+        &self,
+        app_id: &str,
+        stream_id: &str,
+        request: crate::model::GenerateRequest,
+    ) -> Result<serde_json::Value, String> {
+        let manager = self.model_manager()?.clone();
+        let cancellation = self
+            .streams
+            .open(app_id, stream_id)
+            .map_err(|error| error.to_string())?;
+        let streams = Arc::clone(&self.streams);
+        let stream_id_for_worker = stream_id.to_owned();
+        let model_id = request.model.clone();
+        let request_id = request.request_id.clone();
+        let response_request_id = request.request_id.clone();
+        std::thread::Builder::new()
+            .name("alex-model-generate".into())
+            .spawn(move || {
+                let mut emit = |event: crate::model::GenerateEvent| {
+                    let payload = serde_json::to_vec(&event)
+                        .map_err(|error| crate::model::ModelError::Worker(error.to_string()))?;
+                    loop {
+                        if cancellation.is_cancelled() {
+                            let _ = manager.cancel(&model_id, &request_id);
+                            return Err(crate::model::ModelError::Worker(
+                                "generation cancelled".into(),
+                            ));
+                        }
+                        match streams.push(&stream_id_for_worker, payload.clone()) {
+                            Ok(_) => return Ok(()),
+                            Err(crate::runtime::stream::StreamError::Backpressured { .. })
+                            | Err(crate::runtime::stream::StreamError::BufferFull { .. }) => {
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                            Err(error) => {
+                                return Err(crate::model::ModelError::Worker(error.to_string()));
+                            }
+                        }
+                    }
+                };
+                let result = manager.generate(&request, &mut emit);
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                let terminal = match result {
+                    Ok(()) => crate::runtime::stream::StreamTerminal::Completed,
+                    Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                        code: "MODEL_GENERATION_FAILED".into(),
+                        message: error.to_string(),
+                    },
+                };
+                let _ = streams.finish(&stream_id_for_worker, terminal);
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "streamId": stream_id, "requestId": response_request_id }))
     }
 
     fn set_desired(

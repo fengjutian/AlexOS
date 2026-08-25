@@ -226,6 +226,12 @@ export function createAlexClient(transport = browserTransport()) {
       cancel(modelId, requestId, options) {
         return invoke("model.cancel", { modelId, requestId }, options);
       },
+      async *generate(request, options) {
+        const decoder = new TextDecoder();
+        for await (const chunk of stream("model.generate", request, options)) {
+          yield JSON.parse(decoder.decode(chunk));
+        }
+      },
     }),
     window: Object.freeze({
       async setTitle(title, options) {
