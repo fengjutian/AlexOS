@@ -68,16 +68,21 @@ export function buildMenus(input: BuildMenuInput): BuiltMenu {
             return info;
           }),
     }),
+    // Submenu — opens to the right with the file / directory pickers.
     item({
-      id: "file.openFile",
-      label: "打开文件…",
+      id: "file.open",
+      label: "打开",
       accelerator: "CmdOrCtrl+O",
-      run: () => desktop.dialog.openFile("选择一个文件"),
+      items: [
+        item({ id: "file.open.file", label: "文件…", run: () => desktop.dialog.openFile("选择一个文件") }),
+        item({ id: "file.open.dir", label: "目录…", run: () => desktop.dialog.openDirectory("选择目录") }),
+      ],
     }),
     item({
-      id: "file.openDirectory",
-      label: "打开目录…",
-      run: () => desktop.dialog.openDirectory("选择目录"),
+      id: "file.saveAs",
+      label: "另存为…",
+      accelerator: "CmdOrCtrl+Shift+S",
+      run: () => desktop.dialog.saveFile("保存示例文件", "alex-demo.txt"),
     }),
     sep("file.sep1"),
     item({
@@ -85,12 +90,6 @@ export function buildMenus(input: BuildMenuInput): BuiltMenu {
       label: "保存到存储",
       accelerator: "CmdOrCtrl+S",
       run: () => desktop.storage.set("message", input.message),
-    }),
-    item({
-      id: "file.saveAs",
-      label: "另存为…",
-      accelerator: "CmdOrCtrl+Shift+S",
-      run: () => desktop.dialog.saveFile("保存示例文件", "alex-demo.txt"),
     }),
     sep("file.sep2"),
     item({
@@ -116,24 +115,32 @@ export function buildMenus(input: BuildMenuInput): BuiltMenu {
       run: () => desktop.clipboard.readText(),
     }),
     sep("edit.sep1"),
+    // Submenu — storage CRUD grouped under one entry.
     item({
-      id: "edit.storageKeys",
-      label: "列出全部 key",
-      run: () => desktop.storage.keys(),
-    }),
-    item({
-      id: "edit.clearStorage",
-      label: "清空存储",
-      run: () => desktop.storage.clear(),
+      id: "edit.storage",
+      label: "存储",
+      items: [
+        item({ id: "edit.storage.save", label: "保存 message", run: () => desktop.storage.set("message", input.message) }),
+        item({ id: "edit.storage.read", label: "读取 message", run: () => desktop.storage.get("message") }),
+        item({ id: "edit.storage.keys", label: "列出全部 key", run: () => desktop.storage.keys() }),
+        item({ id: "edit.storage.clear", label: "清空", run: () => desktop.storage.clear() }),
+      ],
     }),
   ];
 
   // ---------- view ----------
   const viewItems: MenuItemSpec[] = [
+    // Submenu — window CRUD grouped together.
     item({
-      id: "view.windowList",
-      label: "窗口列表",
-      run: () => desktop.window.list(),
+      id: "view.windows",
+      label: "窗口",
+      items: [
+        item({ id: "view.windows.list", label: "窗口列表", run: () => desktop.window.list() }),
+        item({ id: "view.windows.new", label: "新建窗口", run: () => desktop.window
+          .create({ url: "index.html", title: "Desktop API 子窗口", width: 640, height: 520 })
+          .then((info) => { input.setChildWindowId(info.id); return info; }) }),
+        item({ id: "view.windows.close", label: "关闭当前", accelerator: "CmdOrCtrl+W", run: () => desktop.window.close(currentWindowId()) }),
+      ],
     }),
     item({
       id: "view.fullscreen",
@@ -152,12 +159,6 @@ export function buildMenus(input: BuildMenuInput): BuiltMenu {
       label: "最大化当前窗口",
       run: () => desktop.window.maximize(currentWindowId()),
     }),
-    item({
-      id: "view.closeWindow",
-      label: "关闭当前窗口",
-      accelerator: "CmdOrCtrl+W",
-      run: () => desktop.window.close(currentWindowId()),
-    }),
   ];
 
   // ---------- run ----------
@@ -173,44 +174,61 @@ export function buildMenus(input: BuildMenuInput): BuiltMenu {
       run: () => desktop.system.openExternal("https://example.com"),
     }),
     sep("run.sep1"),
+    // Submenu — explicit start/stop instead of a single toggle, so the
+    // user can see which watch ids are live without checking state.
     item({
-      id: "run.toggleWatch",
-      label: input.watchId ? "停止监听 data/" : "开始监听 data/",
-      run: async () => {
-        if (input.watchId) {
-          const id = input.watchId;
-          input.setWatchId(null);
-          return desktop.fs.unwatch(id);
-        }
-        const result = await desktop.fs.watch("data");
-        input.setWatchId(result.subscriptionId);
-        return result;
-      },
+      id: "run.watch",
+      label: "文件监听",
+      items: [
+        item({
+          id: "run.watch.start",
+          label: input.watchId ? "重新开始 data/" : "开始 data/",
+          run: async () => {
+            if (input.watchId) {
+              const old = input.watchId;
+              input.setWatchId(null);
+              await desktop.fs.unwatch(old);
+            }
+            const result = await desktop.fs.watch("data");
+            input.setWatchId(result.subscriptionId);
+            return result;
+          },
+        }),
+        item({
+          id: "run.watch.stop",
+          label: "停止",
+          run: input.watchId
+            ? () => {
+                const id = input.watchId;
+                if (!id) return Promise.resolve({ skipped: "尚未开始监听" });
+                input.setWatchId(null);
+                return desktop.fs.unwatch(id);
+              }
+            : () => Promise.resolve({ skipped: "尚未开始监听" }),
+        }),
+      ],
     }),
+    // Submenu — explicit register/unregister for the demo shortcut.
     item({
-      id: "run.toggleShortcut",
-      label: "切换 CmdOrCtrl+Shift+D",
-      run: async () => {
-        const list = await desktop.shortcuts.list();
-        const already = list.shortcuts.includes("CmdOrCtrl+Shift+D");
-        return already
-          ? desktop.shortcuts.unregister("CmdOrCtrl+Shift+D")
-          : desktop.shortcuts.register("CmdOrCtrl+Shift+D");
-      },
+      id: "run.shortcut",
+      label: "快捷键",
+      items: [
+        item({ id: "run.shortcut.register", label: "注册 CmdOrCtrl+Shift+D", run: () => desktop.shortcuts.register("CmdOrCtrl+Shift+D") }),
+        item({ id: "run.shortcut.unregister", label: "注销", run: () => desktop.shortcuts.unregister("CmdOrCtrl+Shift+D") }),
+      ],
     }),
   ];
 
   // ---------- help ----------
   const helpItems: MenuItemSpec[] = [
+    // Submenu — host info grouped under one entry.
     item({
-      id: "help.systemInfo",
-      label: "系统信息",
-      run: () => desktop.system.info(),
-    }),
-    item({
-      id: "help.capabilities",
-      label: "能力列表",
-      run: () => desktop.system.capabilities(),
+      id: "help.info",
+      label: "信息",
+      items: [
+        item({ id: "help.info.system", label: "系统信息", run: () => desktop.system.info() }),
+        item({ id: "help.info.capabilities", label: "能力列表", run: () => desktop.system.capabilities() }),
+      ],
     }),
     sep("help.sep1"),
     item({
@@ -249,7 +267,11 @@ function sep(id: string): MenuItemSpec {
   return { type: "separator", id, label: "" };
 }
 
-/** Walk the menu tree and register every normal item under its full id path. */
+/**
+ * Walk the menu tree and register every *normal* item (i.e. one that
+ * carries a `run` callback) under its full id path. Submenu parents
+ * are skipped — only their leaf children become clickable.
+ */
 function registerMenu(
   menu: MenuSpec,
   actions: MenuActionLookup,
@@ -257,9 +279,14 @@ function registerMenu(
 ): void {
   const walk = (items: MenuItemSpec[], prefix: string): void => {
     for (const entry of items) {
-      if (entry.type === "separator" || !entry.run) continue;
-      const id = `${prefix}${entry.id}`;
-      register(id, entry.label, () => Promise.resolve(entry.run!()));
+      if (entry.type === "separator") continue;
+      const fullId = `${prefix}${entry.id}`;
+      if (entry.items && entry.items.length > 0) {
+        walk(entry.items, `${fullId}.`);
+        continue;
+      }
+      if (!entry.run) continue;
+      register(fullId, entry.label, () => Promise.resolve(entry.run!()));
     }
   };
   walk(menu.items, `${menu.id}.`);

@@ -376,7 +376,8 @@ function extractRuntimeId(capabilities: unknown): string | null {
 /**
  * Convert the in-page `MenuSpec` tree to the host's `MenuTemplate`
  * shape. We strip the `run` callback (the host only understands id,
- * label, accelerator, type and submenu items).
+ * label, accelerator, type and submenu items) and recurse into nested
+ * submenus so the native bar mirrors the in-page one.
  */
 function toNativeTemplate(menus: MenuSpec[]) {
   return {
@@ -389,9 +390,22 @@ function toNativeTemplate(menus: MenuSpec[]) {
   };
 }
 
-function toNativeItem(item: import("./types/desktop.js").MenuItemSpec) {
+function toNativeItem(
+  item: import("./types/desktop.js").MenuItemSpec,
+): { type: "normal"; id: string; label: string; accelerator?: string } | { type: "separator" } | { type: "submenu"; id: string; label: string; accelerator?: string; items: ReturnType<typeof toNativeItem>[] } {
   if (item.type === "separator") {
     return { type: "separator" as const };
+  }
+  // Nested submenu: keep the parent's id (so `menu.clicked` carries
+  // the full dotted path back), drop the `run` callback, recurse.
+  if (item.items && item.items.length > 0) {
+    return {
+      type: "submenu" as const,
+      id: item.id,
+      label: item.label,
+      accelerator: item.accelerator,
+      items: item.items.map(toNativeItem),
+    };
   }
   return {
     type: "normal" as const,
@@ -403,10 +417,21 @@ function toNativeItem(item: import("./types/desktop.js").MenuItemSpec) {
 
 /** Walk the menu tree by id and return the matched item's label. */
 function deriveLabel(menus: MenuSpec[], fullId: string): string {
-  for (const menu of menus) {
-    for (const item of menu.items) {
-      if (`${menu.id}.${item.id}` === fullId) return `${menu.label} · ${item.label}`;
+  const walk = (items: import("./types/desktop.js").MenuItemSpec[], prefix: string, parents: string[]): string | null => {
+    for (const item of items) {
+      if (item.type === "separator") continue;
+      const id = `${prefix}${item.id}`;
+      if (id === fullId) return [...parents, item.label].join(" · ");
+      if (item.items && item.items.length > 0) {
+        const found = walk(item.items, `${id}.`, [...parents, item.label]);
+        if (found) return found;
+      }
     }
+    return null;
+  };
+  for (const menu of menus) {
+    const found = walk(menu.items, `${menu.id}.`, [menu.label]);
+    if (found) return found;
   }
   return fullId;
 }

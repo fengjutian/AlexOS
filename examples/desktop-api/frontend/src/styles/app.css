@@ -15,7 +15,6 @@
   /* The whole page scales its baseline font and horizontal padding
      with the viewport so the same CSS works on phone-sized WebViews
      and a 1440px desktop. */
-  --page-padding: clamp(8px, 3vw, 32px);
   --gap: clamp(10px, 1.4vw, 20px);
 }
 
@@ -35,9 +34,6 @@ body {
 button, input, textarea { font: inherit; }
 
 main {
-  max-width: 1440px;
-  margin: auto;
-  padding: 0 var(--page-padding) 48px;
   width: 100%;
 }
 
@@ -45,25 +41,32 @@ main {
  * VSCode-style top menu bar
  * ------------------------------------------------------------------ */
 
-.menubar {
-  position: relative;
-  display: flex;
-  align-items: stretch;
-  height: 30px;
-  padding: 0 4px;
-  background: linear-gradient(180deg, #3a3d41 0, #2f3033 100%);
-  border-bottom: 1px solid #1a1a1a;
-  user-select: none;
-  font-size: 13px;
-  color: #d4d4d4;
-  /* On narrow viewports the bar can scroll horizontally so the five
-     menus never get squeezed into nothing. The dropdowns remain
-     anchored to their trigger so the bar scrolls but the open menu
-     stays in view. */
+/* Outer wrapper: sticky at the top of the viewport and provides the
+   horizontal scroll on narrow viewports. The actual dropdowns live
+   in a React portal attached to <body> (see MenuBar.tsx), so the
+   scroll context here doesn't matter for them — they just need
+   sticky to behave the same way the menubar does. */
+.menubar-wrap {
+  position: sticky;
+  top: 0;
+  z-index: 100;
   overflow-x: auto;
   overflow-y: hidden;
   -webkit-overflow-scrolling: touch;
   scrollbar-width: thin;
+  background: linear-gradient(180deg, #3a3d41 0, #2f3033 100%);
+  border-bottom: 1px solid #1a1a1a;
+}
+
+.menubar {
+  display: flex;
+  align-items: stretch;
+  height: 30px;
+  padding: 0 4px;
+  user-select: none;
+  font-size: 13px;
+  color: #d4d4d4;
+  min-width: max-content;
 }
 .menubar::-webkit-scrollbar { height: 4px; }
 .menubar::-webkit-scrollbar-thumb { background: #1a1a1a; }
@@ -96,20 +99,27 @@ main {
 }
 
 .menubar__dropdown {
-  position: absolute;
-  top: 100%;
-  left: 0;
-  z-index: 10;
+  /* Position is supplied inline (top/left) from the trigger's
+     bounding rect. `position: fixed` is required so the dropdown
+     escapes the menubar's overflow context — any element with
+     `overflow: hidden | auto | scroll` on the ancestor chain would
+     otherwise clip it. */
+  position: fixed;
+  z-index: 200;
   min-width: 240px;
   max-width: min(92vw, 320px);
   padding: 4px 0;
   background: #252526;
   color: #cccccc;
   border: 1px solid #1a1a1a;
-  border-radius: 0 0 4px 4px;
+  border-radius: 4px;
   box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
   font-size: 13px;
 }
+
+/* A row is just a flex line — no positioning, the dropdown handles
+   its own placement via the trigger ref. */
+.menubar__row { display: contents; }
 
 .menubar__item {
   display: flex;
@@ -143,6 +153,25 @@ main {
   margin: 4px 0;
   background: #1a1a1a;
 }
+
+/* Item that owns an open submenu gets the same hover blue as a normal
+   hover, so the user sees the cascade from parent to child. */
+.menubar__item.is-submenu-open {
+  background: #094771;
+  color: #ffffff;
+}
+.menubar__item.is-submenu-open .menubar__accel { color: #ffffff; }
+
+/* ▸ chevron that marks items carrying a submenu. Sits in the slot
+   where an accelerator would normally go. */
+.menubar__chevron {
+  color: #858585;
+  font-size: 10px;
+  margin-left: 12px;
+  flex-shrink: 0;
+}
+.menubar__item:hover .menubar__chevron,
+.menubar__item.is-submenu-open .menubar__chevron { color: #ffffff; }
 
 /* ---------------------------------------------------------------------
  * Header
@@ -206,9 +235,12 @@ header p { margin: 0; color: #8d9ab7; }
 
 .workspace {
   display: grid;
-  /* `auto-fit` collapses the second track on narrow viewports so the
-     controls and result panel stack instead of overflowing. */
-  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  /* 2:1 ratio: controls get the wider track, result panel the
+     narrower one. `minmax(0, ...)` lets the columns shrink below
+     their content size, which is required for the pre block to wrap
+     instead of pushing the column wider than the parent. Below
+     ~900px the second track drops via the `auto-fit` rule. */
+  grid-template-columns: minmax(0, 2fr) minmax(min(100%, 360px), 1fr);
   gap: var(--gap);
   margin-top: 20px;
   align-items: start;
@@ -333,7 +365,9 @@ button:disabled { opacity: 0.5; cursor: progress; }
 /* Sticky only on wide layouts; on narrow ones the panel would be
    pushed below the fold and "sticky top" causes visual jank. */
 @media (min-width: 1100px) {
-  .results > aside { position: sticky; top: 20px; }
+  /* Sticky offset = menubar height (30px) + 8px breathing room.
+     Below the menubar so the two sticky elements don't overlap. */
+  .results > aside { position: sticky; top: 38px; }
 }
 
 .panel-heading {
@@ -420,10 +454,19 @@ button:disabled { opacity: 0.5; cursor: progress; }
 .empty { padding: 14px; color: #65718a; }
 
 /* ---------------------------------------------------------------------
+ * Medium viewports (≤900px) — single column workspace so the result
+ * panel moves below the controls instead of squeezing them.
+ * ------------------------------------------------------------------ */
+@media (max-width: 900px) {
+  .workspace { grid-template-columns: 1fr; }
+  .results > aside { position: static; } /* sticky is meaningless when the panel sits below the controls */
+}
+
+/* ---------------------------------------------------------------------
  * Narrow viewports (<720px) — tighten everything
  * ------------------------------------------------------------------ */
 @media (max-width: 720px) {
-  :root { --page-padding: 10px; --gap: 12px; }
+  :root { --gap: 12px; }
 
   /* Stack the header so the status pill moves under the title instead
      of competing with it for space. */
