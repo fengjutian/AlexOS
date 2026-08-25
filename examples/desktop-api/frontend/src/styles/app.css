@@ -117,9 +117,11 @@ main {
   font-size: 13px;
 }
 
-/* A row is just a flex line — no positioning, the dropdown handles
-   its own placement via the trigger ref. */
-.menubar__row { display: contents; }
+/* A row is a flex line that wraps the menu item and (when present)
+   the portal-mounted sub-dropdown. `display: contents` would make
+   the rect zero, breaking the getBoundingClientRect() we use to
+   position the nested dropdown, so we keep the row as a normal block. */
+.menubar__row { display: block; }
 
 .menubar__item {
   display: flex;

@@ -229,7 +229,7 @@ function Row({
   submenuPath,
   setSubmenuPath,
 }: RowProps): React.ReactElement | null {
-  const rowRef = useRef<HTMLDivElement | null>(null);
+  const buttonRef = useRef<HTMLButtonElement | null>(null);
   const [subPos, setSubPos] = useState<{ top: number; left: number } | null>(null);
 
   if (item.type === "separator") {
@@ -240,16 +240,19 @@ function Row({
   const isSubmenuOpen = submenuPath[parentPath.length] === item.id;
 
   // When the submenu becomes open, capture its anchor position from
-  // the row's bounding rect so the sub-dropdown flies out to the right.
+  // the button's bounding rect so the sub-dropdown flies out to the
+  // right. We use the button (not the row wrapper) because the row
+  // has no box of its own.
   useLayoutEffect(() => {
-    if (!isSubmenuOpen || !rowRef.current) return;
-    const rect = rowRef.current.getBoundingClientRect();
+    if (!isSubmenuOpen || !buttonRef.current) return;
+    const rect = buttonRef.current.getBoundingClientRect();
     setSubPos({ top: rect.top, left: rect.right });
   }, [isSubmenuOpen]);
 
   return (
-    <div ref={rowRef} className="menubar__row">
+    <div className="menubar__row">
       <button
+        ref={buttonRef}
         type="button"
         role="menuitem"
         aria-haspopup={hasSubmenu ? "menu" : undefined}
