@@ -5,6 +5,7 @@ use std::{
     time::{SystemTime, UNIX_EPOCH},
 };
 
+use base64::Engine as _;
 use serde_json::json;
 
 use super::{
@@ -96,6 +97,14 @@ impl DaemonService {
             ControlCommand::OpenServiceWebSocket { app_id, service } => {
                 self.open_service_websocket(&app_id, &service)
             }
+            ControlCommand::ProxyServiceHttp {
+                app_id,
+                service,
+                method,
+                path,
+                headers,
+                body_base64,
+            } => self.proxy_service_http(&app_id, &service, &method, &path, &headers, &body_base64),
         };
         match result {
             Ok(value) => ControlResponse::success(id, value),
@@ -534,6 +543,68 @@ impl DaemonService {
             .map_err(|_| "websocket tunnel registry lock poisoned".to_owned())?
             .insert(key, tunnel);
         Ok(json!({ "baseUrl": base_url }))
+    }
+
+    fn proxy_service_http(
+        &self,
+        app_id: &str,
+        service: &str,
+        method: &str,
+        path: &str,
+        headers: &BTreeMap<String, String>,
+        body_base64: &str,
+    ) -> Result<serde_json::Value, String> {
+        if !path.starts_with("/api/") || path.contains(['\r', '\n']) {
+            return Err("proxy path must start with /api/ and contain no control lines".into());
+        }
+        let body = base64::engine::general_purpose::STANDARD
+            .decode(body_base64)
+            .map_err(|_| "bodyBase64 is invalid".to_owned())?;
+        if body.len() > super::MAX_PROXY_BODY_BYTES {
+            return Err(format!(
+                "proxy request body exceeds {} byte control-plane cap",
+                super::MAX_PROXY_BODY_BYTES
+            ));
+        }
+        let manager = self
+            .manager
+            .as_ref()
+            .ok_or_else(|| "runtime manager is not configured".to_owned())?;
+        let endpoint = manager
+            .service_endpoint(app_id, service)
+            .map_err(|error| error.to_string())?;
+        let mut builder = wry::http::Request::builder().method(method).uri(path);
+        for (name, value) in headers {
+            builder = builder.header(name, value);
+        }
+        let request = builder
+            .body(body)
+            .map_err(|error| format!("invalid proxy request: {error}"))?;
+        let response = crate::proxy::proxy_to_service(&endpoint, app_id, path, &request);
+        let status = response.status().as_u16();
+        let response_headers: BTreeMap<String, String> = response
+            .headers()
+            .iter()
+            .filter_map(|(name, value)| {
+                value
+                    .to_str()
+                    .ok()
+                    .map(|value| (name.as_str().to_owned(), value.to_owned()))
+            })
+            .collect();
+        if response.body().len() > super::MAX_PROXY_BODY_BYTES {
+            return Err(format!(
+                "proxy response body exceeds {} byte control-plane cap",
+                super::MAX_PROXY_BODY_BYTES
+            ));
+        }
+        let body_base64 =
+            base64::engine::general_purpose::STANDARD.encode(response.body().as_ref());
+        Ok(json!({
+            "status": status,
+            "headers": response_headers,
+            "bodyBase64": body_base64,
+        }))
     }
 
     fn set_desired(
@@ -1214,6 +1285,47 @@ mod tests {
             vec![StubCall::ServiceEndpoint(
                 "com.example.api".into(),
                 "events".into()
+            )]
+        );
+    }
+
+    #[test]
+    fn http_proxy_rejects_non_api_paths_before_endpoint_lookup() {
+        let (_temp, service, stub) = service_with_stub();
+        let response = service.handle(request(ControlCommand::ProxyServiceHttp {
+            app_id: "com.example.api".into(),
+            service: "main".into(),
+            method: "GET".into(),
+            path: "/admin/secrets".into(),
+            headers: BTreeMap::new(),
+            body_base64: String::new(),
+        }));
+        assert!(!response.ok);
+        assert!(response.error.unwrap().contains("/api/"));
+        assert!(stub.snapshot().is_empty());
+    }
+
+    #[test]
+    fn http_proxy_returns_a_transport_safe_response_envelope() {
+        let (_temp, service, stub) = service_with_stub();
+        let response = service.handle(request(ControlCommand::ProxyServiceHttp {
+            app_id: "com.example.api".into(),
+            service: "main".into(),
+            method: "GET".into(),
+            path: "/api/health".into(),
+            headers: BTreeMap::new(),
+            body_base64: String::new(),
+        }));
+        assert!(response.ok, "{:?}", response.error);
+        let result = response.result.unwrap();
+        assert_eq!(result["status"], 502);
+        assert!(result["bodyBase64"].as_str().is_some());
+        assert!(!result.to_string().contains("private-runtime-token"));
+        assert_eq!(
+            stub.snapshot(),
+            vec![StubCall::ServiceEndpoint(
+                "com.example.api".into(),
+                "main".into()
             )]
         );
     }

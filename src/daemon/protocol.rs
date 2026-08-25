@@ -1,6 +1,8 @@
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 
+pub const MAX_PROXY_BODY_BYTES: usize = 512 * 1024;
+
 pub const PROTOCOL_VERSION: u32 = 1;
 
 /// One JSON-lines request sent by an Alex client to `alexd`.
@@ -85,6 +87,17 @@ pub enum ControlCommand {
         app_id: String,
         #[serde(default = "default_service_name")]
         service: String,
+    },
+    ProxyServiceHttp {
+        app_id: String,
+        #[serde(default = "default_service_name")]
+        service: String,
+        method: String,
+        path: String,
+        #[serde(default)]
+        headers: std::collections::BTreeMap<String, String>,
+        #[serde(default)]
+        body_base64: String,
     },
 }
 
@@ -270,5 +283,26 @@ mod tests {
             ControlCommand::OpenServiceWebSocket { app_id, service }
                 if app_id == "com.example.agent" && service == "main"
         ));
+    }
+
+    #[test]
+    fn http_proxy_command_round_trips_binary_body_as_base64() {
+        let command = ControlCommand::ProxyServiceHttp {
+            app_id: "com.example.agent".into(),
+            service: "api".into(),
+            method: "POST".into(),
+            path: "/api/chat?stream=false".into(),
+            headers: std::collections::BTreeMap::from([(
+                "content-type".into(),
+                "application/octet-stream".into(),
+            )]),
+            body_base64: "AAEC/w==".into(),
+        };
+        let value = serde_json::to_value(&command).unwrap();
+        assert_eq!(value["type"], "proxyServiceHttp");
+        assert_eq!(
+            serde_json::from_value::<ControlCommand>(value).unwrap(),
+            command
+        );
     }
 }
