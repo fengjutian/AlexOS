@@ -74,8 +74,11 @@ nav_order: 4
 - [已完成] 政策声明拒绝闸门：manifest 声明 `filesystem` / `network` / `shell` 政策但宿主尚不能
   强制时，`start_application` 拒绝启动（诚实不静默降级）；宿主全局默认限额
   `ALEX_DEFAULT_LIMITS`（`memory=` / `processes=` / `cpu=`）应用到未声明 resources 的服务；
-- [未做] Restricted Token、Job Object、ACL 三者组合（Job Object 已用于资源限制与进程树清理，
-  Restricted Token / ACL 尚未接入 service 启动路径）；
+- [已完成基础] Restricted Token 原语（`create_restricted_token`：`CreateRestrictedToken` +
+  `DISABLE_MAX_PRIVILEGE` + `WinRestrictedCodeSid`）与保留 stdio 的受管 spawn
+  （`spawn_restricted_with_stdio`：匿名管道 + `STARTF_USESTDHANDLES` + `CreateProcessAsUserW`，
+  测试证明受限令牌子进程可正常产出 stdout）；接入 0.1 supervisor 的 `RuntimeProcess` I/O 重构仍待做；
+- [未做] Restricted Token + Job Object + ACL 三者在 0.1 service 启动路径的最终接线；
 - [未做] backend 文件、进程和网络策略强制执行（当前为「声明即拒绝」，未到「声明即强制」）；
 - [未做] 权限撤销与审计覆盖实际服务进程。
 

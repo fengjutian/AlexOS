@@ -636,6 +636,230 @@ impl IsolationProvider for RestrictedTokenProvider {
     }
 }
 
+/// Parent-side ends of a child's stdio pipes created by
+/// [`spawn_restricted_with_stdio`]. The caller owns these handles and
+/// must close them (e.g. by wrapping in `std::fs::File`).
+#[cfg(windows)]
+pub struct SpawnedStdio {
+    pub stdin: Option<windows::Win32::Foundation::HANDLE>,
+    pub stdout: Option<windows::Win32::Foundation::HANDLE>,
+    pub stderr: Option<windows::Win32::Foundation::HANDLE>,
+}
+
+/// Create a primary token with all removable privileges disabled and
+/// the `WinRestrictedCodeSid` added as a restricted SID. This is the
+/// "Restricted Token" half of the 0.4 security boundary; the returned
+/// handle must be closed by the caller.
+#[cfg(windows)]
+fn create_restricted_token() -> Result<windows::Win32::Foundation::HANDLE, IsolationError> {
+    use windows::Win32::{
+        Foundation::{CloseHandle, HANDLE},
+        Security::{
+            CreateRestrictedToken, CreateWellKnownSid, DISABLE_MAX_PRIVILEGE, PSID,
+            SECURITY_MAX_SID_SIZE, SID_AND_ATTRIBUTES, TOKEN_ASSIGN_PRIMARY, TOKEN_DUPLICATE,
+            TOKEN_QUERY, WinRestrictedCodeSid,
+        },
+        System::Threading::{GetCurrentProcess, OpenProcessToken},
+    };
+    let mut current = HANDLE::default();
+    unsafe {
+        OpenProcessToken(
+            GetCurrentProcess(),
+            TOKEN_ASSIGN_PRIMARY | TOKEN_DUPLICATE | TOKEN_QUERY,
+            &mut current,
+        )
+    }
+    .map_err(|e| IsolationError::Bind(format!("OpenProcessToken: {e}")))?;
+    let mut restricted = HANDLE::default();
+    let mut restricted_sid = [0u8; SECURITY_MAX_SID_SIZE as usize];
+    let mut restricted_sid_size = restricted_sid.len() as u32;
+    unsafe {
+        CreateWellKnownSid(
+            WinRestrictedCodeSid,
+            None,
+            Some(PSID(restricted_sid.as_mut_ptr().cast())),
+            &mut restricted_sid_size,
+        )
+    }
+    .map_err(|e| IsolationError::Bind(format!("CreateWellKnownSid: {e}")))?;
+    let restricting = [SID_AND_ATTRIBUTES {
+        Sid: PSID(restricted_sid.as_mut_ptr().cast()),
+        Attributes: 0,
+    }];
+    let result = unsafe {
+        CreateRestrictedToken(
+            current,
+            DISABLE_MAX_PRIVILEGE,
+            Some(&restricting),
+            None,
+            None,
+            &mut restricted,
+        )
+    };
+    unsafe {
+        let _ = CloseHandle(current);
+    }
+    result.map_err(|e| IsolationError::Bind(format!("CreateRestrictedToken: {e}")))?;
+    Ok(restricted)
+}
+
+/// Create an anonymous pipe whose child end is inheritable and whose
+/// parent end is not. `child_end_is_read` selects which end the child
+/// keeps: `true` for stdin, `false` for stdout/stderr.
+#[cfg(windows)]
+fn create_stdio_pipe(
+    child_end_is_read: bool,
+) -> Result<(windows::Win32::Foundation::HANDLE, windows::Win32::Foundation::HANDLE), IsolationError>
+{
+    use windows::Win32::{
+        Foundation::{HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation},
+        System::Pipes::CreatePipe,
+    };
+    let mut read = HANDLE::default();
+    let mut write = HANDLE::default();
+    unsafe { CreatePipe(&mut read, &mut write, None, 0) }
+        .map_err(|e| IsolationError::Bind(format!("CreatePipe: {e}")))?;
+    let (parent, child) = if child_end_is_read {
+        (write, read)
+    } else {
+        (read, write)
+    };
+    unsafe {
+        let _ = SetHandleInformation(parent, HANDLE_FLAG_INHERIT.0, HANDLE_FLAGS(0));
+        let _ = SetHandleInformation(child, HANDLE_FLAG_INHERIT.0, HANDLE_FLAG_INHERIT);
+    }
+    Ok((parent, child))
+}
+
+/// Spawn the request with a restricted primary token **and** explicit
+/// stdio pipes, so the caller can still run the JSON Lines RPC and
+/// collect logs. This is the primitive the 0.1 supervisor needs to
+/// wire Restricted Token + Job Object into its launch path without
+/// losing backend I/O. `need_*` selects which pipes to create; the
+/// returned [`SpawnedStdio`] carries the parent ends.
+#[cfg(windows)]
+pub fn spawn_restricted_with_stdio(
+    request: &SpawnRequest,
+    need_stdin: bool,
+    need_stdout: bool,
+    need_stderr: bool,
+) -> Result<(Spawned, SpawnedStdio), IsolationError> {
+    use std::os::windows::ffi::OsStrExt;
+    use windows::Win32::{
+        Foundation::CloseHandle,
+        System::Threading::{
+            CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+        },
+    };
+    use windows::core::{PCWSTR, PWSTR};
+
+    let restricted = create_restricted_token()?;
+
+    let (parent_in, child_in) = if need_stdin {
+        let (parent, child) = create_stdio_pipe(true)?;
+        (Some(parent), Some(child))
+    } else {
+        (None, None)
+    };
+    let (parent_out, child_out) = if need_stdout {
+        let (parent, child) = create_stdio_pipe(false)?;
+        (Some(parent), Some(child))
+    } else {
+        (None, None)
+    };
+    let (parent_err, child_err) = if need_stderr {
+        let (parent, child) = create_stdio_pipe(false)?;
+        (Some(parent), Some(child))
+    } else {
+        (None, None)
+    };
+
+    let quote = |value: &str| format!("\"{}\"", value.replace('"', "\\\""));
+    let mut command_line = quote(&request.executable.to_string_lossy());
+    for arg in &request.args {
+        command_line.push(' ');
+        command_line.push_str(&quote(arg));
+    }
+    let mut command_wide: Vec<u16> = std::ffi::OsStr::new(&command_line)
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let app_wide: Vec<u16> = request
+        .executable
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let cwd_wide: Vec<u16> = request
+        .cwd
+        .as_os_str()
+        .encode_wide()
+        .chain(Some(0))
+        .collect();
+    let mut environment = Vec::<u16>::new();
+    for (name, value) in &request.env {
+        environment.extend(std::ffi::OsStr::new(&format!("{name}={value}")).encode_wide());
+        environment.push(0);
+    }
+    environment.push(0);
+    let startup = STARTUPINFOW {
+        cb: std::mem::size_of::<STARTUPINFOW>() as u32,
+        dwFlags: STARTF_USESTDHANDLES,
+        hStdInput: child_in.unwrap_or_default(),
+        hStdOutput: child_out.unwrap_or_default(),
+        hStdError: child_err.unwrap_or_default(),
+        ..Default::default()
+    };
+    let mut process = PROCESS_INFORMATION::default();
+    let created = unsafe {
+        CreateProcessAsUserW(
+            Some(restricted),
+            PCWSTR(app_wide.as_ptr()),
+            Some(PWSTR(command_wide.as_mut_ptr())),
+            None,
+            None,
+            true,
+            CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+            Some(environment.as_ptr().cast()),
+            PCWSTR(cwd_wide.as_ptr()),
+            &startup,
+            &mut process,
+        )
+    };
+    unsafe {
+        let _ = CloseHandle(restricted);
+        if let Some(handle) = child_in {
+            let _ = CloseHandle(handle);
+        }
+        if let Some(handle) = child_out {
+            let _ = CloseHandle(handle);
+        }
+        if let Some(handle) = child_err {
+            let _ = CloseHandle(handle);
+        }
+    }
+    created.map_err(|e| IsolationError::Bind(format!("CreateProcessAsUserW: {e}")))?;
+    unsafe {
+        let _ = CloseHandle(process.hThread);
+        let _ = CloseHandle(process.hProcess);
+    }
+    Ok((
+        Spawned {
+            pid: process.dwProcessId,
+            isolation: IsolationHandle {
+                boundary: Some(BoundaryKind::AppContainer),
+                accounting: None,
+            },
+        },
+        SpawnedStdio {
+            stdin: parent_in,
+            stdout: parent_out,
+            stderr: parent_err,
+        },
+    ))
+}
+
 pub struct WslOciProvider;
 
 #[cfg(windows)]
@@ -748,6 +972,64 @@ mod tests {
         fn assert_sync<T: Sync>() {}
         assert_send::<JobHandle>();
         assert_sync::<JobHandle>();
+    }
+
+    /// 0.4 Restricted Token contract: creating a restricted primary
+    /// token succeeds on Windows and yields a real (non-null) handle.
+    #[cfg(windows)]
+    #[test]
+    fn restricted_token_creation_succeeds() {
+        use windows::Win32::Foundation::CloseHandle;
+        let token = create_restricted_token().expect("restricted token");
+        assert!(!token.0.is_null(), "restricted token handle is null");
+        unsafe {
+            let _ = CloseHandle(token);
+        }
+    }
+
+    /// 0.4 Restricted Token + stdio contract: a child spawned through
+    /// the restricted-token path still gets its stdout captured, so the
+    /// supervisor can later wire this into the JSON Lines RPC launch
+    /// without losing backend I/O.
+    #[cfg(windows)]
+    #[test]
+    fn restricted_spawn_captures_stdout() {
+        use std::io::Read;
+        use std::os::windows::io::FromRawHandle;
+
+        // `whoami.exe` takes no arguments, needs no PATH, and prints
+        // the token's user name to stdout — exactly what we need to
+        // prove the restricted-token spawn preserves stdio pipes.
+        let request = SpawnRequest {
+            executable: PathBuf::from(r"C:\Windows\System32\whoami.exe"),
+            args: Vec::new(),
+            env: vec![
+                ("SystemRoot".into(), r"C:\Windows".into()),
+                ("PATH".into(), r"C:\Windows\System32".into()),
+            ],
+            cwd: std::env::temp_dir(),
+            limits: &ResourceLimits::default(),
+            level: IsolationLevel::AppContainer,
+        };
+        let (spawned, stdio) =
+            spawn_restricted_with_stdio(&request, false, true, true).expect("spawn restricted");
+        assert!(spawned.pid > 0);
+        let stdout = stdio.stdout.expect("stdout pipe");
+        let stderr = stdio.stderr.expect("stderr pipe");
+
+        let mut out = Vec::new();
+        let mut out_file = unsafe { std::fs::File::from_raw_handle(stdout.0) };
+        out_file.read_to_end(&mut out).unwrap();
+        let mut err = Vec::new();
+        let mut err_file = unsafe { std::fs::File::from_raw_handle(stderr.0) };
+        err_file.read_to_end(&mut err).unwrap();
+
+        assert!(
+            !String::from_utf8_lossy(&out).trim().is_empty(),
+            "restricted child stdout empty (stdout={}, stderr={})",
+            String::from_utf8_lossy(&out),
+            String::from_utf8_lossy(&err),
+        );
     }
 
     /// P0 §3.1 contract test: dropping the `IsolationHandle` for
