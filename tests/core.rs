@@ -15,8 +15,7 @@ use alex::{
     permission::Permission,
     plugin,
     runtime::{
-        application_supervisor::ApplicationObservedState,
-        service_supervisor::ServiceStatus,
+        application_supervisor::ApplicationObservedState, service_supervisor::ServiceStatus,
     },
     trust::TrustStore,
     update::{self, UpdateChannel},
@@ -973,13 +972,20 @@ fn manager_router_dispatches_per_service_and_restart() {
         params: json!({ "id": "com.alex.hello" }),
         deadline_ms: None,
     });
-    assert!(response.error.is_none(), "list_services: {:?}", response.error);
+    assert!(
+        response.error.is_none(),
+        "list_services: {:?}",
+        response.error
+    );
     let result = response.result.expect("list_services result");
     let services = result
         .get("services")
         .and_then(|v| v.as_array())
         .expect("services array");
-    assert!(!services.is_empty(), "v1 manifest should expose at least one service");
+    assert!(
+        !services.is_empty(),
+        "v1 manifest should expose at least one service"
+    );
     let first_name = services[0]["name"].as_str().expect("service name");
     assert_eq!(first_name, "main");
 
@@ -1032,7 +1038,11 @@ fn manager_router_dispatches_per_service_and_restart() {
         params: json!({ "id": "com.alex.hello", "service": "main" }),
         deadline_ms: None,
     });
-    assert!(response.error.is_none(), "stop_service: {:?}", response.error);
+    assert!(
+        response.error.is_none(),
+        "stop_service: {:?}",
+        response.error
+    );
 
     // restart_service — same shape, exercises the
     // dispatch path even if the underlying
@@ -3234,7 +3244,9 @@ permissions:
     let permissions = workspace.path().join("permissions");
     package::pack(&source, &archive).unwrap();
     let manager = LocalAppManager::open_with(&apps, permissions).unwrap();
-    manager.install(&archive, InstallOptions::default()).unwrap();
+    manager
+        .install(&archive, InstallOptions::default())
+        .unwrap();
     let error = manager
         .set_permission(
             "com.alex.policy2",
@@ -3278,10 +3290,7 @@ fn application_supervisor_holds_two_services_with_independent_pids() {
     };
     let spec_a = make("primary", "primary.js");
     let spec_b = make("secondary", "secondary.js");
-    supervisor.register_application(
-        "com.example.dual",
-        vec![spec_a.clone(), spec_b.clone()],
-    );
+    supervisor.register_application("com.example.dual", vec![spec_a.clone(), spec_b.clone()]);
     // The two services are registered with different specs
     // (different `command` paths). The supervisor must keep
     // them in separate slots with independent restart counts
@@ -3299,11 +3308,7 @@ fn application_supervisor_holds_two_services_with_independent_pids() {
     assert_eq!(secondary.status, ServiceStatus::Pending);
     // Bump primary into Crashed with a known error. The
     // secondary slot must remain untouched.
-    assert!(supervisor.set_service_status(
-        "com.example.dual",
-        "primary",
-        ServiceStatus::Crashed,
-    ));
+    assert!(supervisor.set_service_status("com.example.dual", "primary", ServiceStatus::Crashed,));
     let app = supervisor
         .application("com.example.dual")
         .expect("dual app present after primary crash");
@@ -3331,8 +3336,7 @@ fn application_supervisor_holds_two_services_with_independent_pids() {
         .list_services("com.example.dual")
         .expect("list services");
     assert_eq!(listed.len(), 2);
-    let names: std::collections::BTreeSet<_> =
-        listed.iter().map(|svc| svc.name.clone()).collect();
+    let names: std::collections::BTreeSet<_> = listed.iter().map(|svc| svc.name.clone()).collect();
     assert!(names.contains("primary"));
     assert!(names.contains("secondary"));
     // The `_` here is just to keep the test self-documenting
@@ -3431,7 +3435,11 @@ fn application_supervisor_stop_on_idempotent_state_returns_ok() {
     use alex::runtime::service_supervisor::ServiceStatus;
     use std::collections::BTreeMap;
 
-    for terminal in [ServiceStatus::Stopped, ServiceStatus::Crashed, ServiceStatus::Blocked] {
+    for terminal in [
+        ServiceStatus::Stopped,
+        ServiceStatus::Crashed,
+        ServiceStatus::Blocked,
+    ] {
         let supervisor = ApplicationSupervisor::new();
         let descriptor = ServiceDescriptor {
             name: "main".to_owned(),
@@ -3446,11 +3454,7 @@ fn application_supervisor_stop_on_idempotent_state_returns_ok() {
             restart: ServiceRestartDescriptor::default(),
         };
         supervisor.register_application("com.example.idempotent", vec![descriptor]);
-        assert!(supervisor.set_service_status(
-            "com.example.idempotent",
-            "main",
-            terminal,
-        ));
+        assert!(supervisor.set_service_status("com.example.idempotent", "main", terminal,));
         let result = supervisor.stop_service("com.example.idempotent", "main");
         assert!(result.is_ok(), "{result:?}");
         assert_eq!(result.unwrap(), terminal);
@@ -3518,8 +3522,7 @@ fn dag_linear_chain_yields_three_layers() {
     // assert the supervisor's surface still lists all
     // three.
     assert_eq!(list.len(), 3);
-    let names: std::collections::BTreeSet<_> =
-        list.iter().map(|svc| svc.name.clone()).collect();
+    let names: std::collections::BTreeSet<_> = list.iter().map(|svc| svc.name.clone()).collect();
     assert!(names.contains("a"));
     assert!(names.contains("b"));
     assert!(names.contains("c"));
@@ -3563,7 +3566,8 @@ fn dag_cycle_is_rejected_before_any_service_starts() {
     ];
     let manifest = build_v2_manifest(services.clone());
     supervisor.register_application("com.example.cycle", services);
-    let result = supervisor.start_application("com.example.cycle", std::path::Path::new("."), &manifest);
+    let result =
+        supervisor.start_application("com.example.cycle", std::path::Path::new("."), &manifest);
     assert!(result.is_err(), "cycle must be rejected");
     let error = result.unwrap_err().to_string();
     assert!(
@@ -3603,10 +3607,14 @@ fn dag_unknown_dependency_is_rejected_at_start() {
     }];
     let manifest = build_v2_manifest(services.clone());
     supervisor.register_application("com.example.ghost", services);
-    let result = supervisor.start_application("com.example.ghost", std::path::Path::new("."), &manifest);
+    let result =
+        supervisor.start_application("com.example.ghost", std::path::Path::new("."), &manifest);
     assert!(result.is_err(), "unknown dependency must be rejected");
     let error = result.unwrap_err().to_string();
-    assert!(error.contains("ghost") || error.contains("unknown"), "unexpected error: {error}");
+    assert!(
+        error.contains("ghost") || error.contains("unknown"),
+        "unexpected error: {error}"
+    );
 }
 
 #[test]
@@ -3656,11 +3664,8 @@ fn application_supervisor_start_then_stop_leaves_no_orphan_slots() {
     // as soon as the node process is up, so both slots land
     // in `Healthy` even without a real `node` binary on the
     // test host.
-    let start_result = supervisor.start_application(
-        "com.example.cycle2",
-        std::path::Path::new("."),
-        &manifest,
-    );
+    let start_result =
+        supervisor.start_application("com.example.cycle2", std::path::Path::new("."), &manifest);
     assert!(start_result.is_ok(), "{start_result:?}");
     // Now stop. Every service must reach a terminal state,
     // and the app must roll up to `Stopped`.
@@ -3900,12 +3905,8 @@ fn per_service_log_files_are_teed_with_secret_redaction() {
     // `start_service` actually wires a watchdog +
     // spawns the child. The synchronous Node spawn
     // does not need a ready-handshake.
-    let start_result = supervisor.start_service(
-        "com.example.tee_logs",
-        "main",
-        temp.path(),
-        &descriptor,
-    );
+    let start_result =
+        supervisor.start_service("com.example.tee_logs", "main", temp.path(), &descriptor);
     assert!(
         start_result.is_ok(),
         "start_service should succeed, was {start_result:?}"
@@ -3945,12 +3946,14 @@ fn per_service_log_files_are_teed_with_secret_redaction() {
     let _ = supervisor.stop_service("com.example.tee_logs", "main");
 }
 
-/// Build a v2 `ApplicationManifest` from a list of `ServiceDescriptor`s.
+/// Build a resolved v2 application from a list of `ServiceDescriptor`s.
 /// Used by the Phase 3 integration tests to feed the supervisor
-/// without having to round-trip through the YAML loader.
+/// without having to round-trip through the YAML loader. The
+/// supervisor only accepts `ResolvedApplication`, so the helper
+/// resolves the synthetic manifest before returning.
 fn build_v2_manifest(
     services: Vec<ServiceDescriptor>,
-) -> alex::core::application_manifest::ApplicationManifest {
+) -> alex::core::application_manifest::ResolvedApplication {
     use alex::core::application_manifest::ApplicationManifest;
     use alex::manifest_v2::{
         ApplicationManifestV2 as V2, RuntimeRequirements, ServicePort, ServiceSpec,
@@ -3986,4 +3989,6 @@ fn build_v2_manifest(
         permissions: Default::default(),
     };
     ApplicationManifest::V2(v2)
+        .resolve()
+        .expect("synthetic v2 manifest must resolve")
 }

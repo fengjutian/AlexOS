@@ -18,7 +18,7 @@ use zip::{ZipArchive, ZipWriter, write::SimpleFileOptions};
 use crate::{
     AlexError,
     core::{
-        application_manifest::{load_application, ManifestError},
+        application_manifest::{ManifestError, load_application},
         manifest::{AppManifest, UpdateSource},
         manifest_v2::{self, ManifestV2Error},
     },
@@ -133,12 +133,10 @@ fn map_manifest_error(error: ManifestError) -> PackageError {
         ManifestError::BothManifests => {
             PackageError::Integrity("package contains both manifest.json and app.yaml".into())
         }
-        ManifestError::MissingManifest(_) => PackageError::Integrity(
-            "package has neither manifest.json nor app.yaml".into(),
-        ),
-        ManifestError::ManifestTooLarge => {
-            PackageError::Limit("manifest exceeds 1 MiB".into())
+        ManifestError::MissingManifest(_) => {
+            PackageError::Integrity("package has neither manifest.json nor app.yaml".into())
         }
+        ManifestError::ManifestTooLarge => PackageError::Limit("manifest exceeds 1 MiB".into()),
         ManifestError::Invalid(message) => PackageError::Manifest(message),
     }
 }
@@ -790,10 +788,8 @@ pub fn archive_identity(archive_path: &Path) -> Result<(String, String), Package
         return Ok((manifest.id, manifest.version));
     }
     if let Ok(entry) = archive.by_name("app.yaml") {
-        let manifest: manifest_v2::ApplicationManifestV2 =
-            serde_yaml_ng::from_reader(entry).map_err(|error| {
-                PackageError::Integrity(format!("invalid app.yaml: {error}"))
-            })?;
+        let manifest: manifest_v2::ApplicationManifestV2 = serde_yaml_ng::from_reader(entry)
+            .map_err(|error| PackageError::Integrity(format!("invalid app.yaml: {error}")))?;
         return Ok((manifest.id, manifest.version));
     }
     Err(PackageError::Integrity(
@@ -839,7 +835,8 @@ pub fn update_verified(
     if !allow_downgrade && next_version <= current_version {
         return Err(PackageError::Version(format!(
             "{} is not newer than {}",
-            next_version_str, current.version()
+            next_version_str,
+            current.version()
         )));
     }
 

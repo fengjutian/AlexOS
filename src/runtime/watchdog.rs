@@ -119,14 +119,7 @@ pub(crate) fn spawn_watchdog<H: SupervisorHooks + Send + Sync + 'static>(
     thread::Builder::new()
         .name(format!("alex-watchdog-{app_id}-{service_name}"))
         .spawn(move || {
-            run_watchdog(
-                app_id,
-                service_name,
-                handle,
-                config,
-                hooks,
-                stop_signal,
-            );
+            run_watchdog(app_id, service_name, handle, config, hooks, stop_signal);
         })
         .expect("watchdog thread should start")
 }
@@ -139,8 +132,12 @@ pub(crate) fn spawn_watchdog<H: SupervisorHooks + Send + Sync + 'static>(
 /// (one or two map lookups + a clone) so the supervisor's
 /// lock is held only for the duration of the call.
 pub(crate) trait SupervisorHooks {
-    fn probe_health(&self, app_id: &str, service_name: &str, port: u16)
-        -> Option<HealthCheckContext>;
+    fn probe_health(
+        &self,
+        app_id: &str,
+        service_name: &str,
+        port: u16,
+    ) -> Option<HealthCheckContext>;
     fn record_health_outcome(
         &self,
         app_id: &str,
@@ -148,17 +145,8 @@ pub(crate) trait SupervisorHooks {
         outcome: HealthUpdate,
         failure_threshold: u32,
     );
-    fn record_exit(
-        &self,
-        app_id: &str,
-        service_name: &str,
-        runtime_state: RuntimeState,
-    );
-    fn read_service_spec(
-        &self,
-        app_id: &str,
-        service_name: &str,
-    ) -> Option<ServiceSpecSnapshot>;
+    fn record_exit(&self, app_id: &str, service_name: &str, runtime_state: RuntimeState);
+    fn read_service_spec(&self, app_id: &str, service_name: &str) -> Option<ServiceSpecSnapshot>;
     fn read_service_status(&self, app_id: &str, service_name: &str) -> Option<ServiceStatus>;
 }
 

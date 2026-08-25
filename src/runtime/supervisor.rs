@@ -148,7 +148,9 @@ fn shutdown_grace_for(endpoint: &Option<ServiceEndpoint>) -> (BackendMode, Durat
 pub enum RuntimeError {
     #[error("Node.js was not found; set ALEX_NODE to the node executable")]
     NodeNotFound,
-    #[error("Python runtime is not managed by Alex OS in this build; Phase 7 adds the managed Python provider")]
+    #[error(
+        "Python runtime is not managed by Alex OS in this build; Phase 7 adds the managed Python provider"
+    )]
     PythonNotManaged,
     #[error("failed to start runtime {executable}: {source}")]
     Start {
@@ -797,11 +799,8 @@ impl RuntimeProcess {
         // misconfigured install does not silently drop
         // every log line.
         let log_sink = match log_dir {
-            Some(dir) => crate::runtime::log_file::ServiceLogSink::open(
-                dir,
-                &spec.service_name,
-            )
-            .map_err(RuntimeError::Io)?,
+            Some(dir) => crate::runtime::log_file::ServiceLogSink::open(dir, &spec.service_name)
+                .map_err(RuntimeError::Io)?,
             None => None,
         };
         // Dispatch on the declared runtime. `Node` keeps the
@@ -929,7 +928,13 @@ impl RuntimeProcess {
         let logs_for_thread = Arc::clone(&logs);
         let sink_for_stderr = log_sink.clone();
         thread::spawn(move || {
-            stderr_pump(stderr, logs_for_thread, ready_tx, flag_for_thread, sink_for_stderr);
+            stderr_pump(
+                stderr,
+                logs_for_thread,
+                ready_tx,
+                flag_for_thread,
+                sink_for_stderr,
+            );
         });
         // Service mode also gets a stdout drain. RPC mode keeps
         // stdout in `Self::stdout` for the JSON Lines read loop.

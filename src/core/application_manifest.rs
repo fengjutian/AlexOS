@@ -433,9 +433,9 @@ impl ApplicationManifest {
     pub fn resolve(&self) -> Result<ResolvedApplication, ManifestError> {
         let version = semver::Version::parse(self.version())
             .map_err(|error| ManifestError::Invalid(format!("invalid version: {error}")))?;
-        let frontend = self
-            .frontend()
-            .map(|frontend| ResolvedFrontend { entry: frontend.entry });
+        let frontend = self.frontend().map(|frontend| ResolvedFrontend {
+            entry: frontend.entry,
+        });
         let services = self
             .services()
             .into_iter()
@@ -480,8 +480,8 @@ fn load_v1(path: &Path, root: &Path) -> Result<AppManifestV1, ManifestError> {
         return Err(ManifestError::ManifestTooLarge);
     }
     let input = std::fs::read_to_string(path)?;
-    let manifest: AppManifestV1 = serde_json::from_str(&input)
-        .map_err(|error| ManifestError::Invalid(error.to_string()))?;
+    let manifest: AppManifestV1 =
+        serde_json::from_str(&input).map_err(|error| ManifestError::Invalid(error.to_string()))?;
     manifest
         .validate(root)
         .map_err(|error| ManifestError::Invalid(error.to_string()))?;
@@ -719,7 +719,10 @@ services:
         assert_eq!(services[0].command, "main.js");
         assert!(services[0].depends_on.is_empty());
         assert!(services[0].args.is_empty());
-        assert!(services[0].health.is_none(), "rpc backend has no health check");
+        assert!(
+            services[0].health.is_none(),
+            "rpc backend has no health check"
+        );
         assert!(services[0].port.is_none());
         assert!(manifest.has_services());
     }
@@ -825,7 +828,10 @@ services:
         assert_eq!(api.restart.policy, ServiceRestartPolicy::OnFailure);
         assert_eq!(api.restart.max_retries, 7);
 
-        let worker = services.iter().find(|s| s.name == "worker").expect("worker");
+        let worker = services
+            .iter()
+            .find(|s| s.name == "worker")
+            .expect("worker");
         assert_eq!(worker.runtime, ServiceRuntime::Python);
         assert_eq!(worker.command, "worker.py");
         let worker_health = worker.health.as_ref().expect("process health");
@@ -1047,10 +1053,7 @@ services:
 
         assert_eq!(resolved.id, "com.alex.hello");
         assert_eq!(resolved.name, "Hello");
-        assert_eq!(
-            resolved.version,
-            semver::Version::parse("0.1.0").unwrap()
-        );
+        assert_eq!(resolved.version, semver::Version::parse("0.1.0").unwrap());
         assert_eq!(
             resolved.frontend.as_ref().map(|f| f.entry.as_str()),
             Some("index.html")

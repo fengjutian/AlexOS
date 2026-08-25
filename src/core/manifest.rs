@@ -1,9 +1,8 @@
-﻿use std::{collections::BTreeMap, path::Path};
+use std::{collections::BTreeMap, path::Path};
 
 use serde::{Deserialize, Serialize};
 
 use crate::{AlexError, permission::Permission};
-
 
 #[derive(Debug, Clone, Serialize, Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]

@@ -28,14 +28,14 @@ use thiserror::Error;
 use crate::{
     authorization::{AuditEntry, AuthorizationError, PermissionDecision, PermissionStore},
     core::{
-        application_manifest::{load_application, ApplicationManifest, ManifestError},
+        application_manifest::{ApplicationManifest, ManifestError, load_application},
         manifest::{AppManifest, BackendMode, RuntimeKind},
     },
     package,
     package::PackageError,
     runtime::{
-        application_supervisor::{ApplicationSupervisor, ApplicationSupervisorError},
         RuntimeState, RuntimeStatus,
+        application_supervisor::{ApplicationSupervisor, ApplicationSupervisorError},
     },
     trust,
 };
@@ -240,26 +240,10 @@ pub trait AppManager: Send + Sync {
     /// continue to call `start_service("main", ...)`
     /// through [`Self::launch`] — the trait method is the
     /// general-purpose one.
-    fn start_service(
-        &self,
-        id: &str,
-        service: &str,
-    ) -> Result<RuntimeStatus, ManagerError>;
-    fn stop_service(
-        &self,
-        id: &str,
-        service: &str,
-    ) -> Result<RuntimeStatus, ManagerError>;
-    fn restart_service(
-        &self,
-        id: &str,
-        service: &str,
-    ) -> Result<RuntimeStatus, ManagerError>;
-    fn service_status(
-        &self,
-        id: &str,
-        service: &str,
-    ) -> Result<RuntimeStatus, ManagerError>;
+    fn start_service(&self, id: &str, service: &str) -> Result<RuntimeStatus, ManagerError>;
+    fn stop_service(&self, id: &str, service: &str) -> Result<RuntimeStatus, ManagerError>;
+    fn restart_service(&self, id: &str, service: &str) -> Result<RuntimeStatus, ManagerError>;
+    fn service_status(&self, id: &str, service: &str) -> Result<RuntimeStatus, ManagerError>;
     fn list_services(
         &self,
         id: &str,
@@ -277,11 +261,7 @@ pub trait AppManager: Send + Sync {
     /// transient "Allow Once" grants, which never reach disk). The
     /// caller may pass any `limit`; the returned list is
     /// newest-first and never longer than `limit`.
-    fn recent_audit_log(
-        &self,
-        id: &str,
-        limit: usize,
-    ) -> Result<Vec<AuditEntry>, ManagerError>;
+    fn recent_audit_log(&self, id: &str, limit: usize) -> Result<Vec<AuditEntry>, ManagerError>;
     fn registry_path(&self) -> &Path;
     fn install_root(&self) -> &Path;
 }
@@ -813,11 +793,7 @@ impl AppManager for LocalAppManager {
         Ok(())
     }
 
-    fn recent_audit_log(
-        &self,
-        id: &str,
-        limit: usize,
-    ) -> Result<Vec<AuditEntry>, ManagerError> {
+    fn recent_audit_log(&self, id: &str, limit: usize) -> Result<Vec<AuditEntry>, ManagerError> {
         // Audit reads do not require the manifest to load — the
         // log file is keyed by app id, not by declared
         // permissions. We still call `open_at` so a missing
@@ -865,9 +841,7 @@ impl AppManager for LocalAppManager {
                 // service DAG. v2 launch is a no-op for
                 // manifests that declare zero services
                 // (headless UI-only apps).
-                let _ = self
-                    .runtimes
-                    .launch_v2(id, &install_path, &manifest)?;
+                let _ = self.runtimes.launch_v2(id, &install_path, &manifest)?;
                 self.runtimes.status(id)?
             }
         };
@@ -895,35 +869,19 @@ impl AppManager for LocalAppManager {
         Ok(self.runtimes.status(id)?)
     }
 
-    fn start_service(
-        &self,
-        id: &str,
-        service: &str,
-    ) -> Result<RuntimeStatus, ManagerError> {
+    fn start_service(&self, id: &str, service: &str) -> Result<RuntimeStatus, ManagerError> {
         Ok(self.runtimes.start_one_service(id, service)?)
     }
 
-    fn stop_service(
-        &self,
-        id: &str,
-        service: &str,
-    ) -> Result<RuntimeStatus, ManagerError> {
+    fn stop_service(&self, id: &str, service: &str) -> Result<RuntimeStatus, ManagerError> {
         Ok(self.runtimes.stop_one_service(id, service)?)
     }
 
-    fn restart_service(
-        &self,
-        id: &str,
-        service: &str,
-    ) -> Result<RuntimeStatus, ManagerError> {
+    fn restart_service(&self, id: &str, service: &str) -> Result<RuntimeStatus, ManagerError> {
         Ok(self.runtimes.restart_one_service(id, service)?)
     }
 
-    fn service_status(
-        &self,
-        id: &str,
-        service: &str,
-    ) -> Result<RuntimeStatus, ManagerError> {
+    fn service_status(&self, id: &str, service: &str) -> Result<RuntimeStatus, ManagerError> {
         Ok(self.runtimes.service_status(id, service)?)
     }
 
@@ -962,6 +920,7 @@ impl AppManager for LocalAppManager {
                     .unwrap_or(crate::runtime::service_supervisor::ServiceStatus::Pending);
                 crate::runtime::application_supervisor::ServiceSummary {
                     name: descriptor.name,
+                    depends_on: descriptor.depends_on,
                     status,
                     restart_count: 0,
                     last_error: None,
@@ -1099,11 +1058,9 @@ impl RuntimeSupervisor {
     /// compat caller.
     pub fn restart(&self, id: &str) -> Result<RuntimeStatus, SupervisorError> {
         let _ = self.inner.stop_service(id, "main");
-        self.inner.restart_service(id, "main", &self.install_root_for(id))?;
-        Ok(self
-            .inner
-            .runtime_status_compat(id)
-            .unwrap_or_default())
+        self.inner
+            .restart_service(id, "main", &self.install_root_for(id))?;
+        Ok(self.inner.runtime_status_compat(id).unwrap_or_default())
     }
 
     /// v2 multi-service launch. Goes through the layered
@@ -1150,10 +1107,7 @@ impl RuntimeSupervisor {
         let install_root = self.install_root_for(id);
         self.inner
             .start_service(id, service, &install_root, &descriptor)?;
-        Ok(self
-            .inner
-            .runtime_status_compat(id)
-            .unwrap_or_default())
+        Ok(self.inner.runtime_status_compat(id).unwrap_or_default())
     }
 
     /// Per-service stop. Idempotent: stopping a terminal
@@ -1182,10 +1136,7 @@ impl RuntimeSupervisor {
     ) -> Result<RuntimeStatus, SupervisorError> {
         let install_root = self.install_root_for(id);
         self.inner.restart_service(id, service, &install_root)?;
-        Ok(self
-            .inner
-            .runtime_status_compat(id)
-            .unwrap_or_default())
+        Ok(self.inner.runtime_status_compat(id).unwrap_or_default())
     }
 
     /// Per-service status snapshot. Returns a fabricated
@@ -1213,10 +1164,7 @@ impl RuntimeSupervisor {
     pub fn list_services(
         &self,
         id: &str,
-    ) -> Result<
-        Vec<crate::runtime::application_supervisor::ServiceSummary>,
-        SupervisorError,
-    > {
+    ) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, SupervisorError> {
         self.inner
             .list_services(id)
             .map_err(|error| SupervisorError::Supervisor(error.to_string()))
@@ -1253,9 +1201,7 @@ impl RuntimeSupervisor {
     ) -> Result<crate::core::application_manifest::ServiceDescriptor, SupervisorError> {
         let install_path = self.install_root.join(id);
         let manifest = load_application(&install_path).map_err(|error| {
-            SupervisorError::Supervisor(format!(
-                "failed to load manifest for {id}: {error}"
-            ))
+            SupervisorError::Supervisor(format!("failed to load manifest for {id}: {error}"))
         })?;
         // v1 single-backend manifests have a single
         // implicit "main" service; everything else is a
@@ -1280,9 +1226,7 @@ impl RuntimeSupervisor {
             .into_iter()
             .find(|svc| svc.name == service)
             .ok_or_else(|| {
-                SupervisorError::Supervisor(format!(
-                    "service {service:?} is not declared in {id}"
-                ))
+                SupervisorError::Supervisor(format!("service {service:?} is not declared in {id}"))
             })
     }
 
@@ -1352,28 +1296,29 @@ impl RuntimeSupervisor {
 /// legacy `Backend` block. Used by the v1 backward-compat
 /// launch path. The reverse mapping lives in
 /// `application_supervisor::service_descriptor_to_backend`.
-fn service_descriptor_from_backend(backend: &crate::manifest::Backend) -> crate::core::application_manifest::ServiceDescriptor {
+fn service_descriptor_from_backend(
+    backend: &crate::manifest::Backend,
+) -> crate::core::application_manifest::ServiceDescriptor {
     use crate::core::application_manifest::{
         ServiceDescriptor, ServiceHealthDescriptor, ServiceHealthKind, ServiceMode,
         ServiceRestartDescriptor, ServiceRestartPolicy,
     };
     use crate::core::manifest_v2::ServiceRuntime as V2Runtime;
-    let health = backend.health_check.as_ref().map(|check| ServiceHealthDescriptor {
-        kind: ServiceHealthKind::Http,
-        path: Some(check.path.clone()),
-        interval_ms: 5_000,
-        timeout_ms: check.timeout_ms,
-    });
+    let health = backend
+        .health_check
+        .as_ref()
+        .map(|check| ServiceHealthDescriptor {
+            kind: ServiceHealthKind::Http,
+            path: Some(check.path.clone()),
+            interval_ms: 5_000,
+            timeout_ms: check.timeout_ms,
+        });
     let restart_policy = match backend.restart.as_ref().map(|p| p.policy.as_str()) {
         Some("never") => ServiceRestartPolicy::Never,
         Some("always") => ServiceRestartPolicy::Always,
         _ => ServiceRestartPolicy::OnFailure,
     };
-    let max_retries = backend
-        .restart
-        .as_ref()
-        .map(|p| p.max_retries)
-        .unwrap_or(5);
+    let max_retries = backend.restart.as_ref().map(|p| p.max_retries).unwrap_or(5);
     ServiceDescriptor {
         name: "main".to_owned(),
         runtime: match backend.runtime {
@@ -1414,11 +1359,9 @@ fn runtime_status_from_service_snapshot(
 ) -> RuntimeStatus {
     use crate::runtime::service_supervisor::ServiceStatus as V2;
     let state = match snapshot.status {
-        V2::Pending
-        | V2::WaitingForDependencies
-        | V2::Stopping
-        | V2::Stopped
-        | V2::Blocked => RuntimeState::Stopped,
+        V2::Pending | V2::WaitingForDependencies | V2::Stopping | V2::Stopped | V2::Blocked => {
+            RuntimeState::Stopped
+        }
         V2::Starting => RuntimeState::Starting,
         V2::Healthy | V2::Unhealthy | V2::Restarting => RuntimeState::Running,
         V2::Crashed => RuntimeState::Crashed,
@@ -1580,68 +1523,51 @@ impl ManagerRouter {
             // the full `Vec<ServiceSummary>` so the
             // UI's detail view can render every
             // declared service in one round trip.
-            "manager.start_service" => {
-                match parse_id_and_service(&request.params) {
-                    Ok((id, service)) => match self.manager.start_service(&id, &service) {
-                        Ok(status) => json_response(
-                            &request.id,
-                            &serde_json::to_value(status).unwrap_or_default(),
-                        ),
-                        Err(error) => manager_error_response(&request.id, error),
-                    },
-                    Err(msg) => {
-                        crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg)
-                    }
-                }
-            }
-            "manager.stop_service" => {
-                match parse_id_and_service(&request.params) {
-                    Ok((id, service)) => match self.manager.stop_service(&id, &service) {
-                        Ok(status) => json_response(
-                            &request.id,
-                            &serde_json::to_value(status).unwrap_or_default(),
-                        ),
-                        Err(error) => manager_error_response(&request.id, error),
-                    },
-                    Err(msg) => {
-                        crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg)
-                    }
-                }
-            }
-            "manager.restart_service" => {
-                match parse_id_and_service(&request.params) {
-                    Ok((id, service)) => match self.manager.restart_service(&id, &service) {
-                        Ok(status) => json_response(
-                            &request.id,
-                            &serde_json::to_value(status).unwrap_or_default(),
-                        ),
-                        Err(error) => manager_error_response(&request.id, error),
-                    },
-                    Err(msg) => {
-                        crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg)
-                    }
-                }
-            }
-            "manager.service_status" => {
-                match parse_id_and_service(&request.params) {
-                    Ok((id, service)) => match self.manager.service_status(&id, &service) {
-                        Ok(status) => json_response(
-                            &request.id,
-                            &serde_json::to_value(status).unwrap_or_default(),
-                        ),
-                        Err(error) => manager_error_response(&request.id, error),
-                    },
-                    Err(msg) => {
-                        crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg)
-                    }
-                }
-            }
+            "manager.start_service" => match parse_id_and_service(&request.params) {
+                Ok((id, service)) => match self.manager.start_service(&id, &service) {
+                    Ok(status) => json_response(
+                        &request.id,
+                        &serde_json::to_value(status).unwrap_or_default(),
+                    ),
+                    Err(error) => manager_error_response(&request.id, error),
+                },
+                Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
+            },
+            "manager.stop_service" => match parse_id_and_service(&request.params) {
+                Ok((id, service)) => match self.manager.stop_service(&id, &service) {
+                    Ok(status) => json_response(
+                        &request.id,
+                        &serde_json::to_value(status).unwrap_or_default(),
+                    ),
+                    Err(error) => manager_error_response(&request.id, error),
+                },
+                Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
+            },
+            "manager.restart_service" => match parse_id_and_service(&request.params) {
+                Ok((id, service)) => match self.manager.restart_service(&id, &service) {
+                    Ok(status) => json_response(
+                        &request.id,
+                        &serde_json::to_value(status).unwrap_or_default(),
+                    ),
+                    Err(error) => manager_error_response(&request.id, error),
+                },
+                Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
+            },
+            "manager.service_status" => match parse_id_and_service(&request.params) {
+                Ok((id, service)) => match self.manager.service_status(&id, &service) {
+                    Ok(status) => json_response(
+                        &request.id,
+                        &serde_json::to_value(status).unwrap_or_default(),
+                    ),
+                    Err(error) => manager_error_response(&request.id, error),
+                },
+                Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
+            },
             "manager.list_services" => match parse_id(&request.params) {
                 Ok(id) => match self.manager.list_services(&id) {
-                    Ok(services) => json_response(
-                        &request.id,
-                        &serde_json::json!({ "services": services }),
-                    ),
+                    Ok(services) => {
+                        json_response(&request.id, &serde_json::json!({ "services": services }))
+                    }
                     Err(error) => manager_error_response(&request.id, error),
                 },
                 Err(msg) => crate::ipc::Response::error(&request.id, "INVALID_PARAMS", msg),
@@ -1708,9 +1634,7 @@ fn parse_id(params: &serde_json::Value) -> Result<String, String> {
 /// required; a missing or empty `service` is rejected
 /// because every multi-service supervisor slot is
 /// keyed by a non-empty name.
-fn parse_id_and_service(
-    params: &serde_json::Value,
-) -> Result<(String, String), String> {
+fn parse_id_and_service(params: &serde_json::Value) -> Result<(String, String), String> {
     let id = parse_id(params)?;
     let service = params
         .get("service")
@@ -1800,9 +1724,7 @@ fn parse_audit_log_params(params: &serde_json::Value) -> Result<(String, usize),
         return Err("`limit` must be at least 1".to_owned());
     }
     if limit > AUDIT_LOG_MAX_LIMIT {
-        return Err(format!(
-            "`limit` must be at most {AUDIT_LOG_MAX_LIMIT}"
-        ));
+        return Err(format!("`limit` must be at most {AUDIT_LOG_MAX_LIMIT}"));
     }
     Ok((id, limit))
 }
@@ -1910,7 +1832,9 @@ fn legacy_permission_from_name(name: &str) -> Option<crate::permission::Permissi
         "dialog.save" => Some(Permission::DialogSave),
         "clipboard.read" => Some(Permission::ClipboardRead),
         "clipboard.write" => Some(Permission::ClipboardWrite),
-        "system.openExternal" => Some(Permission::OpenExternal { origins: Vec::new() }),
+        "system.openExternal" => Some(Permission::OpenExternal {
+            origins: Vec::new(),
+        }),
         "storage" => Some(Permission::Storage),
         "paths" => Some(Permission::Paths),
         "window.manage" => Some(Permission::WindowManage),
@@ -1921,7 +1845,9 @@ fn legacy_permission_from_name(name: &str) -> Option<crate::permission::Permissi
         "shortcut.register" => Some(Permission::ShortcutRegister),
         "runtime.invoke" => Some(Permission::RuntimeInvoke),
         "runtime.manage" => Some(Permission::RuntimeManage),
-        "process.spawn" => Some(Permission::ProcessSpawn { executables: Vec::new() }),
+        "process.spawn" => Some(Permission::ProcessSpawn {
+            executables: Vec::new(),
+        }),
         "media.camera" => Some(Permission::MediaCamera),
         "media.microphone" => Some(Permission::MediaMicrophone),
         "geolocation" => Some(Permission::Geolocation),
@@ -1930,7 +1856,9 @@ fn legacy_permission_from_name(name: &str) -> Option<crate::permission::Permissi
         "system.manageApps" => Some(Permission::SystemManageApps),
         "system.manageExtensions" => Some(Permission::SystemManageExtensions),
         "system.managePermissions" => Some(Permission::SystemManagePermissions),
-        "network.fetch" => Some(Permission::NetworkFetch { origins: Vec::new() }),
+        "network.fetch" => Some(Permission::NetworkFetch {
+            origins: Vec::new(),
+        }),
         _ => None,
     }
 }

@@ -168,7 +168,11 @@ fn serve_system_asset(uri_path: &str) -> HttpResponse<std::borrow::Cow<'static, 
     // the rest of the routing, and the asset paths are the
     // same either way.)
     let stripped = if without_prefix.is_empty() || without_prefix.starts_with('/') {
-        if without_prefix.is_empty() { "/".to_owned() } else { without_prefix.to_owned() }
+        if without_prefix.is_empty() {
+            "/".to_owned()
+        } else {
+            without_prefix.to_owned()
+        }
     } else {
         format!("/{without_prefix}")
     };
@@ -184,11 +188,7 @@ fn serve_system_asset(uri_path: &str) -> HttpResponse<std::borrow::Cow<'static, 
         );
     }
     if stripped == "/manager_app.css" {
-        return response(
-            200,
-            "text/css; charset=utf-8",
-            APP_CSS.as_bytes().to_vec(),
-        );
+        return response(200, "text/css; charset=utf-8", APP_CSS.as_bytes().to_vec());
     }
     if stripped == "/manager_app.js" {
         return response(
@@ -270,7 +270,10 @@ mod route_tests {
         assert!(content_type.starts_with("text/html"));
         // The real UI must be the served page, not the placeholder.
         assert!(body.starts_with(b"<!doctype html>"));
-        assert!(body.windows(APP_HTML.len()).any(|window| window == APP_HTML.as_bytes()));
+        assert!(
+            body.windows(APP_HTML.len())
+                .any(|window| window == APP_HTML.as_bytes())
+        );
     }
 
     #[test]
@@ -331,15 +334,24 @@ mod route_tests {
         // HTML/JS. The UI is the user-facing surface; the test
         // only needs to know the high-level shape.
         let html = APP_HTML;
-        assert!(html.contains("App Manager"), "asset html missing app manager title");
+        assert!(
+            html.contains("App Manager"),
+            "asset html missing app manager title"
+        );
         assert!(html.contains("manager_app.js"));
         assert!(html.contains("manager_app.css"));
-        assert!(html.contains("audit-heading"), "asset html missing audit panel");
+        assert!(
+            html.contains("audit-heading"),
+            "asset html missing audit panel"
+        );
         let js = APP_JS;
         assert!(js.contains("manager.list_apps"));
         assert!(js.contains("manager.list_services"));
         assert!(js.contains("manager.set_permission"));
-        assert!(js.contains("manager.read_audit_log"), "asset js missing audit IPC");
+        assert!(
+            js.contains("manager.read_audit_log"),
+            "asset js missing audit IPC"
+        );
         assert!(js.contains("file.path")); // WebView2 path accessor
     }
 }

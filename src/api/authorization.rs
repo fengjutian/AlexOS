@@ -646,7 +646,10 @@ mod tests {
         // `rename` happens before the new `set` write.
         let report = store.recent_audit(50).expect("recent_audit");
         assert!(
-            report.entries.iter().any(|e| e.permission == "filesystem.read"),
+            report
+                .entries
+                .iter()
+                .any(|e| e.permission == "filesystem.read"),
             "post-rotation `set` should be visible in the live file",
         );
     }

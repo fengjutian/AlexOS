@@ -73,10 +73,7 @@ impl LogFileWriter {
     /// is responsible for `create_dir_all`.
     pub fn open(path: impl Into<PathBuf>) -> std::io::Result<Self> {
         let path = path.into();
-        let file = OpenOptions::new()
-            .create(true)
-            .append(true)
-            .open(&path)?;
+        let file = OpenOptions::new().create(true).append(true).open(&path)?;
         // We do not know the exact pre-existing size
         // (the file may have been rotated already), so
         // we ask the file system. This is the only
@@ -311,14 +308,8 @@ fn find_next_match(line: &str) -> Option<Match> {
     // replacement is the full redacted form, so the
     // redaction can be emitted in one go.
     const CANDIDATES: &[(&str, &str)] = &[
-        (
-            "Authorization: Bearer ",
-            "Authorization: Bearer <redacted>",
-        ),
-        (
-            "authorization: Bearer ",
-            "authorization: Bearer <redacted>",
-        ),
+        ("Authorization: Bearer ", "Authorization: Bearer <redacted>"),
+        ("authorization: Bearer ", "authorization: Bearer <redacted>"),
         ("token=", "token=<redacted>"),
         ("password=", "password=<redacted>"),
         ("secret=", "secret=<redacted>"),

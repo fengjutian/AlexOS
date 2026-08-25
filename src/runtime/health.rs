@@ -88,13 +88,18 @@ impl HealthCheckSpec {
         descriptor: &crate::core::application_manifest::ServiceHealthDescriptor,
     ) -> Self {
         let kind = match descriptor.kind {
-            crate::core::application_manifest::ServiceHealthKind::Process => HealthCheckKind::Process,
+            crate::core::application_manifest::ServiceHealthKind::Process => {
+                HealthCheckKind::Process
+            }
             crate::core::application_manifest::ServiceHealthKind::Http => HealthCheckKind::Http,
         };
         Self {
             kind,
             port: 0,
-            path: descriptor.path.clone().unwrap_or_else(|| "/health".to_string()),
+            path: descriptor
+                .path
+                .clone()
+                .unwrap_or_else(|| "/health".to_string()),
             interval: Duration::from_millis(descriptor.interval_ms),
             timeout: Duration::from_millis(descriptor.timeout_ms),
             // Two consecutive failures flips to
@@ -195,7 +200,11 @@ impl HealthChecker {
     /// return the parsed status code. The body is
     /// drained (up to 4 KiB) so the backend does not see
     /// a half-closed connection.
-    fn http_get(addr: std::net::SocketAddr, path: &str, timeout: Duration) -> Result<u16, HealthError> {
+    fn http_get(
+        addr: std::net::SocketAddr,
+        path: &str,
+        timeout: Duration,
+    ) -> Result<u16, HealthError> {
         let mut stream = TcpStream::connect_timeout(&addr, timeout)?;
         stream.set_read_timeout(Some(timeout))?;
         stream.set_write_timeout(Some(timeout))?;
@@ -262,14 +271,21 @@ mod tests {
     fn http_probe_returns_healthy_for_2xx() {
         let port = spawn_http_server("HTTP/1.1 200 OK\r\nContent-Length: 0\r\n\r\n");
         let checker = HealthChecker::new(http_spec(port, "/health", ""));
-        assert_eq!(checker.probe(None, RuntimeState::Ready), HealthOutcome::Healthy);
+        assert_eq!(
+            checker.probe(None, RuntimeState::Ready),
+            HealthOutcome::Healthy
+        );
     }
 
     #[test]
     fn http_probe_returns_unhealthy_for_5xx() {
-        let port = spawn_http_server("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");
+        let port =
+            spawn_http_server("HTTP/1.1 503 Service Unavailable\r\nContent-Length: 0\r\n\r\n");
         let checker = HealthChecker::new(http_spec(port, "/health", ""));
-        assert_eq!(checker.probe(None, RuntimeState::Ready), HealthOutcome::Unhealthy);
+        assert_eq!(
+            checker.probe(None, RuntimeState::Ready),
+            HealthOutcome::Unhealthy
+        );
     }
 
     #[test]
@@ -280,7 +296,10 @@ mod tests {
         let port = listener.local_addr().expect("addr").port();
         drop(listener);
         let checker = HealthChecker::new(http_spec(port, "/health", ""));
-        assert_eq!(checker.probe(None, RuntimeState::Ready), HealthOutcome::Unhealthy);
+        assert_eq!(
+            checker.probe(None, RuntimeState::Ready),
+            HealthOutcome::Unhealthy
+        );
     }
 
     #[test]

@@ -12,8 +12,8 @@ pub mod proxy;
 pub mod service_supervisor;
 mod supervisor;
 pub mod task_executor;
-pub mod watcher;
 pub mod watchdog;
+pub mod watcher;
 pub mod window_manager;
 pub mod windows;
 

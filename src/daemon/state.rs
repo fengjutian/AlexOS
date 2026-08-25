@@ -289,10 +289,7 @@ impl DaemonStateStore {
     /// Convenience accessor — returns every
     /// `(service, desired)` pair for the app, useful
     /// for `recover_startup`.
-    pub fn services_desired_running(
-        &self,
-        app_id: &str,
-    ) -> Vec<(String, ServiceControlState)> {
+    pub fn services_desired_running(&self, app_id: &str) -> Vec<(String, ServiceControlState)> {
         let Ok(state) = self.load() else {
             return Vec::new();
         };
@@ -480,7 +477,10 @@ mod tests {
         let running = store.services_desired_running("com.example.mix");
         // Sorted BTreeMap iteration: api, cron.
         assert_eq!(
-            running.iter().map(|(name, _)| name.as_str()).collect::<Vec<_>>(),
+            running
+                .iter()
+                .map(|(name, _)| name.as_str())
+                .collect::<Vec<_>>(),
             vec!["api", "cron"]
         );
     }

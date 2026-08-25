@@ -16,8 +16,8 @@ use crate::{
     AlexError,
     core::application_manifest::{ApplicationManifest, ServiceDescriptor},
     manifest::{
-        AppManifest, Author, Backend, BackendMode, Frontend, FrontendBuild, HealthCheck,
-        Icons, PackageKind, RestartPolicy, RuntimeKind,
+        AppManifest, Author, Backend, BackendMode, Frontend, FrontendBuild, HealthCheck, Icons,
+        PackageKind, RestartPolicy, RuntimeKind,
     },
     permission::Permission,
 };
@@ -84,10 +84,7 @@ pub fn run(_package_root: &Path, _manifest: AppManifest) -> Result<(), AlexError
 /// warning is printed when the v2 manifest declares multiple
 /// services so the developer knows only the first one is being
 /// hot-reloaded; multi-service dev mode is a future enhancement.
-pub fn run_unified(
-    package_root: &Path,
-    manifest: ApplicationManifest,
-) -> Result<(), AlexError> {
+pub fn run_unified(package_root: &Path, manifest: ApplicationManifest) -> Result<(), AlexError> {
     let v1 = match manifest {
         ApplicationManifest::V1(m) => m,
         ApplicationManifest::V2(_) => project_v2_for_dev(manifest),
@@ -158,7 +155,10 @@ fn service_to_backend(service: ServiceDescriptor) -> Backend {
         None => None,
     };
     let health_check = service.health.and_then(|health| {
-        if matches!(health.kind, crate::core::application_manifest::ServiceHealthKind::Http) {
+        if matches!(
+            health.kind,
+            crate::core::application_manifest::ServiceHealthKind::Http
+        ) {
             health.path.map(|path| HealthCheck {
                 path,
                 timeout_ms: health.timeout_ms,
@@ -170,7 +170,9 @@ fn service_to_backend(service: ServiceDescriptor) -> Backend {
     let restart = Some(RestartPolicy {
         policy: match service.restart.policy {
             crate::core::application_manifest::ServiceRestartPolicy::Never => "never".into(),
-            crate::core::application_manifest::ServiceRestartPolicy::OnFailure => "on-failure".into(),
+            crate::core::application_manifest::ServiceRestartPolicy::OnFailure => {
+                "on-failure".into()
+            }
             crate::core::application_manifest::ServiceRestartPolicy::Always => "always".into(),
         },
         max_retries: service.restart.max_retries,
@@ -208,7 +210,9 @@ fn legacy_permission_from_name(name: &str) -> Option<Permission> {
         "dialog.save" => Some(Permission::DialogSave),
         "clipboard.read" => Some(Permission::ClipboardRead),
         "clipboard.write" => Some(Permission::ClipboardWrite),
-        "system.openExternal" => Some(Permission::OpenExternal { origins: Vec::new() }),
+        "system.openExternal" => Some(Permission::OpenExternal {
+            origins: Vec::new(),
+        }),
         "storage" => Some(Permission::Storage),
         "paths" => Some(Permission::Paths),
         "window.manage" => Some(Permission::WindowManage),
@@ -219,7 +223,9 @@ fn legacy_permission_from_name(name: &str) -> Option<Permission> {
         "shortcut.register" => Some(Permission::ShortcutRegister),
         "runtime.invoke" => Some(Permission::RuntimeInvoke),
         "runtime.manage" => Some(Permission::RuntimeManage),
-        "process.spawn" => Some(Permission::ProcessSpawn { executables: Vec::new() }),
+        "process.spawn" => Some(Permission::ProcessSpawn {
+            executables: Vec::new(),
+        }),
         "media.camera" => Some(Permission::MediaCamera),
         "media.microphone" => Some(Permission::MediaMicrophone),
         "geolocation" => Some(Permission::Geolocation),
@@ -228,7 +234,9 @@ fn legacy_permission_from_name(name: &str) -> Option<Permission> {
         "system.manageApps" => Some(Permission::SystemManageApps),
         "system.manageExtensions" => Some(Permission::SystemManageExtensions),
         "system.managePermissions" => Some(Permission::SystemManagePermissions),
-        "network.fetch" => Some(Permission::NetworkFetch { origins: Vec::new() }),
+        "network.fetch" => Some(Permission::NetworkFetch {
+            origins: Vec::new(),
+        }),
         _ => None,
     }
 }
@@ -385,7 +393,13 @@ mod v2_projection_tests {
         let mut services_map = BTreeMap::new();
         services_map.insert(
             "api".to_owned(),
-            service(ServiceRuntime::Node, "main.js", None, RestartPolicyV2::OnFailure, 5),
+            service(
+                ServiceRuntime::Node,
+                "main.js",
+                None,
+                RestartPolicyV2::OnFailure,
+                5,
+            ),
         );
         services_map.insert(
             "worker".to_owned(),
@@ -439,7 +453,10 @@ mod v2_projection_tests {
             );
             let projected = super::project_v2_for_dev(unified);
             let backend = projected.backend.expect("backend should be set");
-            assert_eq!(backend.runtime, expected, "v2 {v2_runtime:?} should project to {expected:?}");
+            assert_eq!(
+                backend.runtime, expected,
+                "v2 {v2_runtime:?} should project to {expected:?}"
+            );
         }
     }
 

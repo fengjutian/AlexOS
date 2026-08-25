@@ -345,13 +345,8 @@ static GLOBAL_SPAWNS_IN_FLIGHT: AtomicU64 = AtomicU64::new(0);
 /// between them and may be started concurrently. The
 /// function rejects dependency cycles and unknown-dependency
 /// references with [`LayerError`].
-pub(crate) fn start_layers(
-    services: &[ServiceDescriptor],
-) -> Result<Vec<Vec<String>>, LayerError> {
-    let names: BTreeMap<&str, ()> = services
-        .iter()
-        .map(|svc| (svc.name.as_str(), ()))
-        .collect();
+pub(crate) fn start_layers(services: &[ServiceDescriptor]) -> Result<Vec<Vec<String>>, LayerError> {
+    let names: BTreeMap<&str, ()> = services.iter().map(|svc| (svc.name.as_str(), ())).collect();
     // Build `in_degree[name] = number of dependencies inside
     // the same manifest that have not been assigned to a
     // layer yet. We mutate the counter as we pop layers.
@@ -378,7 +373,13 @@ pub(crate) fn start_layers(
     loop {
         let ready: Vec<String> = in_degree
             .iter()
-            .filter_map(|(name, deg)| if *deg == 0 { Some(name.to_string()) } else { None })
+            .filter_map(|(name, deg)| {
+                if *deg == 0 {
+                    Some(name.to_string())
+                } else {
+                    None
+                }
+            })
             .collect();
         if ready.is_empty() {
             if in_degree.is_empty() {
@@ -426,12 +427,19 @@ pub(crate) enum LayerError {
 impl std::fmt::Display for LayerError {
     fn fmt(&self, formatter: &mut std::fmt::Formatter<'_>) -> std::fmt::Result {
         match self {
-            LayerError::UnknownDependency { service, dependency } => write!(
+            LayerError::UnknownDependency {
+                service,
+                dependency,
+            } => write!(
                 formatter,
                 "service {service} depends on unknown service {dependency}"
             ),
             LayerError::Cycle(names) => {
-                write!(formatter, "service dependency cycle: {}", names.join(" -> "))
+                write!(
+                    formatter,
+                    "service dependency cycle: {}",
+                    names.join(" -> ")
+                )
             }
         }
     }
@@ -522,12 +530,7 @@ impl ApplicationSupervisor {
         install_root: &Path,
         resolved: &ResolvedApplication,
     ) -> Result<ApplicationObservedState, ApplicationSupervisorError> {
-        self.start_application_with_config(
-            app_id,
-            install_root,
-            resolved,
-            &StartConfig::default(),
-        )
+        self.start_application_with_config(app_id, install_root, resolved, &StartConfig::default())
     }
 
     /// Like [`Self::start_application`] but with an explicit
@@ -555,9 +558,8 @@ impl ApplicationSupervisor {
                 )));
             }
         }
-        let layers = start_layers(&services).map_err(|error| {
-            ApplicationSupervisorError::V2LaunchNotSupported(error.to_string())
-        })?;
+        let layers = start_layers(&services)
+            .map_err(|error| ApplicationSupervisorError::V2LaunchNotSupported(error.to_string()))?;
         let per_app = config.effective_per_app();
         let global_cap = config.effective_global();
         let layer_timeout = config.effective_layer_timeout();
@@ -697,8 +699,7 @@ impl ApplicationSupervisor {
             {
                 application.observed = ApplicationObservedState::Crashed;
                 application.desired = ApplicationDesiredState::Stopped;
-                application.last_error =
-                    Some(format!("service {failed_service}: {message}"));
+                application.last_error = Some(format!("service {failed_service}: {message}"));
             }
             return Err(ApplicationSupervisorError::V2LaunchNotSupported(format!(
                 "start failed at service {failed_service}: {message}"
@@ -788,8 +789,7 @@ impl ApplicationSupervisor {
                 {
                     service.status = ServiceStatus::Crashed;
                     service.last_error = Some(error.to_string());
-                    service.consecutive_failures =
-                        service.consecutive_failures.wrapping_add(1);
+                    service.consecutive_failures = service.consecutive_failures.wrapping_add(1);
                 }
                 return Err(ApplicationSupervisorError::Runtime(error));
             }
@@ -801,13 +801,12 @@ impl ApplicationSupervisor {
         let application = guard
             .get_mut(app_id)
             .ok_or_else(|| ApplicationSupervisorError::NotFound(app_id.to_owned()))?;
-        let service = application
-            .services
-            .get_mut(service_name)
-            .ok_or_else(|| ApplicationSupervisorError::ServiceNotFound {
+        let service = application.services.get_mut(service_name).ok_or_else(|| {
+            ApplicationSupervisorError::ServiceNotFound {
                 app: app_id.to_owned(),
                 service: service_name.to_owned(),
-            })?;
+            }
+        })?;
         service.handle = Some(handle.clone());
         service.status = ServiceStatus::Healthy;
         // Phase 4 watchdog wiring. The watchdog is the
@@ -862,13 +861,12 @@ impl ApplicationSupervisor {
         let application = guard
             .get_mut(app_id)
             .ok_or_else(|| ApplicationSupervisorError::NotFound(app_id.to_owned()))?;
-        let service = application
-            .services
-            .get_mut(service_name)
-            .ok_or_else(|| ApplicationSupervisorError::ServiceNotFound {
+        let service = application.services.get_mut(service_name).ok_or_else(|| {
+            ApplicationSupervisorError::ServiceNotFound {
                 app: app_id.to_owned(),
                 service: service_name.to_owned(),
-            })?;
+            }
+        })?;
         if service.status.is_terminal() {
             return Ok(service.status);
         }
@@ -904,13 +902,12 @@ impl ApplicationSupervisor {
         let application = guard
             .get_mut(app_id)
             .ok_or_else(|| ApplicationSupervisorError::NotFound(app_id.to_owned()))?;
-        let service = application
-            .services
-            .get_mut(service_name)
-            .ok_or_else(|| ApplicationSupervisorError::ServiceNotFound {
+        let service = application.services.get_mut(service_name).ok_or_else(|| {
+            ApplicationSupervisorError::ServiceNotFound {
                 app: app_id.to_owned(),
                 service: service_name.to_owned(),
-            })?;
+            }
+        })?;
         service.status = ServiceStatus::Stopped;
         service.handle = None;
         service.last_exit_code = None;
@@ -961,13 +958,12 @@ impl ApplicationSupervisor {
         let application = guard
             .get(app_id)
             .ok_or_else(|| ApplicationSupervisorError::NotFound(app_id.to_owned()))?;
-        let service = application
-            .services
-            .get(service_name)
-            .ok_or_else(|| ApplicationSupervisorError::ServiceNotFound {
+        let service = application.services.get(service_name).ok_or_else(|| {
+            ApplicationSupervisorError::ServiceNotFound {
                 app: app_id.to_owned(),
                 service: service_name.to_owned(),
-            })?;
+            }
+        })?;
         let (pid, port) = match service.handle.as_ref() {
             Some(handle) => match handle.status(Duration::from_millis(200)) {
                 Ok(status) => (
@@ -1012,6 +1008,7 @@ impl ApplicationSupervisor {
             .values()
             .map(|service| ServiceSummary {
                 name: service.name.clone(),
+                depends_on: service.spec.depends_on.clone(),
                 status: service.status,
                 restart_count: service.restart_count,
                 last_error: service.last_error.clone(),
@@ -1061,10 +1058,7 @@ impl ApplicationSupervisor {
             .lock()
             .expect("application supervisor lock poisoned");
         let application = guard.get(app_id)?;
-        application
-            .services
-            .get(service_name)
-            .map(|svc| svc.status)
+        application.services.get(service_name).map(|svc| svc.status)
     }
 
     /// Construct the per-iteration probe context. The
@@ -1206,11 +1200,13 @@ impl ApplicationSupervisor {
                 .ok_or_else(|| ApplicationSupervisorError::NotFound(app_id.to_owned()))?;
             application.generation = application.generation.wrapping_add(1);
             application.observed = ApplicationObservedState::Stopping;
-            let specs: Vec<ServiceDescriptor> =
-                application.services.values().map(|svc| svc.spec.clone()).collect();
-            let layers = start_layers(&specs).unwrap_or_else(|_| {
-                vec![specs.iter().map(|svc| svc.name.clone()).collect()]
-            });
+            let specs: Vec<ServiceDescriptor> = application
+                .services
+                .values()
+                .map(|svc| svc.spec.clone())
+                .collect();
+            let layers = start_layers(&specs)
+                .unwrap_or_else(|_| vec![specs.iter().map(|svc| svc.name.clone()).collect()]);
             (specs, layers)
         };
         let per_app = config.effective_per_app();
@@ -1275,7 +1271,11 @@ impl ApplicationSupervisor {
             let application = guard
                 .get(app_id)
                 .ok_or_else(|| ApplicationSupervisorError::NotFound(app_id.to_owned()))?;
-            application.services.values().map(|svc| svc.spec.clone()).collect()
+            application
+                .services
+                .values()
+                .map(|svc| svc.spec.clone())
+                .collect()
         };
         for spec in &specs {
             let _ = self.stop_service(app_id, &spec.name);
@@ -1338,13 +1338,13 @@ impl ApplicationSupervisor {
         };
         let service = application.services.get(&primary_name)?;
         let mut status = match service.handle.as_ref() {
-            Some(handle) => handle.status(Duration::from_millis(200)).unwrap_or_default(),
+            Some(handle) => handle
+                .status(Duration::from_millis(200))
+                .unwrap_or_default(),
             None => RuntimeStatus::default(),
         };
         status.state = match service.status {
-            ServiceStatus::Pending | ServiceStatus::WaitingForDependencies => {
-                RuntimeState::Stopped
-            }
+            ServiceStatus::Pending | ServiceStatus::WaitingForDependencies => RuntimeState::Stopped,
             ServiceStatus::Starting => RuntimeState::Starting,
             ServiceStatus::Healthy | ServiceStatus::Unhealthy | ServiceStatus::Restarting => {
                 if status.state == RuntimeState::Stopped {
@@ -1436,6 +1436,8 @@ impl ApplicationSupervisor {
 #[serde(rename_all = "camelCase")]
 pub struct ServiceSummary {
     pub name: String,
+    #[serde(default, skip_serializing_if = "Vec::is_empty")]
+    pub depends_on: Vec<String>,
     pub status: ServiceStatus,
     pub restart_count: u32,
     pub last_error: Option<String>,
@@ -1457,7 +1459,10 @@ impl ApplicationSupervisor {
         let mut downstream: BTreeMap<&str, Vec<&str>> = BTreeMap::new();
         for svc in services {
             for dep in &svc.depends_on {
-                downstream.entry(dep.as_str()).or_default().push(svc.name.as_str());
+                downstream
+                    .entry(dep.as_str())
+                    .or_default()
+                    .push(svc.name.as_str());
             }
         }
         let mut stack: Vec<&str> = vec![failed];
@@ -1487,8 +1492,7 @@ impl ApplicationSupervisor {
                     && matches!(service.status, ServiceStatus::Pending)
                 {
                     service.status = ServiceStatus::Blocked;
-                    service.last_error =
-                        Some(format!("dependency {failed} did not start"));
+                    service.last_error = Some(format!("dependency {failed} did not start"));
                 }
             }
         }
@@ -1502,12 +1506,7 @@ impl ApplicationSupervisor {
     /// `start_layers` semantics. `stop_service` is
     /// idempotent so a service that has since crashed on
     /// its own is left alone.
-    fn rollback_started_services(
-        &self,
-        app_id: &str,
-        started: &[String],
-        install_root: &Path,
-    ) {
+    fn rollback_started_services(&self, app_id: &str, started: &[String], install_root: &Path) {
         for service_name in started.iter().rev() {
             let _ = self.stop_service(app_id, service_name);
         }
@@ -1602,12 +1601,7 @@ impl crate::runtime::watchdog::SupervisorHooks for ApplicationSupervisor {
         self.watchdog_record_outcome(app_id, service_name, outcome);
     }
 
-    fn record_exit(
-        &self,
-        app_id: &str,
-        service_name: &str,
-        runtime_state: RuntimeState,
-    ) {
+    fn record_exit(&self, app_id: &str, service_name: &str, runtime_state: RuntimeState) {
         self.watchdog_record_exit(app_id, service_name, runtime_state);
     }
 
@@ -1619,18 +1613,12 @@ impl crate::runtime::watchdog::SupervisorHooks for ApplicationSupervisor {
         self.watchdog_spec(app_id, service_name)
     }
 
-    fn read_service_status(
-        &self,
-        app_id: &str,
-        service_name: &str,
-    ) -> Option<ServiceStatus> {
+    fn read_service_status(&self, app_id: &str, service_name: &str) -> Option<ServiceStatus> {
         self.watchdog_status(app_id, service_name)
     }
 }
 
-fn rollup_observed_state(
-    services: &BTreeMap<String, ServiceRuntime>,
-) -> ApplicationObservedState {
+fn rollup_observed_state(services: &BTreeMap<String, ServiceRuntime>) -> ApplicationObservedState {
     if services.is_empty() {
         return ApplicationObservedState::Stopped;
     }
@@ -1694,10 +1682,7 @@ fn rollup_observed_state(
 /// can introspect them, but the supervisor refuses to start them
 /// (`V2LaunchNotSupported`); Phase 7's managed runtime providers
 /// replace this projection with native launch paths.
-pub(crate) fn service_descriptor_to_backend(
-    name: &str,
-    spec: &ServiceDescriptor,
-) -> Backend {
+pub(crate) fn service_descriptor_to_backend(name: &str, spec: &ServiceDescriptor) -> Backend {
     let runtime = match spec.runtime {
         crate::manifest_v2::ServiceRuntime::Node => RuntimeKind::Node,
         crate::manifest_v2::ServiceRuntime::Python => RuntimeKind::Python,
@@ -1810,7 +1795,10 @@ mod tests {
             svc.status = ServiceStatus::Healthy;
             services.insert(name.to_owned(), svc);
         }
-        assert_eq!(rollup_observed_state(&services), ApplicationObservedState::Running);
+        assert_eq!(
+            rollup_observed_state(&services),
+            ApplicationObservedState::Running
+        );
     }
 
     #[test]
@@ -1844,10 +1832,7 @@ mod tests {
     #[test]
     fn rollup_state_stopped_when_all_terminal() {
         let mut services = BTreeMap::new();
-        for (name, status) in [
-            ("a", ServiceStatus::Stopped),
-            ("b", ServiceStatus::Crashed),
-        ] {
+        for (name, status) in [("a", ServiceStatus::Stopped), ("b", ServiceStatus::Crashed)] {
             let mut svc = ServiceRuntime::new(node_service(name, "x.js"));
             svc.status = status;
             services.insert(name.to_owned(), svc);
@@ -1862,10 +1847,7 @@ mod tests {
     fn stop_service_on_terminal_service_is_idempotent() {
         let supervisor = ApplicationSupervisor::new();
         {
-            let mut guard = supervisor
-                .applications
-                .lock()
-                .expect("lock poisoned");
+            let mut guard = supervisor.applications.lock().expect("lock poisoned");
             let mut app = ApplicationRuntime::new("com.example.idempotent".into());
             let mut svc = ServiceRuntime::new(node_service("main", "x.js"));
             svc.status = ServiceStatus::Stopped;
@@ -1881,10 +1863,7 @@ mod tests {
     fn duplicate_start_service_errors() {
         let supervisor = ApplicationSupervisor::new();
         {
-            let mut guard = supervisor
-                .applications
-                .lock()
-                .expect("lock poisoned");
+            let mut guard = supervisor.applications.lock().expect("lock poisoned");
             let mut app = ApplicationRuntime::new("com.example.dup".into());
             let mut svc = ServiceRuntime::new(node_service("main", "x.js"));
             svc.status = ServiceStatus::Healthy;
@@ -1916,10 +1895,7 @@ mod tests {
             ("com.example.alpha", ServiceStatus::Pending),
             ("com.example.beta", ServiceStatus::Healthy),
         ] {
-            let mut guard = supervisor
-                .applications
-                .lock()
-                .expect("lock poisoned");
+            let mut guard = supervisor.applications.lock().expect("lock poisoned");
             let mut app = ApplicationRuntime::new(id.to_owned());
             let mut svc = ServiceRuntime::new(node_service("main", "x.js"));
             svc.status = status;
@@ -1942,14 +1918,13 @@ mod tests {
     fn forget_application_drops_all_service_slots() {
         let supervisor = ApplicationSupervisor::new();
         {
-            let mut guard = supervisor
-                .applications
-                .lock()
-                .expect("lock poisoned");
+            let mut guard = supervisor.applications.lock().expect("lock poisoned");
             let mut app = ApplicationRuntime::new("com.example.forget".into());
             for name in ["a", "b", "c"] {
-                app.services
-                    .insert(name.to_owned(), ServiceRuntime::new(node_service(name, "x.js")));
+                app.services.insert(
+                    name.to_owned(),
+                    ServiceRuntime::new(node_service(name, "x.js")),
+                );
             }
             guard.insert("com.example.forget".to_owned(), app);
         }
@@ -1963,10 +1938,7 @@ mod tests {
         let supervisor = ApplicationSupervisor::new();
         let clone = supervisor.clone();
         {
-            let mut guard = supervisor
-                .applications
-                .lock()
-                .expect("lock poisoned");
+            let mut guard = supervisor.applications.lock().expect("lock poisoned");
             let mut app = ApplicationRuntime::new("com.example.shared".into());
             app.services.insert(
                 "main".to_owned(),
@@ -2030,10 +2002,7 @@ mod tests {
     fn list_services_returns_all_slots_in_alphabetical_order() {
         let supervisor = ApplicationSupervisor::new();
         {
-            let mut guard = supervisor
-                .applications
-                .lock()
-                .expect("lock poisoned");
+            let mut guard = supervisor.applications.lock().expect("lock poisoned");
             let mut app = ApplicationRuntime::new("com.example.list".into());
             for name in ["zeta", "alpha", "mu"] {
                 let mut svc = ServiceRuntime::new(node_service(name, "x.js"));
@@ -2075,10 +2044,7 @@ mod tests {
         // Pre-register the app + service slot so the supervisor
         // sees an `ApplicationRuntime` for it.
         {
-            let mut guard = supervisor
-                .applications
-                .lock()
-                .expect("lock poisoned");
+            let mut guard = supervisor.applications.lock().expect("lock poisoned");
             guard.insert(
                 "com.example.stub".into(),
                 ApplicationRuntime::new("com.example.stub".into()),
@@ -2098,11 +2064,7 @@ mod tests {
     // Phase 3 — DAG layering + failure rollback
     // -------------------------------------------------------------------
 
-    fn node_service_with_deps(
-        name: &str,
-        command: &str,
-        deps: &[&str],
-    ) -> ServiceDescriptor {
+    fn node_service_with_deps(name: &str, command: &str, deps: &[&str]) -> ServiceDescriptor {
         let mut svc = node_service(name, command);
         svc.depends_on = deps.iter().map(|d| d.to_string()).collect();
         svc
@@ -2117,7 +2079,11 @@ mod tests {
         let layers = start_layers(&services).expect("linear chain");
         assert_eq!(
             layers,
-            vec![vec!["a".to_string()], vec!["b".to_string()], vec!["c".to_string()]]
+            vec![
+                vec!["a".to_string()],
+                vec!["b".to_string()],
+                vec!["c".to_string()]
+            ]
         );
     }
 
@@ -2301,10 +2267,7 @@ mod tests {
     fn stop_config_defaults_are_sane() {
         let config = StopConfig::default();
         assert_eq!(config.effective_per_app(), 4);
-        assert_eq!(
-            config.effective_per_layer_timeout(),
-            Duration::from_secs(5)
-        );
+        assert_eq!(config.effective_per_layer_timeout(), Duration::from_secs(5));
     }
 
     // -------------------------------------------------------------------
@@ -2445,8 +2408,10 @@ mod tests {
         let supervisor = ApplicationSupervisor::new();
         let descriptor = node_service("main", "main.js");
         supervisor.register_application("com.example.phase4_status", vec![descriptor]);
-        assert!(supervisor
-            .watchdog_status("com.example.phase4_status", "ghost")
-            .is_none());
+        assert!(
+            supervisor
+                .watchdog_status("com.example.phase4_status", "ghost")
+                .is_none()
+        );
     }
 }

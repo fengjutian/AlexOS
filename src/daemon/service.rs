@@ -74,9 +74,7 @@ impl DaemonService {
             ControlCommand::StartService { app_id, service } => {
                 self.start_service(&app_id, &service)
             }
-            ControlCommand::StopService { app_id, service } => {
-                self.stop_service(&app_id, &service)
-            }
+            ControlCommand::StopService { app_id, service } => self.stop_service(&app_id, &service),
             ControlCommand::RestartService { app_id, service } => {
                 self.restart_service(&app_id, &service)
             }
@@ -199,22 +197,34 @@ impl DaemonService {
         &self,
         manager: &Arc<dyn crate::manager::AppManager>,
         app_id: &str,
-        services: &std::collections::BTreeMap<
-            String,
-            super::ServiceControlState,
-        >,
+        services: &std::collections::BTreeMap<String, super::ServiceControlState>,
         report: &mut RecoveryReport,
     ) {
-        for (service_name, svc) in services {
-            if svc.desired != DesiredState::Running {
-                continue;
+        let declared = match manager.list_services(app_id) {
+            Ok(declared) => declared,
+            Err(error) => {
+                report.failed.push(RecoveryFailure {
+                    app_id: app_id.to_owned(),
+                    error: format!("cannot load service graph: {error}"),
+                });
+                return;
             }
+        };
+        let order = match recovery_service_order(&declared, services) {
+            Ok(order) => order,
+            Err(error) => {
+                report.failed.push(RecoveryFailure {
+                    app_id: app_id.to_owned(),
+                    error,
+                });
+                return;
+            }
+        };
+        for service_name in order {
             let result = manager.start_service(app_id, service_name);
             match result {
                 Ok(status) => {
-                    if let Err(error) =
-                        self.record_service_status(app_id, service_name, &status)
-                    {
+                    if let Err(error) = self.record_service_status(app_id, service_name, &status) {
                         report.failed.push(RecoveryFailure {
                             app_id: app_id.to_owned(),
                             error: format!("service {service_name}: {error}"),
@@ -236,11 +246,7 @@ impl DaemonService {
                 }
             }
         }
-        if report
-            .failed
-            .iter()
-            .all(|f| f.app_id != app_id)
-        {
+        if report.failed.iter().all(|f| f.app_id != app_id) {
             report.recovered.push(app_id.to_owned());
         }
     }
@@ -376,11 +382,7 @@ impl DaemonService {
     /// delegates to `AppManager::start_service`. The
     /// `recover_startup` path uses the same state row
     /// to drive a daemon restart.
-    fn start_service(
-        &self,
-        app_id: &str,
-        service: &str,
-    ) -> Result<serde_json::Value, String> {
+    fn start_service(&self, app_id: &str, service: &str) -> Result<serde_json::Value, String> {
         let manager = self
             .manager
             .as_ref()
@@ -390,17 +392,18 @@ impl DaemonService {
             .start_service(app_id, service)
             .map_err(|error| error.to_string())?;
         self.state
-            .set_service_desired(app_id, service, DesiredState::Running, now_ms().unwrap_or_default())
+            .set_service_desired(
+                app_id,
+                service,
+                DesiredState::Running,
+                now_ms().unwrap_or_default(),
+            )
             .map_err(|error| error.to_string())?;
         self.record_service_status(app_id, service, &status)?;
         Ok(json!(status))
     }
 
-    fn stop_service(
-        &self,
-        app_id: &str,
-        service: &str,
-    ) -> Result<serde_json::Value, String> {
+    fn stop_service(&self, app_id: &str, service: &str) -> Result<serde_json::Value, String> {
         let manager = self
             .manager
             .as_ref()
@@ -410,17 +413,18 @@ impl DaemonService {
             .stop_service(app_id, service)
             .map_err(|error| error.to_string())?;
         self.state
-            .set_service_desired(app_id, service, DesiredState::Stopped, now_ms().unwrap_or_default())
+            .set_service_desired(
+                app_id,
+                service,
+                DesiredState::Stopped,
+                now_ms().unwrap_or_default(),
+            )
             .map_err(|error| error.to_string())?;
         self.record_service_status(app_id, service, &status)?;
         Ok(json!(status))
     }
 
-    fn restart_service(
-        &self,
-        app_id: &str,
-        service: &str,
-    ) -> Result<serde_json::Value, String> {
+    fn restart_service(&self, app_id: &str, service: &str) -> Result<serde_json::Value, String> {
         let manager = self
             .manager
             .as_ref()
@@ -430,17 +434,18 @@ impl DaemonService {
             .restart_service(app_id, service)
             .map_err(|error| error.to_string())?;
         self.state
-            .set_service_desired(app_id, service, DesiredState::Running, now_ms().unwrap_or_default())
+            .set_service_desired(
+                app_id,
+                service,
+                DesiredState::Running,
+                now_ms().unwrap_or_default(),
+            )
             .map_err(|error| error.to_string())?;
         self.record_service_status(app_id, service, &status)?;
         Ok(json!(status))
     }
 
-    fn service_status(
-        &self,
-        app_id: &str,
-        service: &str,
-    ) -> Result<serde_json::Value, String> {
+    fn service_status(&self, app_id: &str, service: &str) -> Result<serde_json::Value, String> {
         let manager = self
             .manager
             .as_ref()
@@ -539,6 +544,82 @@ impl DaemonService {
     }
 }
 
+fn recovery_service_order<'a>(
+    declared: &'a [ServiceSummary],
+    persisted: &std::collections::BTreeMap<String, super::ServiceControlState>,
+) -> Result<Vec<&'a str>, String> {
+    use std::collections::{BTreeMap, BTreeSet};
+
+    let specs: BTreeMap<&str, &ServiceSummary> = declared
+        .iter()
+        .map(|service| (service.name.as_str(), service))
+        .collect();
+    let desired: BTreeSet<String> = persisted
+        .iter()
+        .filter_map(|(name, state)| {
+            (state.desired == DesiredState::Running).then_some(name.clone())
+        })
+        .collect();
+    for name in &desired {
+        let spec = specs
+            .get(name)
+            .ok_or_else(|| format!("persisted service {name:?} is no longer declared"))?;
+        for dependency in &spec.depends_on {
+            if !desired.contains(dependency.as_str()) {
+                return Err(format!(
+                    "service {name:?} cannot recover because dependency {dependency:?} is not desired=running"
+                ));
+            }
+        }
+    }
+
+    fn visit<'a>(
+        name: &'a str,
+        specs: &BTreeMap<&'a str, &'a ServiceSummary>,
+        desired: &BTreeSet<String>,
+        visiting: &mut BTreeSet<&'a str>,
+        visited: &mut BTreeSet<&'a str>,
+        output: &mut Vec<&'a str>,
+    ) -> Result<(), String> {
+        if visited.contains(name) {
+            return Ok(());
+        }
+        if !visiting.insert(name) {
+            return Err(format!("service dependency cycle includes {name:?}"));
+        }
+        let spec = specs
+            .get(name)
+            .ok_or_else(|| format!("service {name:?} is not declared"))?;
+        for dependency in &spec.depends_on {
+            if desired.contains(dependency.as_str()) {
+                visit(dependency, specs, desired, visiting, visited, output)?;
+            }
+        }
+        visiting.remove(name);
+        visited.insert(name);
+        output.push(name);
+        Ok(())
+    }
+
+    let mut visiting = BTreeSet::new();
+    let mut visited = BTreeSet::new();
+    let mut output = Vec::with_capacity(desired.len());
+    for name in &desired {
+        visit(
+            specs
+                .get_key_value(name.as_str())
+                .map(|(declared_name, _)| *declared_name)
+                .ok_or_else(|| format!("service {name:?} is not declared"))?,
+            &specs,
+            &desired,
+            &mut visiting,
+            &mut visited,
+            &mut output,
+        )?;
+    }
+    Ok(output)
+}
+
 fn now_ms() -> Option<u64> {
     SystemTime::now()
         .duration_since(UNIX_EPOCH)
@@ -631,9 +712,12 @@ mod tests {
     // daemon's `record_service_status` helper has
     // something to write.
 
-    use crate::manager::{AppDetails, AppManager, AppSummary, InstallOptions, InstallSource, ManagerError, PermissionState, SignatureState, UninstallOptions};
-    use crate::core::manifest::{AppManifest as V1AppManifest, Frontend, PackageKind};
     use crate::authorization::{AuditEntry, PermissionDecision};
+    use crate::core::manifest::{AppManifest as V1AppManifest, Frontend, PackageKind};
+    use crate::manager::{
+        AppDetails, AppManager, AppSummary, InstallOptions, InstallSource, ManagerError,
+        PermissionState, SignatureState, UninstallOptions,
+    };
     use std::path::{Path, PathBuf};
 
     /// Build a placeholder v1 manifest the test
@@ -721,11 +805,7 @@ mod tests {
         ) -> Result<AppSummary, ManagerError> {
             unimplemented!()
         }
-        fn uninstall(
-            &self,
-            _id: &str,
-            _options: UninstallOptions,
-        ) -> Result<(), ManagerError> {
+        fn uninstall(&self, _id: &str, _options: UninstallOptions) -> Result<(), ManagerError> {
             unimplemented!()
         }
         fn launch(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
@@ -737,10 +817,7 @@ mod tests {
         fn restart(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
             unimplemented!()
         }
-        fn runtime_status(
-            &self,
-            _id: &str,
-        ) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+        fn runtime_status(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
             Ok(crate::runtime::RuntimeStatus {
                 state: crate::runtime::RuntimeState::Running,
                 ..Default::default()
@@ -805,20 +882,15 @@ mod tests {
         fn list_services(
             &self,
             id: &str,
-        ) -> Result<
-            Vec<crate::runtime::application_supervisor::ServiceSummary>,
-            ManagerError,
-        > {
+        ) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, ManagerError>
+        {
             self.calls
                 .lock()
                 .unwrap()
                 .push(StubCall::ListServices(id.into()));
             Ok(Vec::new())
         }
-        fn permissions(
-            &self,
-            _id: &str,
-        ) -> Result<Vec<PermissionState>, ManagerError> {
+        fn permissions(&self, _id: &str) -> Result<Vec<PermissionState>, ManagerError> {
             Ok(Vec::new())
         }
         fn set_permission(
@@ -862,7 +934,10 @@ mod tests {
         assert!(response.ok, "{:?}", response.error);
         assert_eq!(
             stub.snapshot(),
-            vec![StubCall::StartService("com.example.api".into(), "api".into())]
+            vec![StubCall::StartService(
+                "com.example.api".into(),
+                "api".into()
+            )]
         );
     }
 
@@ -916,20 +991,10 @@ mod tests {
             .set_desired("com.example.dag", DesiredState::Running, 1)
             .unwrap();
         store
-            .set_service_desired(
-                "com.example.dag",
-                "api",
-                DesiredState::Running,
-                2,
-            )
+            .set_service_desired("com.example.dag", "api", DesiredState::Running, 2)
             .unwrap();
         store
-            .set_service_desired(
-                "com.example.dag",
-                "worker",
-                DesiredState::Running,
-                3,
-            )
+            .set_service_desired("com.example.dag", "worker", DesiredState::Running, 3)
             .unwrap();
         // Re-create the daemon with the seeded store
         // (the helper above created an empty one).
@@ -966,16 +1031,13 @@ mod tests {
             .set_desired("com.example.fail", DesiredState::Running, 1)
             .unwrap();
         store
-            .set_service_desired(
-                "com.example.fail",
-                "broken",
-                DesiredState::Running,
-                2,
-            )
+            .set_service_desired("com.example.fail", "broken", DesiredState::Running, 2)
             .unwrap();
         struct AlwaysFail;
         impl AppManager for AlwaysFail {
-            fn list_apps(&self) -> Result<Vec<AppSummary>, ManagerError> { Ok(Vec::new()) }
+            fn list_apps(&self) -> Result<Vec<AppSummary>, ManagerError> {
+                Ok(Vec::new())
+            }
             fn get_app(&self, _id: &str) -> Result<AppDetails, ManagerError> {
                 Ok(AppDetails {
                     summary: AppSummary {
@@ -995,26 +1057,86 @@ mod tests {
                     install_path: PathBuf::new(),
                 })
             }
-            fn install(&self, _p: &Path, _o: InstallOptions) -> Result<AppSummary, ManagerError> { unimplemented!() }
-            fn uninstall(&self, _id: &str, _o: UninstallOptions) -> Result<(), ManagerError> { unimplemented!() }
-            fn launch(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
-            fn stop(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
-            fn restart(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
-            fn runtime_status(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+            fn install(&self, _p: &Path, _o: InstallOptions) -> Result<AppSummary, ManagerError> {
+                unimplemented!()
+            }
+            fn uninstall(&self, _id: &str, _o: UninstallOptions) -> Result<(), ManagerError> {
+                unimplemented!()
+            }
+            fn launch(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+                unimplemented!()
+            }
+            fn stop(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+                unimplemented!()
+            }
+            fn restart(&self, _id: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+                unimplemented!()
+            }
+            fn runtime_status(
+                &self,
+                _id: &str,
+            ) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
                 Ok(crate::runtime::RuntimeStatus::default())
             }
-            fn start_service(&self, _id: &str, _s: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+            fn start_service(
+                &self,
+                _id: &str,
+                _s: &str,
+            ) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
                 Err(ManagerError::Runtime("synthetic".into()))
             }
-            fn stop_service(&self, _id: &str, _s: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
-            fn restart_service(&self, _id: &str, _s: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
-            fn service_status(&self, _id: &str, _s: &str) -> Result<crate::runtime::RuntimeStatus, ManagerError> { unimplemented!() }
-            fn list_services(&self, _id: &str) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, ManagerError> { Ok(Vec::new()) }
-            fn permissions(&self, _id: &str) -> Result<Vec<PermissionState>, ManagerError> { Ok(Vec::new()) }
-            fn set_permission(&self, _id: &str, _p: &str, _d: PermissionDecision) -> Result<(), ManagerError> { unimplemented!() }
-            fn recent_audit_log(&self, _id: &str, _limit: usize) -> Result<Vec<AuditEntry>, ManagerError> { Ok(Vec::new()) }
-            fn registry_path(&self) -> &Path { Path::new(".") }
-            fn install_root(&self) -> &Path { Path::new(".") }
+            fn stop_service(
+                &self,
+                _id: &str,
+                _s: &str,
+            ) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+                unimplemented!()
+            }
+            fn restart_service(
+                &self,
+                _id: &str,
+                _s: &str,
+            ) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+                unimplemented!()
+            }
+            fn service_status(
+                &self,
+                _id: &str,
+                _s: &str,
+            ) -> Result<crate::runtime::RuntimeStatus, ManagerError> {
+                unimplemented!()
+            }
+            fn list_services(
+                &self,
+                _id: &str,
+            ) -> Result<Vec<crate::runtime::application_supervisor::ServiceSummary>, ManagerError>
+            {
+                Ok(Vec::new())
+            }
+            fn permissions(&self, _id: &str) -> Result<Vec<PermissionState>, ManagerError> {
+                Ok(Vec::new())
+            }
+            fn set_permission(
+                &self,
+                _id: &str,
+                _p: &str,
+                _d: PermissionDecision,
+            ) -> Result<(), ManagerError> {
+                unimplemented!()
+            }
+            fn recent_audit_log(
+                &self,
+                _id: &str,
+                _limit: usize,
+            ) -> Result<Vec<AuditEntry>, ManagerError> {
+                Ok(Vec::new())
+            }
+            fn registry_path(&self) -> &Path {
+                Path::new(".")
+            }
+            fn install_root(&self) -> &Path {
+                Path::new(".")
+            }
         }
         let report = DaemonService::new(store.clone())
             .with_manager(Arc::new(AlwaysFail))
