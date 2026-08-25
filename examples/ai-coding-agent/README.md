@@ -6,20 +6,24 @@ execution, an MCP filesystem tool, explicit permissions, and a packageable v2
 manifest.
 
 ```powershell
-# Build the TypeScript backend
+# Install dependencies once
 cd examples/ai-coding-agent/app
 npm install
 npm run build
 
-# Build the React frontend
+# No frontend build is needed in development: alex dev starts Vite.
 cd ../frontend
 npm install
-npm run build
 
-# Validate and run the complete application
+# Validate and run the complete application (from the app root)
 cd ..
 cargo run --manifest-path ../../Cargo.toml -- validate .
 cargo run --manifest-path ../../Cargo.toml -- dev .
+
+# Production packaging still requires compiled frontend assets.
+cd frontend
+npm run build
+cd ..
 cargo run --manifest-path ../../Cargo.toml -- pack . ../../target/ai-coding-agent.alx
 ```
 

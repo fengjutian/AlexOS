@@ -520,11 +520,12 @@ mod v2_projection_tests {
     }
 }
 
-#[cfg(all(windows, test))]
+#[cfg(windows)]
 #[allow(dead_code)]
 mod windows {
     use std::{
         path::{Path, PathBuf},
+        process::{Child, Command, Stdio},
         sync::{Arc, mpsc},
         thread,
         time::{Duration, Instant},
@@ -544,6 +545,7 @@ mod windows {
         authorization::PermissionStore,
         dev::{is_ignored, load_alexignore},
         manifest::AppManifest,
+        manifest_v2::FrontendDev,
         native::HostCommand,
         runtime::RuntimeHandle,
         shell::windows::{BRIDGE, UserEvent, WindowHost, asset_response, emit_event},
@@ -570,6 +572,7 @@ mod windows {
     pub fn run(
         package_root: &Path,
         manifest: AppManifest,
+        frontend_dev: Option<FrontendDev>,
     ) -> Result<(), Box<dyn std::error::Error>> {
         let canonical_root = package_root
             .canonicalize()
@@ -583,6 +586,14 @@ mod windows {
             canonical_root.join(Path::new(&backend.entry).parent().unwrap_or(Path::new("")))
         });
         let manifest_path = canonical_root.join("manifest.json");
+
+        let mut frontend_process = match frontend_dev.as_ref() {
+            Some(dev) => Some(start_frontend_dev_server(&canonical_root, dev)?),
+            None => None,
+        };
+        if let Some(dev) = frontend_dev.as_ref() {
+            wait_for_dev_server(&dev.url, &mut frontend_process)?;
+        }
 
         // Capacity-1 channel: a burst of file events collapses into the most
         // recent signal, so we never queue redundant reloads.
@@ -623,6 +634,11 @@ mod windows {
             + &crate::permission_shim::shim_source(&manifest.permissions);
         let drop_router = Arc::clone(&router);
 
+        let initial_url = frontend_dev
+            .as_ref()
+            .map(|dev| dev.url.clone())
+            .unwrap_or_else(|| "alex://app/".into());
+        let allowed_dev_origin = frontend_dev.as_ref().map(|dev| dev.url.clone());
         let webview = WebViewBuilder::new()
             .with_initialization_script(init_script)
             // `alex dev` IS the dev mode: DevTools are always
@@ -634,7 +650,12 @@ mod windows {
             .with_devtools(cfg!(debug_assertions))
             .with_incognito(true)
             .with_clipboard(false)
-            .with_navigation_handler(|url| crate::is_internal_webview_url(&url, "app"))
+            .with_navigation_handler(move |url| {
+                crate::is_internal_webview_url(&url, "app")
+                    || allowed_dev_origin
+                        .as_ref()
+                        .is_some_and(|allowed| same_origin(url.as_str(), allowed))
+            })
             .with_new_window_req_handler(|_, _| NewWindowResponse::Deny)
             .with_download_started_handler(|_, _| false)
             .with_drag_drop_handler(move |event| match event {
@@ -689,8 +710,12 @@ mod windows {
             .with_custom_protocol("alex".into(), move |_id, request| {
                 asset_response(&root, &frontend, request.uri().path())
             })
-            .with_url("alex://app/")
+            .with_url(&initial_url)
             .build(&window)?;
+
+        if let Some(dev) = frontend_dev.as_ref() {
+            eprintln!("alex dev: frontend dev server ready at {}", dev.url);
+        }
 
         eprintln!(
             "alex dev: watching {} {}",
@@ -751,6 +776,12 @@ mod windows {
                     ),
                     _ => {}
                 },
+                Event::LoopDestroyed => {
+                    if let Some(child) = frontend_process.as_mut() {
+                        let _ = child.kill();
+                        let _ = child.wait();
+                    }
+                }
                 _ => {}
             }
 
@@ -774,6 +805,73 @@ mod windows {
                 }
             }
         })
+    }
+
+    fn start_frontend_dev_server(
+        package_root: &Path,
+        dev: &FrontendDev,
+    ) -> Result<Child, Box<dyn std::error::Error>> {
+        eprintln!(
+            "alex dev: starting frontend: {} {} (cwd: {})",
+            dev.command,
+            dev.args.join(" "),
+            dev.cwd
+        );
+        Ok(Command::new(&dev.command)
+            .args(&dev.args)
+            .current_dir(package_root.join(&dev.cwd))
+            .stdin(Stdio::null())
+            .stdout(Stdio::inherit())
+            .stderr(Stdio::inherit())
+            .spawn()?)
+    }
+
+    fn wait_for_dev_server(
+        url: &str,
+        child: &mut Option<Child>,
+    ) -> Result<(), Box<dyn std::error::Error>> {
+        let parsed = url::Url::parse(url)?;
+        let host = parsed.host_str().ok_or("frontend dev URL has no host")?;
+        let port = parsed
+            .port_or_known_default()
+            .ok_or("frontend dev URL has no port")?;
+        let address = format!("{host}:{port}").parse()?;
+        let deadline = Instant::now() + Duration::from_secs(30);
+        loop {
+            if std::net::TcpStream::connect_timeout(&address, Duration::from_millis(250)).is_ok() {
+                return Ok(());
+            }
+            if let Some(status) = child
+                .as_mut()
+                .and_then(|process| process.try_wait().ok())
+                .flatten()
+            {
+                return Err(
+                    format!("frontend dev command exited before becoming ready: {status}").into(),
+                );
+            }
+            if Instant::now() >= deadline {
+                if let Some(process) = child.as_mut() {
+                    let _ = process.kill();
+                }
+                return Err(
+                    format!("frontend dev server did not become ready at {url}").into(),
+                );
+            }
+            thread::sleep(Duration::from_millis(100));
+        }
+    }
+
+    fn same_origin(candidate: &str, allowed: &str) -> bool {
+        let Ok(candidate) = url::Url::parse(candidate) else {
+            return false;
+        };
+        let Ok(allowed) = url::Url::parse(allowed) else {
+            return false;
+        };
+        candidate.scheme() == allowed.scheme()
+            && candidate.host_str() == allowed.host_str()
+            && candidate.port_or_known_default() == allowed.port_or_known_default()
     }
 
     /// Returns `true` when the event loop should exit. The only
