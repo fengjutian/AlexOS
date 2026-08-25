@@ -89,6 +89,33 @@ test("model.generate decodes structured events from the credit stream", async ()
   ]);
 });
 
+test("MCP subscription and MRTR APIs decode stream events and route responses", async () => {
+  const calls = [];
+  const client = createAlexClient({
+    async invoke(method, params) {
+      calls.push({ method, params });
+      return { accepted: true, inputId: params.inputId };
+    },
+    async *stream(method, params) {
+      calls.push({ method, params });
+      if (method === "mcp.listen") {
+        yield new TextEncoder().encode(JSON.stringify({ method: "notifications/tools/list_changed" }));
+      } else {
+        yield new TextEncoder().encode(JSON.stringify({ type: "inputRequired", inputId: "input-1", method: "elicitation/create", params: {} }));
+        yield new TextEncoder().encode(JSON.stringify({ type: "result", result: { content: [], isError: false } }));
+      }
+    },
+  });
+  const notices = [];
+  for await (const event of client.mcp.listen("tools", { toolsListChanged: true })) notices.push(event);
+  const interactions = [];
+  for await (const event of client.mcp.callToolInteractive("tools", "confirm")) interactions.push(event);
+  await client.mcp.respondInput("input-1", { action: "accept", content: {} });
+  assert.equal(notices[0].method, "notifications/tools/list_changed");
+  assert.equal(interactions[0].type, "inputRequired");
+  assert.deepEqual(calls.map(({ method }) => method), ["mcp.listen", "mcp.callToolInteractive", "mcp.respondInput"]);
+});
+
 test("app instance namespace uses the product-facing API", async () => {
   const calls = [];
   const client = createAlexClient({
