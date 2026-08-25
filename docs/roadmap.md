@@ -254,6 +254,8 @@ capabilities 明确报告，不能静默降级。
 ## 关联文档
 
 - [`status.md`](./status.md) — 当前所有"已实现"和"限制"的来源；
+- [`ai-runtime-implementation.md`](./ai-runtime-implementation.md) — Manifest、Daemon、流式 IPC、
+  Secret、Model、MCP、Agent 和 MCP 市场的完整技术实施步骤与完成标准；
 - [`app-manager-ui-design.md`](./app-manager-ui-design.md) — §3.2 权限设置 UI、§3.4 安装器 UI 的设计提案；
 - [`alex-container-design.md`](./alex-container-design.md) — §3.1 Job Object、§3.10 0.3 AppContainer、§3.13 OCI 的详细分阶段计划；
 - [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) — 每个 API 的"待 wired"项对应 P0 §3.2 / P1 §3.5。
