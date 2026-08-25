@@ -8,6 +8,7 @@ pub mod container;
 pub mod core;
 pub mod daemon;
 pub mod data;
+pub mod headless;
 pub mod instance;
 pub mod mcp;
 pub mod model;

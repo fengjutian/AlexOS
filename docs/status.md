@@ -355,15 +355,14 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - HTTPS 下载（`ureq` https-only）、SHA-256 校验、ZIP 解包（`enclosed_name` 路径穿越防护 + 文件/总量上限）、
   LRU 回收（保留最新 N 个版本）；
 - `RuntimeRequest.require_managed`：受管运行时缺失时拒绝系统回退（"应用不依赖用户 PATH" 的开关）；
-- Node 启动路径改为经 provider 解析（受管缓存优先、系统 `ALEX_NODE`/`PATH` 回退保留）；
+- Node/Python 启动路径均经 provider 解析：Node 受管缓存优先 + 系统回退；Python managed-only；
+  `runtime.node` / `runtime.python` 版本钉定已线程化到启动路径；
+- 离线 Runtime 包导入 CLI：`alex runtime import`（SHA-256 校验 + 解包 + 发布 + 回收）与 `alex runtime list`；
 - 服务级 `resources.memoryMb` / `cpuPercent` / `processes` 在启动时经 `container::isolation::confine_process`
   包装进 Windows Job Object（`JOB_OBJECT_LIMIT_PROCESS_MEMORY` / `ACTIVE_PROCESS` / CPU 率控制 + `KILL_ON_JOB_CLOSE`）。
 
 限制：
 
-- `runtime.node` 版本钉定尚未线程化到启动路径（当前 `version_req: None`，选最新受管缓存）；
-- Python 服务启动仍返回 `PythonNotManaged`（provider 已支持 Python 缓存布局与可执行文件探测，但未接 dispatch）；
-- 离线 Runtime 包导入 CLI 未做；
 - `dataQuotaMb` 磁盘配额仍为 reporting-only（需 0.3 volume/ACL 层）；
 - 受管运行时下载无真实 catalog/服务端集成测试（下载/校验/解包/回收经内存 downloader + 合成 ZIP 单测覆盖）。
 

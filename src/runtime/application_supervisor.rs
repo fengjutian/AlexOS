@@ -771,7 +771,6 @@ impl ApplicationSupervisor {
                 service: service_name.to_owned(),
             });
         }
-        application.generation = application.generation.wrapping_add(1);
         let service = application
             .services
             .get_mut(service_name)

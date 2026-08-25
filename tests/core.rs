@@ -3290,6 +3290,7 @@ fn application_supervisor_holds_two_services_with_independent_pids() {
         mode: ServiceMode::Rpc,
         health: None,
         restart: ServiceRestartDescriptor::default(),
+            resources: None,
     };
     let spec_a = make("primary", "primary.js");
     let spec_b = make("secondary", "secondary.js");
@@ -3368,6 +3369,7 @@ fn application_supervisor_scopes_service_names_per_app() {
         mode: ServiceMode::Rpc,
         health: None,
         restart: ServiceRestartDescriptor::default(),
+            resources: None,
     };
     supervisor.register_application("com.example.alpha", vec![make("alpha")]);
     supervisor.register_application("com.example.beta", vec![make("beta")]);
@@ -3412,6 +3414,7 @@ fn application_supervisor_rejects_duplicate_start_with_clear_error() {
         mode: ServiceMode::Rpc,
         health: None,
         restart: ServiceRestartDescriptor::default(),
+            resources: None,
     };
     supervisor.register_application("com.example.dup", vec![descriptor.clone()]);
     // Pre-seed the slot in `Healthy` so the next `start_service`
@@ -3455,6 +3458,7 @@ fn application_supervisor_stop_on_idempotent_state_returns_ok() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         };
         supervisor.register_application("com.example.idempotent", vec![descriptor]);
         assert!(supervisor.set_service_status("com.example.idempotent", "main", terminal,));
@@ -3487,6 +3491,7 @@ fn dag_linear_chain_yields_three_layers() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
         ServiceDescriptor {
             name: "b".to_owned(),
@@ -3499,6 +3504,7 @@ fn dag_linear_chain_yields_three_layers() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
         ServiceDescriptor {
             name: "c".to_owned(),
@@ -3511,6 +3517,7 @@ fn dag_linear_chain_yields_three_layers() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
     ];
     supervisor.register_application("com.example.chain", services);
@@ -3553,6 +3560,7 @@ fn dag_cycle_is_rejected_before_any_service_starts() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
         ServiceDescriptor {
             name: "b".to_owned(),
@@ -3565,6 +3573,7 @@ fn dag_cycle_is_rejected_before_any_service_starts() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
     ];
     let manifest = build_v2_manifest(services.clone());
@@ -3607,6 +3616,7 @@ fn dag_unknown_dependency_is_rejected_at_start() {
         mode: ServiceMode::Rpc,
         health: None,
         restart: ServiceRestartDescriptor::default(),
+            resources: None,
     }];
     let manifest = build_v2_manifest(services.clone());
     supervisor.register_application("com.example.ghost", services);
@@ -3656,6 +3666,7 @@ fn application_supervisor_start_then_stop_leaves_no_orphan_slots() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
         ServiceDescriptor {
             name: "beta".to_owned(),
@@ -3668,6 +3679,7 @@ fn application_supervisor_start_then_stop_leaves_no_orphan_slots() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
     ];
     let manifest = build_v2_manifest(services.clone());
@@ -3737,6 +3749,7 @@ fn application_supervisor_stop_joins_every_watchdog() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
         ServiceDescriptor {
             name: "beta".to_owned(),
@@ -3749,6 +3762,7 @@ fn application_supervisor_stop_joins_every_watchdog() {
             mode: ServiceMode::Rpc,
             health: None,
             restart: ServiceRestartDescriptor::default(),
+                resources: None,
         },
     ];
     let manifest = build_v2_manifest(services.clone());
@@ -3801,6 +3815,7 @@ fn application_supervisor_stop_joins_every_watchdog() {
         mode: ServiceMode::Rpc,
         health: None,
         restart: ServiceRestartDescriptor::default(),
+            resources: None,
     }];
     let manifest_replacement = build_v2_manifest(replacement.clone());
     supervisor.register_application("com.example.watchdog_drain", replacement);
@@ -3921,6 +3936,7 @@ fn per_service_log_files_are_teed_with_secret_redaction() {
         mode: ServiceMode::Rpc,
         health: None,
         restart: ServiceRestartDescriptor::default(),
+            resources: None,
     };
     supervisor.register_application("com.example.tee_logs", vec![descriptor.clone()]);
     // Drive the start through the supervisor so
@@ -3994,6 +4010,7 @@ fn build_v2_manifest(
                 health: None,
                 restart: Default::default(),
                 dev: None,
+                resources: None,
             },
         );
     }

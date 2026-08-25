@@ -51,6 +51,8 @@ enum Commands {
     Inspect { path: PathBuf },
     /// Start the application's managed backend runtime.
     Run { path: PathBuf },
+    /// Run a headless (no-frontend) agent application without a WebView.
+    AgentRun { path: PathBuf },
     /// Start an installed application through the Alex Runtime daemon.
     Start {
         id: String,
@@ -567,6 +569,20 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 thread::sleep(Duration::from_millis(100));
             }
         }
+        Commands::AgentRun { path } => {
+            let run = alex::headless::start(&path)?;
+            println!(
+                "headless agent app {} started (services: {:?})",
+                run.app_id, run.observed
+            );
+            println!("agent model: {}", run.agent.model);
+            wait_for_shutdown_signal();
+            let stopped = run.stop()?;
+            println!(
+                "headless agent app {} stopped ({:?})",
+                run.app_id, stopped
+            );
+        }
         Commands::Start { id, pipe } => {
             daemon_command(&pipe, alex::daemon::ControlCommand::Start { app_id: id })?
         }
@@ -1058,6 +1074,36 @@ fn runtime_kind_label_kind(kind: alex::core::manifest_v2::ServiceRuntime) -> &'s
         alex::core::manifest_v2::ServiceRuntime::Node => "node",
         alex::core::manifest_v2::ServiceRuntime::Python => "python",
         alex::core::manifest_v2::ServiceRuntime::Native => "native",
+    }
+}
+
+/// Block until the user presses Ctrl+C, then return so the caller can
+/// run its graceful-stop path. On Windows a console control handler is
+/// installed; on non-Windows hosts (Linux dev boxes) this blocks until
+/// the process is terminated, since the terminal's default SIGINT
+/// handling already kills the process.
+#[cfg(windows)]
+fn wait_for_shutdown_signal() {
+    use std::sync::atomic::{AtomicBool, Ordering};
+    static STOP: AtomicBool = AtomicBool::new(false);
+
+    unsafe extern "system" fn console_handler(_ctrl_type: u32) -> windows::core::BOOL {
+        STOP.store(true, Ordering::Release);
+        windows::core::BOOL(1)
+    }
+
+    unsafe {
+        let _ = windows::Win32::System::Console::SetConsoleCtrlHandler(Some(console_handler), true);
+    }
+    while !STOP.load(Ordering::Acquire) {
+        std::thread::sleep(std::time::Duration::from_millis(250));
+    }
+}
+
+#[cfg(not(windows))]
+fn wait_for_shutdown_signal() {
+    loop {
+        std::thread::sleep(std::time::Duration::from_millis(250));
     }
 }
 

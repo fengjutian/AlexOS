@@ -82,3 +82,52 @@ jobs:
           name: alex-windows
           path: target/debug/alex.exe
           if-no-files-found: warn
+
+  windows-node-matrix:
+    name: Windows · Node ${{ matrix.node-version }}
+    runs-on: windows-latest
+    strategy:
+      fail-fast: false
+      matrix:
+        node-version: ["18", "20", "22"]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-${{ matrix.node-version }}-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Install Node.js ${{ matrix.node-version }}
+        uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node-version }}
+      - name: Windows tests (multi Node matrix)
+        run: cargo test --offline
+
+  windows-cross-user:
+    name: Windows · cross-user pipe rejection
+    runs-on: windows-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          toolchain: stable
+      - name: Cache cargo registry and target
+        uses: actions/cache@v4
+        with:
+          path: |
+            ~/.cargo/registry
+            ~/.cargo/git
+            target
+          key: ${{ runner.os }}-cross-user-cargo-${{ hashFiles('Cargo.lock') }}
+      - name: Build alex.exe
+        run: cargo build --offline
+      - name: Cross-user daemon rejection acceptance
+        shell: pwsh
+        run: ./scripts/ci-cross-user.ps1 -BinDir ./target/debug

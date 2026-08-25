@@ -22,11 +22,13 @@ nav_order: 4
 - [已完成] Windows Named Pipe 版本化控制协议（`\\.\pipe\alex-runtime-v1`，版本化 JSON Lines）；
 - [已完成] 应用 desired state 原子持久化（`src/daemon/state.rs`，schemaVersion 2 含 desired / observed / lastError）；
 - [已完成] 当前用户 protected DACL 和客户端 Token User SID 校验；
-- 在多账户 Windows CI/VM 中验证跨用户连接拒绝（代码已 wired，真实多账户 CI 验收未做）；
+- [已完成代码+CI 工件] 多账户 Windows CI/VM 跨用户连接拒绝验收：`.github/workflows/ci.yml`
+  `windows-cross-user` job + `scripts/ci-cross-user.ps1`（建第二本地用户、起 daemon、以第二用户
+  连接并断言拒绝）；真实多账户 CI 执行仍待该 job 首次跑通；
 - [已完成] 32 客户端有界并发连接和 `alex shutdown` 优雅退出；
 - [已完成] Daemon 持有共享 `LocalAppManager/RuntimeSupervisor`，生命周期命令驱动真实进程；
 - [已完成基础闭环] Daemon 启动时按 desired state 恢复应用，并持久化 observed/lastError；
-- [已完成] `runtime_handle_multiplexes_and_cancels_without_killing_backend` 等测试在测试主机上跑过真实 Node child；具备多 Node 版本矩阵的 Windows CI 仍待补；
+- [已完成] `runtime_handle_multiplexes_and_cancels_without_killing_backend` 等测试在测试主机上跑过真实 Node child；多 Node 版本矩阵 Windows CI 已加（`windows-node-matrix` job，Node 18/20/22），首次跑通仍待；
 - [已完成] CLI Named Pipe 客户端与 `alex start/stop/restart/status/logs`；
 - [已完成] CLI、Shell 和 Manager 共享同一个 Runtime 状态（共享 `RuntimeSupervisor`）；
 - [已完成] Daemon 重启恢复 + Job Object 进程树清理（`container::isolation::job_provider_kills_process_on_handle_drop`）。
@@ -52,10 +54,12 @@ nav_order: 4
   `installed` / `evict`，按 `<kind>/<version>/<triple>` 缓存；
 - [已完成基础] 版本解析（`semver::VersionReq`，含 `"22"` → 22.x 简写）、HTTPS 下载（https-only）、
   SHA-256 校验、ZIP 解包（路径穿越 + 大小上限）、LRU 回收（保留最新 N 版本）、架构匹配（`TargetTriple`）；
-- [已部分] 应用默认不依赖用户 PATH：`require_managed` 已建模；Node 启动路径改为经 provider 解析
-  （受管缓存优先、系统回退保留）；
-- [未做] `runtime.node` 版本钉定线程化到启动路径；Python 服务 dispatch；离线 Runtime 包导入 CLI；
-  `dataQuotaMb` 磁盘配额硬性 enforcement（需 0.3 volume/ACL 层）。
+- [已完成] 应用默认不依赖用户 PATH：`require_managed` 已建模；Node 启动路径经 provider 解析
+  （受管缓存优先、系统回退保留）；`runtime.node` / `runtime.python` 版本钉定已线程化到启动路径；
+- [已完成] Python 服务 dispatch 经 provider（managed-only，无系统回退）；离线 Runtime 包导入
+  CLI（`alex runtime import` / `alex runtime list`）；
+- [未做] `dataQuotaMb` 磁盘配额硬性 enforcement（需 0.3 volume/ACL 层）；受管运行时下载的
+  真实 catalog/服务端集成测试。
 
 ### 0.4 Backend 安全边界
 
