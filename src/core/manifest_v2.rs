@@ -38,6 +38,8 @@ pub struct ApplicationManifestV2 {
     pub services: BTreeMap<String, ServiceSpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_servers: BTreeMap<String, McpServerSpec>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub agent: Option<crate::agent::AgentSpec>,
     #[serde(default, skip_serializing_if = "Vec::is_empty")]
     pub storage: Vec<StorageSpec>,
     #[serde(default)]
@@ -276,6 +278,9 @@ impl ApplicationManifestV2 {
                     }
                 }
             }
+        }
+        if let Some(agent) = &self.agent {
+            crate::agent::validate_spec(agent).map_err(|error| validation(error.to_string()))?;
         }
         semver::Version::parse(&self.version)
             .map_err(|error| validation(format!("invalid version: {error}")))?;

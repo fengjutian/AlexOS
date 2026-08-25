@@ -115,7 +115,7 @@ impl ApiRouter {
             .map_err(|error| ("AI_RUNTIME_FAILURE", error.to_string()))
     }
 
-    fn mcp_scope(
+    pub(crate) fn mcp_scope(
         &self,
         binding: Option<&str>,
         tool: Option<&str>,
@@ -142,7 +142,10 @@ impl ApiRouter {
         ))
     }
 
-    fn model_use_scope(&self, model_id: Option<&str>) -> Result<(), (&'static str, String)> {
+    pub(crate) fn model_use_scope(
+        &self,
+        model_id: Option<&str>,
+    ) -> Result<(), (&'static str, String)> {
         let allowed = self
             .manifest
             .permissions

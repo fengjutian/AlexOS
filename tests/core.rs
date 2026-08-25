@@ -4005,6 +4005,7 @@ fn build_v2_manifest(
         },
         services: map,
         mcp_servers: Default::default(),
+        agent: None,
         storage: Vec::new(),
         permissions: Default::default(),
     };

@@ -422,6 +422,7 @@ pub struct ResolvedApplication {
     pub frontend: Option<ResolvedFrontend>,
     pub services: BTreeMap<String, ResolvedService>,
     pub mcp_servers: BTreeMap<String, crate::manifest_v2::McpServerSpec>,
+    pub agent: Option<crate::agent::AgentSpec>,
     pub permissions: EffectivePermissionRequest,
 }
 
@@ -455,6 +456,7 @@ impl ApplicationManifest {
                 .as_v2()
                 .map(|manifest| manifest.mcp_servers.clone())
                 .unwrap_or_default(),
+            agent: self.as_v2().and_then(|manifest| manifest.agent.clone()),
             permissions,
         })
     }

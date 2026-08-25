@@ -1,5 +1,6 @@
 //! Domain handlers kept separate from request validation and routing.
 
+mod agent;
 mod clipboard;
 mod container;
 mod desktop;

@@ -141,6 +141,7 @@ pub struct DaemonService {
     mcp_oauth_pending: Arc<Mutex<BTreeMap<String, PendingMcpOAuth>>>,
     mcp_input_pending: Arc<Mutex<BTreeMap<String, PendingMcpInput>>>,
     models: Option<crate::model::ModelManager>,
+    agents: Option<crate::agent::AgentManager>,
 }
 
 impl DaemonService {
@@ -159,6 +160,7 @@ impl DaemonService {
             mcp_oauth_pending: Arc::new(Mutex::new(BTreeMap::new())),
             mcp_input_pending: Arc::new(Mutex::new(BTreeMap::new())),
             models: None,
+            agents: None,
         }
     }
 
@@ -169,6 +171,10 @@ impl DaemonService {
         models
             .register_process_workers(&root.join("runtimes"))
             .map_err(|error| error.to_string())?;
+        self.agents = Some(
+            crate::agent::AgentManager::open(root.join("agents"), models.clone(), self.mcp.clone())
+                .map_err(|error| error.to_string())?,
+        );
         self.models = Some(models);
         self.mcp_audit = Some(
             crate::mcp::AuditLog::open(root.join("audit").join("mcp.jsonl"))
@@ -429,6 +435,38 @@ impl DaemonService {
                 stream_id,
                 request,
             } => self.model_generate(&app_id, &stream_id, request),
+            ControlCommand::AgentCreate {
+                app_id,
+                spec,
+                messages,
+            } => self.agent_create(&app_id, spec, messages),
+            ControlCommand::AgentStart {
+                app_id,
+                run_id,
+                stream_id,
+            } => self.agent_start(&app_id, &run_id, &stream_id),
+            ControlCommand::AgentPause { app_id, run_id } => {
+                self.agent_action(&app_id, &run_id, "pause")
+            }
+            ControlCommand::AgentResume { app_id, run_id } => {
+                self.agent_action(&app_id, &run_id, "resume")
+            }
+            ControlCommand::AgentCancel { app_id, run_id } => {
+                self.agent_action(&app_id, &run_id, "cancel")
+            }
+            ControlCommand::AgentApprove { app_id, run_id } => {
+                self.agent_action(&app_id, &run_id, "approve")
+            }
+            ControlCommand::AgentDeny { app_id, run_id } => {
+                self.agent_action(&app_id, &run_id, "deny")
+            }
+            ControlCommand::AgentStatus { app_id, run_id } => self.agent_status(&app_id, &run_id),
+            ControlCommand::AgentList { app_id } => self.agent_list(&app_id),
+            ControlCommand::AgentHistory {
+                app_id,
+                run_id,
+                limit,
+            } => self.agent_history(&app_id, &run_id, limit),
         };
         match result {
             Ok(value) => ControlResponse::success(id, value),
@@ -1818,6 +1856,116 @@ impl DaemonService {
         Ok(json!({ "streamId": stream_id, "requestId": response_request_id }))
     }
 
+    fn agent_manager(&self) -> Result<&crate::agent::AgentManager, String> {
+        self.agents
+            .as_ref()
+            .ok_or_else(|| "Agent Runtime is not configured".into())
+    }
+
+    fn agent_create(
+        &self,
+        app_id: &str,
+        spec: crate::agent::AgentSpec,
+        messages: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .create(app_id, spec, messages)
+            .and_then(|run| {
+                serde_json::to_value(run)
+                    .map_err(|error| crate::agent::AgentError::Invalid(error.to_string()))
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn agent_start(
+        &self,
+        app_id: &str,
+        run_id: &str,
+        stream_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        let manager = self.agent_manager()?.clone();
+        manager
+            .status(app_id, run_id)
+            .map_err(|error| error.to_string())?;
+        let cancellation = self
+            .streams
+            .open(app_id, stream_id)
+            .map_err(|error| error.to_string())?;
+        let streams = Arc::clone(&self.streams);
+        let application = app_id.to_owned();
+        let run = run_id.to_owned();
+        let worker_stream = stream_id.to_owned();
+        std::thread::Builder::new()
+            .name("alex-agent-run".into())
+            .spawn(move || {
+                let mut emit = |event: crate::agent::AgentEvent| {
+                    let payload = serde_json::to_vec(&event)
+                        .map_err(|error| crate::agent::AgentError::Invalid(error.to_string()))?;
+                    push_agent_stream(&streams, &worker_stream, &cancellation, payload)
+                };
+                let result = manager.execute(&application, &run, &mut emit);
+                if cancellation.is_cancelled() {
+                    let _ = manager.cancel(&application, &run);
+                    return;
+                }
+                let terminal = match result {
+                    Ok(_) => crate::runtime::stream::StreamTerminal::Completed,
+                    Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                        code: "AGENT_RUN_FAILED".into(),
+                        message: error.to_string(),
+                    },
+                };
+                let _ = streams.finish(&worker_stream, terminal);
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(json!({"runId":run_id,"streamId":stream_id}))
+    }
+
+    fn agent_action(
+        &self,
+        app_id: &str,
+        run_id: &str,
+        action: &str,
+    ) -> Result<serde_json::Value, String> {
+        let manager = self.agent_manager()?;
+        let result = match action {
+            "pause" => manager.pause(app_id, run_id),
+            "resume" => manager.resume(app_id, run_id),
+            "cancel" => manager.cancel(app_id, run_id),
+            "approve" => manager.approve(app_id, run_id),
+            "deny" => manager.deny(app_id, run_id),
+            _ => return Err("unknown Agent action".into()),
+        }
+        .map_err(|error| error.to_string())?;
+        serde_json::to_value(result).map_err(|error| error.to_string())
+    }
+    fn agent_status(&self, app_id: &str, run_id: &str) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .status(app_id, run_id)
+            .and_then(|run| {
+                serde_json::to_value(run)
+                    .map_err(|error| crate::agent::AgentError::Invalid(error.to_string()))
+            })
+            .map_err(|error| error.to_string())
+    }
+    fn agent_list(&self, app_id: &str) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .list(app_id)
+            .map(|runs| json!({"runs":runs}))
+            .map_err(|error| error.to_string())
+    }
+    fn agent_history(
+        &self,
+        app_id: &str,
+        run_id: &str,
+        limit: usize,
+    ) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .history(app_id, run_id, limit)
+            .map(|events| json!({"events":events}))
+            .map_err(|error| error.to_string())
+    }
+
     fn set_desired(
         &self,
         app_id: &str,
@@ -2013,6 +2161,29 @@ fn push_stream_with_cancel(
                 std::thread::sleep(std::time::Duration::from_millis(5));
             }
             Err(error) => return Err(crate::mcp::McpError::Transport(error.to_string())),
+        }
+    }
+}
+
+fn push_agent_stream(
+    streams: &crate::runtime::stream::StreamManager,
+    stream_id: &str,
+    cancellation: &crate::runtime::stream::CancellationToken,
+    payload: Vec<u8>,
+) -> Result<(), crate::agent::AgentError> {
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(crate::agent::AgentError::Conflict(
+                "agent stream cancelled".into(),
+            ));
+        }
+        match streams.push(stream_id, payload.clone()) {
+            Ok(_) => return Ok(()),
+            Err(crate::runtime::stream::StreamError::Backpressured { .. })
+            | Err(crate::runtime::stream::StreamError::BufferFull { .. }) => {
+                std::thread::sleep(std::time::Duration::from_millis(5))
+            }
+            Err(error) => return Err(crate::agent::AgentError::Conflict(error.to_string())),
         }
     }
 }

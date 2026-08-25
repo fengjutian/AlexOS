@@ -265,6 +265,50 @@ pub enum ControlCommand {
         stream_id: String,
         request: crate::model::GenerateRequest,
     },
+    AgentCreate {
+        app_id: String,
+        spec: crate::agent::AgentSpec,
+        #[serde(default)]
+        messages: Vec<Value>,
+    },
+    AgentStart {
+        app_id: String,
+        run_id: String,
+        stream_id: String,
+    },
+    AgentPause {
+        app_id: String,
+        run_id: String,
+    },
+    AgentResume {
+        app_id: String,
+        run_id: String,
+    },
+    AgentCancel {
+        app_id: String,
+        run_id: String,
+    },
+    AgentApprove {
+        app_id: String,
+        run_id: String,
+    },
+    AgentDeny {
+        app_id: String,
+        run_id: String,
+    },
+    AgentStatus {
+        app_id: String,
+        run_id: String,
+    },
+    AgentList {
+        app_id: String,
+    },
+    AgentHistory {
+        app_id: String,
+        run_id: String,
+        #[serde(default = "default_audit_limit")]
+        limit: usize,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

@@ -2,6 +2,7 @@
 // concrete file layout; we re-export the moved modules at the crate
 // root so `use crate::shell`, `use crate::api::ApiRouter`, etc. keep
 // working unchanged after the reorganization.
+pub mod agent;
 pub mod api;
 pub mod container;
 pub mod core;

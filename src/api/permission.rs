@@ -84,6 +84,8 @@ pub enum Permission {
     ModelUse { models: Vec<String> },
     #[serde(rename = "model.manage")]
     ModelManage,
+    #[serde(rename = "agent.run")]
+    AgentRun,
     /// Bounded process spawn through the host. Each permission
     /// entry lists the relative or absolute executable paths
     /// (resolved under the package root when relative) the app is
@@ -141,6 +143,10 @@ impl Permission {
             "mcp.callToolInteractive" | "mcp.respondInput" => Some("mcp.use"),
             "model.list" | "model.generate" | "model.cancel" => Some("model.use"),
             "model.import" | "model.load" | "model.unload" | "model.remove" => Some("model.manage"),
+            "agent.create" | "agent.start" | "agent.pause" | "agent.resume" | "agent.cancel"
+            | "agent.status" | "agent.list" | "agent.approve" | "agent.deny" | "agent.history" => {
+                Some("agent.run")
+            }
             "media.camera" => Some("media.camera"),
             "media.microphone" => Some("media.microphone"),
             "geolocation" => Some("geolocation"),
@@ -181,6 +187,7 @@ impl Permission {
             Permission::McpUse { .. } => "mcp.use",
             Permission::ModelUse { .. } => "model.use",
             Permission::ModelManage => "model.manage",
+            Permission::AgentRun => "agent.run",
             Permission::ProcessSpawn { .. } => "process.spawn",
             Permission::MediaCamera => "media.camera",
             Permission::MediaMicrophone => "media.microphone",

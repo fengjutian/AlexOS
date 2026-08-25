@@ -2070,6 +2070,7 @@ mod tests {
             },
             services,
             mcp_servers: BTreeMap::new(),
+            agent: None,
             storage: Vec::new(),
             permissions: Default::default(),
         };

@@ -292,6 +292,7 @@ mod v2_projection_tests {
             },
             services: services_map,
             mcp_servers: BTreeMap::new(),
+            agent: None,
             storage: Vec::new(),
             permissions: Default::default(),
         };
@@ -426,6 +427,7 @@ mod v2_projection_tests {
             },
             services: services_map,
             mcp_servers: BTreeMap::new(),
+            agent: None,
             storage: Vec::new(),
             permissions: Default::default(),
         };
