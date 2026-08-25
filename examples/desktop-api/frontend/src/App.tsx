@@ -1,20 +1,24 @@
 /**
  * Top-level component. Wires together the host handshake, the event
- * stream, the action runner, and the action groups. Each group is a
- * pure data structure (`ActionGroupSpec`) so adding or reordering
- * examples is a single-line edit.
+ * stream, the action runner, the action groups, and the top menu bar.
+ * Each group is a pure data structure (`ActionGroupSpec`) so adding
+ * or reordering examples is a single-line edit.
  */
-import { useMemo, useState } from "react";
+import { useEffect, useMemo, useState } from "react";
 import type React from "react";
+import { alex } from "@alex/sdk";
 import { ActionGroup } from "./components/ActionGroup.js";
 import { AppHeader } from "./components/AppHeader.js";
 import { EventStream } from "./components/EventStream.js";
+import { MenuBar } from "./components/MenuBar.js";
 import { ResultPanel } from "./components/ResultPanel.js";
 import { SharedInput } from "./components/SharedInput.js";
 import { useActionRunner } from "./hooks/useActionRunner.js";
 import { useEventStream } from "./hooks/useEventStream.js";
 import { useHostStatus } from "./hooks/useHostStatus.js";
 import { desktop } from "./lib/desktop.js";
+import { buildMenus } from "./lib/menu.js";
+import type { MenuSpec } from "./types/desktop.js";
 import type { ActionGroupSpec, ActionSpec } from "./types/desktop.js";
 
 // The set of host events the demo listens to. Keep this list flat —
@@ -40,15 +44,67 @@ export function App(): React.ReactElement {
   const [message, setMessage] = useState(DEFAULT_MESSAGE);
   const [watchId, setWatchId] = useState<string | null>(null);
   const [childWindowId, setChildWindowId] = useState<number | null>(null);
+  const [trayId, setTrayId] = useState<string | null>(null);
+
+  // Build the menu tree (used by both the in-page bar and the native
+  // menu). Re-built when state the menu reads changes (watchId toggles
+  // the label, etc.).
+  const { menus, actions: menuActions } = useMemo(
+    () => buildMenus({ message, watchId, childWindowId, run, setWatchId, setChildWindowId }),
+    [message, watchId, childWindowId, run, setWatchId, setChildWindowId],
+  );
+
+  // Register the native menu on first mount and whenever the template
+  // changes. Best-effort: if the host denies the menu permission, the
+  // in-page bar still works.
+  useEffect(() => {
+    let cancelled = false;
+    void desktop.menu
+      .setApplicationMenu(toNativeTemplate(menus))
+      .catch((error: unknown) => {
+        if (cancelled) return;
+        const detail = error as { message?: string };
+        // Surface the failure via the result panel so the user knows
+        // why the native menu isn't showing.
+        void run("注册原生菜单", () =>
+          Promise.resolve({ error: detail?.message ?? String(error), note: "in-page 菜单仍可用" }),
+        );
+      });
+    return () => {
+      cancelled = true;
+    };
+  }, [menus, run]);
+
+  // Route native menu clicks (`menu.clicked` events) to the same
+  // handlers the in-page bar invokes.
+  useEffect(() => {
+    const dispose = alex.events.on("menu.clicked", (payload) => {
+      const id = (payload as { id?: string })?.id;
+      if (!id) return;
+      const handler = menuActions.get(id);
+      if (handler) handler(deriveLabel(menus, id));
+    });
+    return dispose;
+  }, [menuActions, menus]);
 
   // Build the action groups on every render. `useMemo` would only buy
   // us a re-render skip on `run` reference change, but the groups also
   // depend on local state (watchId, childWindowId, message) — easier
   // to keep the dependency list explicit at the call site.
-  const groups = useActionGroups({ message, watchId, childWindowId, setWatchId, setChildWindowId, run });
+  const groups = useActionGroups({
+    message,
+    watchId,
+    childWindowId,
+    trayId,
+    setWatchId,
+    setChildWindowId,
+    setTrayId,
+    run,
+  });
 
   return (
     <main>
+      <MenuBar menus={menus} onRun={run} />
       <AppHeader status={status} runtime={extractRuntimeId(capabilities)} />
       <div className="workspace">
         <div className="controls">
@@ -80,8 +136,10 @@ interface UseActionGroupsInput {
   message: string;
   watchId: string | null;
   childWindowId: number | null;
+  trayId: string | null;
   setWatchId: (next: string | null) => void;
   setChildWindowId: (next: number | null) => void;
+  setTrayId: (next: string | null) => void;
   run: (label: string, fn: () => Promise<unknown>) => Promise<void>;
 }
 
@@ -92,7 +150,7 @@ interface UseActionGroupsInput {
  * every host capability exercised.
  */
 function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
-  const { message, watchId, childWindowId, setWatchId, setChildWindowId, run } = input;
+  const { message, watchId, childWindowId, trayId, setWatchId, setChildWindowId, setTrayId, run } = input;
 
   return useMemo<ActionGroupSpec[]>(() => {
     const systemAndPaths: ActionGroupSpec = {
@@ -113,49 +171,29 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
       ],
     };
 
-    const menuAndTray: ActionGroupSpec = {
-      title: "应用菜单与托盘",
-      description: "注册原生菜单模板和系统托盘图标。",
+    const tray: ActionGroupSpec = {
+      title: "系统托盘",
+      description: "原生应用菜单已经由顶部菜单栏自动注册；这里只演示托盘图标的生命周期。",
       actions: [
         {
-          label: "注册应用菜单",
-          description: "menu.setApplicationMenu — 用普通/分隔/复选三种类型拼一份菜单。",
-          run: () =>
-            desktop.menu.setApplicationMenu({
-              items: [
-                { type: "normal", id: "demo.reload", label: "重载视图", accelerator: "CmdOrCtrl+R" },
-                { type: "normal", id: "demo.beep", label: "蜂鸣" },
-                { type: "separator" },
-                {
-                  type: "submenu",
-                  id: "demo.submenu",
-                  label: "子菜单",
-                  items: [
-                    { type: "checkbox", id: "demo.flag", label: "启用日志", checked: true },
-                    { type: "normal", id: "demo.about", label: "关于…" },
-                  ],
-                },
-              ],
-            }),
-        },
-        {
-          label: "创建托盘",
-          description: "tray.create — 创建一个 1x1 透明托盘图标；返回 id 可被 destroy。",
+          label: trayId ? "重建托盘" : "创建托盘",
+          description: "tray.create — 创建一个透明托盘图标；id 会保存以便销毁。",
           run: async () => {
             const result = await desktop.tray.create({ icon: "data:image/png;base64,", tooltip: "Desktop API Demo" });
+            setTrayId(result.id);
             return result;
           },
         },
         {
           label: "销毁托盘",
-          description: "tray.destroy — 关闭最近一次创建（demo 不会替你记录 id，先 create 再 destroy）。",
-          run: async () => {
-            // The host returns the id at create time; the demo shows
-            // a single-shot id via the most recent event payload if
-            // you want to chain manually. Here we fail loudly if no
-            // id is known.
-            throw new Error("请先在结果面板里拿到 tray.create 返回的 id，然后通过 console 调用 tray.destroy(id)");
-          },
+          description: "tray.destroy — 需要先创建。销毁后 id 清空。",
+          run: trayId
+            ? async () => {
+                const id = trayId;
+                setTrayId(null);
+                return desktop.tray.destroy(id);
+              }
+            : () => Promise.resolve({ skipped: "请先创建托盘" }),
         },
       ],
     };
@@ -317,10 +355,10 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
       ],
     };
 
-    return [systemAndPaths, menuAndTray, shortcuts, storage, filesystem, dialogs, notificationAndLinks, windows];
+    return [systemAndPaths, tray, shortcuts, storage, filesystem, dialogs, notificationAndLinks, windows];
     // `run` comes from a stable callback in the parent, so listing it
     // here is safe.
-  }, [message, watchId, childWindowId, run, setWatchId, setChildWindowId]);
+  }, [message, watchId, childWindowId, trayId, run, setWatchId, setChildWindowId, setTrayId]);
 }
 
 // ---------------------------------------------------------------------------
@@ -333,6 +371,44 @@ function extractRuntimeId(capabilities: unknown): string | null {
   const platform = (capabilities as { platform?: { os?: string } }).platform;
   const os = platform?.os ?? "host";
   return `os: ${os}`;
+}
+
+/**
+ * Convert the in-page `MenuSpec` tree to the host's `MenuTemplate`
+ * shape. We strip the `run` callback (the host only understands id,
+ * label, accelerator, type and submenu items).
+ */
+function toNativeTemplate(menus: MenuSpec[]) {
+  return {
+    items: menus.map((menu) => ({
+      type: "submenu" as const,
+      id: menu.id,
+      label: menu.label,
+      items: menu.items.map(toNativeItem),
+    })),
+  };
+}
+
+function toNativeItem(item: import("./types/desktop.js").MenuItemSpec) {
+  if (item.type === "separator") {
+    return { type: "separator" as const };
+  }
+  return {
+    type: "normal" as const,
+    id: item.id,
+    label: item.label,
+    accelerator: item.accelerator,
+  };
+}
+
+/** Walk the menu tree by id and return the matched item's label. */
+function deriveLabel(menus: MenuSpec[], fullId: string): string {
+  for (const menu of menus) {
+    for (const item of menu.items) {
+      if (`${menu.id}.${item.id}` === fullId) return `${menu.label} · ${item.label}`;
+    }
+  }
+  return fullId;
 }
 
 // Silence the unused-symbol lint for the type when the file gets

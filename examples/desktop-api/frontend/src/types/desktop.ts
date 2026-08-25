@@ -42,3 +42,36 @@ export interface ActionGroupSpec {
   /** Actions in display order. */
   actions: ActionSpec[];
 }
+
+/**
+ * A single entry in the top-level menu bar. Mirrors the
+ * `MenuItem` shape from `@alex/sdk` so the same data can be passed
+ * straight to `menu.setApplicationMenu`.
+ */
+export interface MenuItemSpec {
+  type?: "normal" | "separator";
+  /** Stable id; `menu.clicked` carries this back. Required for `normal`. */
+  id: string;
+  /** Visible text. Required for `normal`. */
+  label: string;
+  /** Optional accelerator hint (display only on the in-page bar). */
+  accelerator?: string;
+  /** Optional nested submenu. */
+  items?: MenuItemSpec[];
+  /**
+   * What the in-page menu bar should do when this item is clicked.
+   * Not used by the native menu — that path goes through
+   * `menu.clicked` and is routed in `App.tsx`.
+   */
+  run?: () => Promise<unknown> | unknown;
+}
+
+/** A top-level menu (File / Edit / View / …). */
+export interface MenuSpec {
+  /** Stable id (e.g. "file"). */
+  id: string;
+  /** Visible label rendered on the bar. */
+  label: string;
+  /** Items in display order. */
+  items: MenuItemSpec[];
+}

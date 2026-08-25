@@ -1,11 +1,10 @@
 /* =====================================================================
  * Desktop API Demo — global styles
  * --------------------------------------------------------------------
- * Two-column layout: left = controls (shared input + 8 action groups),
- * right = sticky result panel with a streaming event log underneath.
- * The palette is the same dark-blue the original demo used; component
- * class names are stable for both the new and old markup so nothing
- * here accidentally trips the previous styling.
+ * Responsive two-column layout. The wide layout (>1100px) keeps the
+ * sticky result panel on the right; medium widths tighten the gap;
+ * narrow widths (<720px) collapse to a single column and shrink
+ * padding so the controls remain usable inside a small WebView.
  * ===================================================================*/
 
 :root {
@@ -13,16 +12,24 @@
   background: #080d18;
   font: 14px/1.5 Inter, ui-sans-serif, system-ui, sans-serif;
   color-scheme: dark;
+  /* The whole page scales its baseline font and horizontal padding
+     with the viewport so the same CSS works on phone-sized WebViews
+     and a 1440px desktop. */
+  --page-padding: clamp(8px, 3vw, 32px);
+  --gap: clamp(10px, 1.4vw, 20px);
 }
 
 * { box-sizing: border-box; }
 
+html, body { width: 100%; }
+
 body {
   margin: 0;
-  min-width: 960px;
   background:
     radial-gradient(circle at 12% 0%, #142849 0, transparent 34%),
     #080d18;
+  /* Guard against a stray fixed-width child pushing the page sideways. */
+  overflow-x: hidden;
 }
 
 button, input, textarea { font: inherit; }
@@ -30,7 +37,111 @@ button, input, textarea { font: inherit; }
 main {
   max-width: 1440px;
   margin: auto;
-  padding: 28px 32px 48px;
+  padding: 0 var(--page-padding) 48px;
+  width: 100%;
+}
+
+/* ---------------------------------------------------------------------
+ * VSCode-style top menu bar
+ * ------------------------------------------------------------------ */
+
+.menubar {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  height: 30px;
+  padding: 0 4px;
+  background: linear-gradient(180deg, #3a3d41 0, #2f3033 100%);
+  border-bottom: 1px solid #1a1a1a;
+  user-select: none;
+  font-size: 13px;
+  color: #d4d4d4;
+  /* On narrow viewports the bar can scroll horizontally so the five
+     menus never get squeezed into nothing. The dropdowns remain
+     anchored to their trigger so the bar scrolls but the open menu
+     stays in view. */
+  overflow-x: auto;
+  overflow-y: hidden;
+  -webkit-overflow-scrolling: touch;
+  scrollbar-width: thin;
+}
+.menubar::-webkit-scrollbar { height: 4px; }
+.menubar::-webkit-scrollbar-thumb { background: #1a1a1a; }
+
+.menubar__menu {
+  position: relative;
+  display: flex;
+  align-items: stretch;
+  flex-shrink: 0;
+}
+
+.menubar__top {
+  padding: 0 10px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menubar__top:hover,
+.menubar__menu.is-open .menubar__top {
+  background: #1a1a1a;
+  color: #ffffff;
+}
+.menubar__menu.is-open .menubar__top {
+  /* The open label visually pairs with the dropdown below. */
+  box-shadow: inset 0 -1px 0 #0078d4;
+}
+
+.menubar__dropdown {
+  position: absolute;
+  top: 100%;
+  left: 0;
+  z-index: 10;
+  min-width: 240px;
+  max-width: min(92vw, 320px);
+  padding: 4px 0;
+  background: #252526;
+  color: #cccccc;
+  border: 1px solid #1a1a1a;
+  border-radius: 0 0 4px 4px;
+  box-shadow: 0 8px 24px rgba(0, 0, 0, 0.45);
+  font-size: 13px;
+}
+
+.menubar__item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 24px;
+  width: 100%;
+  padding: 5px 14px;
+  color: inherit;
+  background: transparent;
+  border: 0;
+  border-radius: 0;
+  text-align: left;
+  font: inherit;
+  cursor: pointer;
+  white-space: nowrap;
+}
+.menubar__item:hover { background: #094771; color: #ffffff; }
+
+.menubar__label { flex: 1; min-width: 0; overflow: hidden; text-overflow: ellipsis; }
+.menubar__accel {
+  color: #858585;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+  flex-shrink: 0;
+}
+.menubar__item:hover .menubar__accel { color: #ffffff; }
+
+.menubar__sep {
+  height: 1px;
+  margin: 4px 0;
+  background: #1a1a1a;
 }
 
 /* ---------------------------------------------------------------------
@@ -42,11 +153,12 @@ header {
   align-items: flex-start;
   justify-content: space-between;
   gap: 16px;
-  padding: 8px 2px 24px;
+  padding: 16px 2px 20px;
   border-bottom: 1px solid #25304a;
+  flex-wrap: wrap;
 }
 
-header h1 { margin: 3px 0 2px; font-size: 30px; letter-spacing: -0.03em; }
+header h1 { margin: 3px 0 2px; font-size: clamp(22px, 4vw, 30px); letter-spacing: -0.03em; }
 header p { margin: 0; color: #8d9ab7; }
 
 .eyebrow {
@@ -61,6 +173,7 @@ header p { margin: 0; color: #8d9ab7; }
   flex-direction: column;
   align-items: flex-end;
   gap: 6px;
+  min-width: 0;
 }
 
 .status {
@@ -69,10 +182,23 @@ header p { margin: 0; color: #8d9ab7; }
   background: #10291f;
   border: 1px solid #24563f;
   border-radius: 99px;
+  max-width: 100%;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 .status.error { color: #ff9a9a; background: #321717; border-color: #633131; }
 
-.meta { color: #6f7a98; font-size: 11px; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.meta {
+  color: #6f7a98;
+  font-size: 11px;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  text-align: right;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+  max-width: 100%;
+}
 
 /* ---------------------------------------------------------------------
  * Workspace layout
@@ -80,21 +206,29 @@ header p { margin: 0; color: #8d9ab7; }
 
 .workspace {
   display: grid;
-  grid-template-columns: minmax(560px, 1fr) minmax(360px, 0.6fr);
-  gap: 20px;
+  /* `auto-fit` collapses the second track on narrow viewports so the
+     controls and result panel stack instead of overflowing. */
+  grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr));
+  gap: var(--gap);
   margin-top: 20px;
   align-items: start;
 }
 
-.controls { display: grid; gap: 14px; }
-.results { display: grid; gap: 14px; }
+.controls { display: grid; gap: 14px; min-width: 0; }
+.results { display: grid; gap: 14px; min-width: 0; }
 
 /* ---------------------------------------------------------------------
  * Shared input
  * ------------------------------------------------------------------ */
 
 .shared-input { display: grid; gap: 7px; color: #9eabc5; }
-.shared-input .label-row { display: flex; justify-content: space-between; gap: 8px; align-items: baseline; }
+.shared-input .label-row {
+  display: flex;
+  justify-content: space-between;
+  gap: 8px;
+  align-items: baseline;
+  flex-wrap: wrap;
+}
 .shared-input .label-row small { color: #6f7a98; font-weight: 400; }
 .shared-input input {
   width: 100%;
@@ -104,6 +238,7 @@ header p { margin: 0; color: #8d9ab7; }
   border: 1px solid #2b3858;
   border-radius: 10px;
   outline: none;
+  min-width: 0;
 }
 .shared-input input:focus { border-color: #448dde; box-shadow: 0 0 0 3px #1e5b9a33; }
 
@@ -120,7 +255,7 @@ header p { margin: 0; color: #8d9ab7; }
   box-shadow: 0 18px 50px #0004;
 }
 
-.action-group { padding: 17px; }
+.action-group { padding: 17px; min-width: 0; }
 
 .section-title {
   display: flex;
@@ -129,7 +264,7 @@ header p { margin: 0; color: #8d9ab7; }
   align-items: flex-start;
 }
 .section-title h2 { margin: 0 0 2px; font-size: 16px; }
-.section-title p { margin: 0; }
+.section-title p { margin: 0; min-width: 0; }
 .badge {
   display: grid;
   place-items: center;
@@ -139,6 +274,7 @@ header p { margin: 0; color: #8d9ab7; }
   background: #192843;
   border-radius: 8px;
   font-size: 12px;
+  flex-shrink: 0;
 }
 
 ul.actions {
@@ -146,16 +282,27 @@ ul.actions {
   margin: 14px 0 0;
   padding: 0;
   display: grid;
-  grid-template-columns: repeat(auto-fill, minmax(170px, 1fr));
+  /* Auto-fit columns: a single column on very narrow viewports, two
+     or three on wider ones. `minmax(140px, 1fr)` keeps button labels
+     readable without forcing horizontal scroll. */
+  grid-template-columns: repeat(auto-fit, minmax(140px, 1fr));
   gap: 10px;
 }
 
-ul.actions li { display: grid; gap: 4px; }
+ul.actions li { display: grid; gap: 4px; min-width: 0; }
+ul.actions li button {
+  width: 100%;
+  min-width: 0;
+  white-space: normal;
+  text-align: left;
+  line-height: 1.3;
+}
 ul.actions li .action-hint {
   color: #6f7a98;
   font-size: 11px;
   line-height: 1.4;
   padding: 0 2px;
+  word-break: break-word;
 }
 
 button {
@@ -182,7 +329,12 @@ button:disabled { opacity: 0.5; cursor: progress; }
  * Result panel
  * ------------------------------------------------------------------ */
 
-.results > aside { position: sticky; top: 20px; overflow: hidden; }
+.results > aside { overflow: hidden; }
+/* Sticky only on wide layouts; on narrow ones the panel would be
+   pushed below the fold and "sticky top" causes visual jank. */
+@media (min-width: 1100px) {
+  .results > aside { position: sticky; top: 20px; }
+}
 
 .panel-heading {
   display: flex;
@@ -191,13 +343,15 @@ button:disabled { opacity: 0.5; cursor: progress; }
   padding: 12px 14px;
   color: #a9b8d2;
   border-bottom: 1px solid #26324d;
+  gap: 8px;
+  flex-wrap: wrap;
 }
 .panel-heading em { color: #64a6ff; font-style: normal; }
 .panel-actions { display: flex; gap: 4px; }
 
 .results > aside > pre {
-  min-height: 220px;
-  max-height: 360px;
+  min-height: 180px;
+  max-height: min(50vh, 360px);
   margin: 0;
   padding: 15px;
   overflow: auto;
@@ -205,6 +359,8 @@ button:disabled { opacity: 0.5; cursor: progress; }
   background: #090f1c;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12.5px;
+  white-space: pre-wrap;
+  word-break: break-word;
 }
 
 .spinner {
@@ -230,12 +386,13 @@ button:disabled { opacity: 0.5; cursor: progress; }
   list-style: none;
   margin: 0;
   padding: 0 10px;
-  max-height: 360px;
+  max-height: min(45vh, 360px);
   overflow: auto;
 }
 .event-stream li {
   padding: 10px 4px;
   border-bottom: 1px solid #202b43;
+  min-width: 0;
 }
 .event-stream li header {
   display: flex;
@@ -244,8 +401,13 @@ button:disabled { opacity: 0.5; cursor: progress; }
   padding: 0;
   border: 0;
   gap: 8px;
+  flex-wrap: wrap;
 }
-.event-stream li b { color: #72b2ff; font-family: ui-monospace, SFMono-Regular, Consolas, monospace; }
+.event-stream li b {
+  color: #72b2ff;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  word-break: break-all;
+}
 .event-stream li time { color: #67748d; font-size: 11px; }
 .event-stream li pre {
   margin: 6px 0 0;
@@ -253,5 +415,32 @@ button:disabled { opacity: 0.5; cursor: progress; }
   color: #aebbd1;
   font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
   font-size: 12px;
+  word-break: break-word;
 }
 .empty { padding: 14px; color: #65718a; }
+
+/* ---------------------------------------------------------------------
+ * Narrow viewports (<720px) — tighten everything
+ * ------------------------------------------------------------------ */
+@media (max-width: 720px) {
+  :root { --page-padding: 10px; --gap: 12px; }
+
+  /* Stack the header so the status pill moves under the title instead
+     of competing with it for space. */
+  header {
+    flex-direction: column;
+    align-items: stretch;
+    gap: 10px;
+    padding-top: 12px;
+  }
+  .status-cluster { align-items: flex-start; }
+  .status, .meta { text-align: left; }
+
+  /* Single button per row on phones — easier to tap and avoids
+     truncating long Chinese labels. */
+  ul.actions { grid-template-columns: 1fr; }
+  ul.actions li button { text-align: center; }
+  ul.actions li .action-hint { display: none; } /* save space; tooltips still on hover */
+
+  .results > aside > pre { font-size: 12px; }
+}
