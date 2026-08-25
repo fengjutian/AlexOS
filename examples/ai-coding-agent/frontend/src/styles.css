@@ -1,0 +1,12 @@
+:root { color: #e8edf7; background: #0b1020; font: 15px/1.5 Inter, system-ui, sans-serif; }
+* { box-sizing: border-box; } body { margin: 0; min-width: 320px; }
+main { width: min(920px, 100%); min-height: 100vh; margin: auto; padding: 32px; display: grid; grid-template-rows: auto 1fr auto; gap: 24px; }
+header { display: flex; justify-content: space-between; align-items: center; border-bottom: 1px solid #26314e; padding-bottom: 18px; }
+h1 { margin: 2px 0 0; font-size: 26px; } .eyebrow { color: #70a5ff; font-size: 11px; letter-spacing: .18em; }
+.status { color: #9aa8c7; font-size: 13px; max-width: 48%; text-align: right; }
+.chat { overflow: auto; display: flex; flex-direction: column; gap: 14px; }
+article { max-width: 82%; padding: 14px 16px; border-radius: 14px; background: #151d33; } article.user { align-self: flex-end; background: #1b4d85; }
+article p { margin: 6px 0 0; white-space: pre-wrap; } .empty { margin: auto; text-align: center; color: #8f9ab4; }
+form { display: grid; grid-template-columns: 1fr auto; gap: 12px; padding: 12px; border: 1px solid #2a3657; border-radius: 16px; background: #11182b; }
+textarea { resize: none; min-height: 58px; padding: 8px; color: inherit; background: transparent; border: 0; outline: 0; font: inherit; }
+button { align-self: end; padding: 10px 18px; color: white; background: #2879d0; border: 0; border-radius: 10px; cursor: pointer; } button:disabled { opacity: .55; }

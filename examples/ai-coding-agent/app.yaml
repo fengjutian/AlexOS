@@ -1,0 +1,60 @@
+schemaVersion: 2
+id: com.alex.coding-agent
+name: Alex Coding Agent
+version: 0.1.0
+
+frontend:
+  entry: frontend/dist/index.html
+
+runtime:
+  node: "22"
+
+services:
+  app:
+    runtime: node
+    command: app/service.mjs
+    restart:
+      policy: on-failure
+      maxRetries: 3
+
+mcpServers:
+  filesystem:
+    transport: stdio
+    command: mcp/filesystem.mjs
+
+agent:
+  model: remote/ollama/qwen3
+  systemPrompt: >-
+    You are a coding assistant. Inspect files before editing, keep changes scoped,
+    and explain the result. Never access paths outside the granted workspace.
+  tools:
+    - binding: filesystem
+      name: read_text_file
+      idempotent: true
+    - binding: filesystem
+      name: list_directory
+      idempotent: true
+    - binding: filesystem
+      name: write_text_file
+      requireApproval: true
+  budget:
+    maxSteps: 24
+    maxTokens: 16384
+    maxToolCalls: 16
+    maxWallTimeMs: 300000
+
+storage:
+  - name: workspace
+    path: workspace
+
+permissions:
+  filesystem:
+    read:
+      - workspace
+    write:
+      - workspace
+  network:
+    allow:
+      - localhost
+  shell:
+    allow: []
