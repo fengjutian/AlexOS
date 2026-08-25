@@ -66,6 +66,7 @@ pub const ALWAYS: &[&str] = &[
     "mcp.connections",
     "mcp.listTools",
     "mcp.callTool",
+    "mcp.audit",
     "model.list",
     "model.import",
     "model.remove",
@@ -506,6 +507,13 @@ pub const METHODS: &[MethodDescriptor] = &[
     },
     MethodDescriptor {
         name: "mcp.callTool",
+        domain: "mcp",
+        availability: "always",
+        permission: "mcp.use",
+        execution: "blocking",
+    },
+    MethodDescriptor {
+        name: "mcp.audit",
         domain: "mcp",
         availability: "always",
         permission: "mcp.use",

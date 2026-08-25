@@ -62,6 +62,7 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `mcp.connections` | always | mcp.use | blocking |
 | `mcp.listTools` | always | mcp.use | blocking |
 | `mcp.callTool` | always | mcp.use | blocking |
+| `mcp.audit` | always | mcp.use | blocking |
 | `model.list` | always | method-specific | blocking |
 | `model.import` | always | method-specific | blocking |
 | `model.remove` | always | method-specific | blocking |
@@ -97,6 +98,6 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `shortcuts.unregister` | nativeDesktop | shortcuts | native |
 | `shortcuts.list` | nativeDesktop | shortcuts | native |
 
-Typed JSON Schema coverage: 92/92 methods.
+Typed JSON Schema coverage: 93/93 methods.
 
 Common errors: `INVALID_PARAMS`, `PERMISSION_DENIED`, `OPERATION_FAILED`, `DEADLINE_EXCEEDED`, `HOST_BUSY`, `METHOD_NOT_FOUND`.

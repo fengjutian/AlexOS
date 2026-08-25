@@ -1371,6 +1371,21 @@ mod tests {
             !audit.contains("hello"),
             "tool arguments must not be audited"
         );
+        let own = service.handle(request(ControlCommand::McpAudit {
+            app_id: "com.example.app".into(),
+            limit: 20,
+        }));
+        assert_eq!(own.result.unwrap()["entries"].as_array().unwrap().len(), 2);
+        let foreign = service.handle(request(ControlCommand::McpAudit {
+            app_id: "com.example.other".into(),
+            limit: 20,
+        }));
+        assert!(
+            foreign.result.unwrap()["entries"]
+                .as_array()
+                .unwrap()
+                .is_empty()
+        );
     }
 
     #[test]

@@ -32,17 +32,20 @@ test("MCP and local model namespaces map to daemon-owned APIs", async () => {
     async invoke(method, params) {
       calls.push({ method, params });
       if (method === "mcp.listTools") return { tools: [{ name: "echo", inputSchema: {} }] };
+      if (method === "mcp.audit") return { entries: [{ tool: "echo", phase: "finished" }] };
       if (method === "model.list") return { models: [{ id: "local/tiny@1" }] };
       return { content: [], isError: false };
     },
   });
   assert.equal((await client.mcp.listTools("tools")).tools[0].name, "echo");
   await client.mcp.callTool("tools", "echo", { text: "hello" });
+  assert.equal((await client.mcp.audit(25))[0].tool, "echo");
   assert.equal((await client.model.list())[0].id, "local/tiny@1");
   await client.model.load("local/tiny@1", "llama-cpp");
   assert.deepEqual(calls.map(({ method }) => method), [
     "mcp.listTools",
     "mcp.callTool",
+    "mcp.audit",
     "model.list",
     "model.load",
   ]);
