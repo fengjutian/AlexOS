@@ -271,7 +271,11 @@ pub struct TokenVault {
 
 pub trait AccessTokenProvider: Send + Sync {
     fn access_token(&self) -> Result<Option<String>, McpError>;
-    fn refresh_access_token(&self, challenge: &AuthChallenge) -> Result<bool, McpError>;
+    fn refresh_access_token(
+        &self,
+        challenge: &AuthChallenge,
+        rejected_token: Option<&str>,
+    ) -> Result<bool, McpError>;
 }
 
 #[derive(Debug, Clone, PartialEq, Eq)]
@@ -348,7 +352,11 @@ impl AccessTokenProvider for VaultAccessTokenProvider {
         Ok(token)
     }
 
-    fn refresh_access_token(&self, _: &AuthChallenge) -> Result<bool, McpError> {
+    fn refresh_access_token(
+        &self,
+        _: &AuthChallenge,
+        rejected_token: Option<&str>,
+    ) -> Result<bool, McpError> {
         let _gate = self
             .refresh_gate
             .lock()
@@ -356,6 +364,11 @@ impl AccessTokenProvider for VaultAccessTokenProvider {
         let Some(previous) = self.vault.load(&self.account)? else {
             return Ok(false);
         };
+        // Another request may have refreshed while this request waited for the
+        // gate. Reuse that token instead of rotating the refresh token again.
+        if rejected_token.is_some_and(|token| token != previous.access_token) {
+            return Ok(true);
+        }
         let (Some(refresh_token), Some(endpoint), Some(client_id), Some(resource)) = (
             previous.refresh_token.as_deref(),
             previous.token_endpoint.as_deref(),
@@ -627,6 +640,9 @@ mod tests {
             token_type: Some("Bearer".into()),
             expires_in: Some(3600),
             scope: Some("tools:read".into()),
+            token_endpoint: Some("https://auth.example.test/token".into()),
+            client_id: Some("alex-desktop".into()),
+            resource: Some("https://mcp.example.test/v1".into()),
         };
         vault.save("com.example.app:search", &tokens).unwrap();
         assert_eq!(vault.load("com.example.app:search").unwrap(), Some(tokens));

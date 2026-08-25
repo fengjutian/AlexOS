@@ -1125,6 +1125,8 @@ impl DaemonService {
                         crate::mcp::McpError::Transport(_) => "transport",
                         crate::mcp::McpError::Protocol(_) => "protocol",
                         crate::mcp::McpError::Server { .. } => "server",
+                        crate::mcp::McpError::Authorization(_) => "authorization",
+                        crate::mcp::McpError::InputRequired(_) => "input_required",
                     }
                     .into(),
                 );

@@ -50,6 +50,8 @@ pub enum McpError {
     Server { code: i64, message: String },
     #[error("MCP authorization failed: {0}")]
     Authorization(String),
+    #[error("MCP input is required: {0}")]
+    InputRequired(String),
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -294,9 +296,13 @@ impl StreamableHttpTransport {
         {
             request = request.header("mcp-session-id", session_id);
         }
-        if let Some(provider) = &self.access_tokens
-            && let Some(token) = provider.access_token()?
-        {
+        let access_token = self
+            .access_tokens
+            .as_ref()
+            .map(|provider| provider.access_token())
+            .transpose()?
+            .flatten();
+        if let Some(token) = access_token.as_deref() {
             request = request.header("authorization", format!("Bearer {token}"));
         }
         let request = request
@@ -317,7 +323,7 @@ impl StreamableHttpTransport {
                 .and_then(oauth::parse_www_authenticate)?;
             if allow_refresh
                 && let Some(provider) = &self.access_tokens
-                && provider.refresh_access_token(&challenge)?
+                && provider.refresh_access_token(&challenge, access_token.as_deref())?
             {
                 return self.post_attempt(method, params, value, false);
             }
@@ -577,6 +583,14 @@ pub struct McpClient {
     transport: Arc<dyn RpcTransport>,
     era: ProtocolEra,
     next_id: Arc<AtomicU64>,
+    input_handler: Option<Arc<dyn InputRequiredHandler>>,
+    max_input_rounds: usize,
+}
+
+/// Handles one embedded MRTR request. Implementations remain responsible for
+/// applying user-consent and model/roots permissions before returning a result.
+pub trait InputRequiredHandler: Send + Sync {
+    fn handle(&self, method: &str, params: &Value) -> Result<Value, McpError>;
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -602,7 +616,23 @@ impl McpClient {
             transport,
             era,
             next_id: Arc::new(AtomicU64::new(1)),
+            input_handler: None,
+            max_input_rounds: 10,
         }
+    }
+    pub fn with_input_handler(
+        mut self,
+        handler: Arc<dyn InputRequiredHandler>,
+        max_rounds: usize,
+    ) -> Result<Self, McpError> {
+        if !(1..=32).contains(&max_rounds) {
+            return Err(McpError::InvalidConfig(
+                "MRTR max rounds must be between 1 and 32".into(),
+            ));
+        }
+        self.input_handler = Some(handler);
+        self.max_input_rounds = max_rounds;
+        Ok(self)
     }
     fn call(&self, method: &str, mut params: Value) -> Result<Value, McpError> {
         if self.era == ProtocolEra::Modern {
@@ -614,8 +644,67 @@ impl McpClient {
                 "io.modelcontextprotocol/clientInfo": {"name":"Alex Runtime","version":env!("CARGO_PKG_VERSION")}
             }));
         }
-        self.transport
-            .request(self.next_id.fetch_add(1, Ordering::Relaxed), method, params)
+        let mut round = 0;
+        loop {
+            let mut result = self.transport.request(
+                self.next_id.fetch_add(1, Ordering::Relaxed),
+                method,
+                params.clone(),
+            )?;
+            if self.era != ProtocolEra::Modern {
+                return Ok(result);
+            }
+            match result.get("resultType").and_then(Value::as_str) {
+                Some("complete") => {
+                    result.as_object_mut().expect("result discriminator requires object").remove("resultType");
+                    return Ok(result);
+                }
+                // Tolerate pre-final 2026 servers while they migrate to the
+                // mandatory discriminator; input_required is never ambiguous.
+                None => return Ok(result),
+                Some("input_required") => {
+                    if round >= self.max_input_rounds {
+                        return Err(McpError::InputRequired(format!(
+                            "maximum of {} rounds exceeded",
+                            self.max_input_rounds
+                        )));
+                    }
+                    let requests = result
+                        .get("inputRequests")
+                        .and_then(Value::as_object)
+                        .ok_or_else(|| McpError::Protocol("input_required omitted inputRequests".into()))?;
+                    if requests.is_empty() {
+                        return Err(McpError::Protocol("inputRequests must not be empty".into()));
+                    }
+                    let handler = self.input_handler.as_ref().ok_or_else(|| {
+                        McpError::InputRequired("no input handler is registered".into())
+                    })?;
+                    let mut responses = serde_json::Map::new();
+                    for (key, request) in requests {
+                        let embedded_method = request
+                            .get("method")
+                            .and_then(Value::as_str)
+                            .ok_or_else(|| McpError::Protocol(format!("input request {key:?} omitted method")))?;
+                        if !matches!(embedded_method, "elicitation/create" | "sampling/createMessage" | "roots/list") {
+                            return Err(McpError::Protocol(format!("unsupported input request method {embedded_method:?}")));
+                        }
+                        let embedded_params = request.get("params").unwrap_or(&Value::Null);
+                        responses.insert(key.clone(), handler.handle(embedded_method, embedded_params)?);
+                    }
+                    let object = params.as_object_mut().ok_or_else(|| McpError::Protocol("params must be an object".into()))?;
+                    object.insert("inputResponses".into(), Value::Object(responses));
+                    match result.get("requestState") {
+                        Some(Value::String(state)) => {
+                            object.insert("requestState".into(), Value::String(state.clone()));
+                        }
+                        Some(_) => return Err(McpError::Protocol("requestState must be a string".into())),
+                        None => { object.remove("requestState"); }
+                    }
+                    round += 1;
+                }
+                Some(other) => return Err(McpError::Protocol(format!("unsupported resultType {other:?}"))),
+            }
+        }
     }
     pub fn initialize_legacy(&self) -> Result<Value, McpError> {
         if self.era != ProtocolEra::Legacy {
@@ -962,10 +1051,40 @@ fn validate_identity(application: &str, binding: &str) -> Result<(), McpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    use std::sync::atomic::AtomicUsize;
     struct FixedToken;
     impl oauth::AccessTokenProvider for FixedToken {
         fn access_token(&self) -> Result<Option<String>, McpError> {
             Ok(Some("secret-token".into()))
+        }
+        fn refresh_access_token(
+            &self,
+            _: &oauth::AuthChallenge,
+            _: Option<&str>,
+        ) -> Result<bool, McpError> {
+            Ok(false)
+        }
+    }
+    struct RefreshingToken(AtomicUsize);
+    impl oauth::AccessTokenProvider for RefreshingToken {
+        fn access_token(&self) -> Result<Option<String>, McpError> {
+            Ok(Some(
+                if self.0.load(Ordering::SeqCst) == 0 {
+                    "expired"
+                } else {
+                    "refreshed"
+                }
+                .into(),
+            ))
+        }
+        fn refresh_access_token(
+            &self,
+            challenge: &oauth::AuthChallenge,
+            _: Option<&str>,
+        ) -> Result<bool, McpError> {
+            assert_eq!(challenge.scope.as_deref(), Some("tools:read"));
+            self.0.fetch_add(1, Ordering::SeqCst);
+            Ok(true)
         }
     }
     struct Mock(Mutex<Vec<(String, Value)>>);
@@ -984,6 +1103,33 @@ mod tests {
             Ok(())
         }
     }
+    struct MrtrTransport(Mutex<Vec<Value>>);
+    impl RpcTransport for MrtrTransport {
+        fn request(&self, _: u64, _: &str, params: Value) -> Result<Value, McpError> {
+            let mut calls = self.0.lock().unwrap();
+            calls.push(params.clone());
+            if calls.len() == 1 {
+                Ok(json!({
+                    "resultType":"input_required",
+                    "inputRequests":{"confirm":{"method":"elicitation/create","params":{"message":"Continue?"}}},
+                    "requestState":"opaque-byte-exact-state"
+                }))
+            } else {
+                assert_eq!(params["requestState"], "opaque-byte-exact-state");
+                assert_eq!(params["inputResponses"]["confirm"]["action"], "accept");
+                Ok(json!({"resultType":"complete","content":[{"type":"text","text":"done"}]}))
+            }
+        }
+        fn notify(&self, _: &str, _: Value) -> Result<(), McpError> { Ok(()) }
+    }
+    struct MrtrHandler;
+    impl InputRequiredHandler for MrtrHandler {
+        fn handle(&self, method: &str, params: &Value) -> Result<Value, McpError> {
+            assert_eq!(method, "elicitation/create");
+            assert_eq!(params["message"], "Continue?");
+            Ok(json!({"action":"accept","content":{"confirmed":true}}))
+        }
+    }
     #[test]
     fn modern_client_adds_protocol_metadata_and_lists_tools() {
         let transport = Arc::new(Mock(Mutex::new(vec![])));
@@ -997,6 +1143,16 @@ mod tests {
             client.discover().unwrap().supported_versions,
             vec![MODERN_PROTOCOL_VERSION]
         );
+    }
+    #[test]
+    fn modern_client_fulfils_mrtr_and_echoes_request_state() {
+        let transport = Arc::new(MrtrTransport(Mutex::new(vec![])));
+        let client = McpClient::new(transport.clone(), ProtocolEra::Modern)
+            .with_input_handler(Arc::new(MrtrHandler), 10)
+            .unwrap();
+        let result = client.call_tool("confirm", json!({})).unwrap();
+        assert_eq!(result.content[0]["text"], "done");
+        assert_eq!(transport.0.lock().unwrap().len(), 2);
     }
     #[test]
     fn connections_are_isolated_by_application_and_binding() {
@@ -1131,5 +1287,51 @@ mod tests {
         );
         assert!(store.remove("com.example.app", "search").unwrap());
         assert!(store.list().unwrap().is_empty());
+    }
+
+    #[test]
+    fn http_transport_refreshes_once_after_bearer_challenge() {
+        let listener = std::net::TcpListener::bind("127.0.0.1:0").unwrap();
+        let endpoint = format!("http://{}/mcp", listener.local_addr().unwrap());
+        let server = std::thread::spawn(move || {
+            for (index, expected) in ["expired", "refreshed"].into_iter().enumerate() {
+                let (stream, _) = listener.accept().unwrap();
+                let mut reader = BufReader::new(stream);
+                let mut content_length = 0;
+                let mut authorization = String::new();
+                loop {
+                    let mut line = String::new();
+                    reader.read_line(&mut line).unwrap();
+                    if line == "\r\n" {
+                        break;
+                    }
+                    let lower = line.to_ascii_lowercase();
+                    if let Some(value) = lower.strip_prefix("content-length:") {
+                        content_length = value.trim().parse().unwrap();
+                    }
+                    if let Some(value) = lower.strip_prefix("authorization:") {
+                        authorization = value.trim().into();
+                    }
+                }
+                let mut body = vec![0; content_length];
+                reader.read_exact(&mut body).unwrap();
+                assert_eq!(authorization, format!("bearer {expected}"));
+                let stream = reader.get_mut();
+                if index == 0 {
+                    write!(stream, "HTTP/1.1 401 Unauthorized\r\nWWW-Authenticate: Bearer scope=\"tools:read\"\r\nContent-Length: 0\r\nConnection: close\r\n\r\n").unwrap();
+                } else {
+                    let body = "{\"jsonrpc\":\"2.0\",\"id\":9,\"result\":{}}";
+                    write!(stream, "HTTP/1.1 200 OK\r\nContent-Type: application/json\r\nContent-Length: {}\r\nConnection: close\r\n\r\n{}", body.len(), body).unwrap();
+                }
+                stream.flush().unwrap();
+            }
+        });
+        let provider = Arc::new(RefreshingToken(AtomicUsize::new(0)));
+        let transport = StreamableHttpTransport::new(&endpoint, ProtocolEra::Modern)
+            .unwrap()
+            .with_access_tokens(provider.clone());
+        assert_eq!(transport.request(9, "ping", json!({})).unwrap(), json!({}));
+        assert_eq!(provider.0.load(Ordering::SeqCst), 1);
+        server.join().unwrap();
     }
 }
