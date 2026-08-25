@@ -255,6 +255,19 @@ impl ModelManager {
             .insert(kind, worker);
         Ok(())
     }
+    pub fn list(&self) -> Result<Vec<ModelManifest>, ModelError> {
+        self.store.list()
+    }
+    pub fn import(
+        &self,
+        source: &Path,
+        manifest: ModelManifest,
+    ) -> Result<ModelManifest, ModelError> {
+        self.store.import(source, manifest)
+    }
+    pub fn remove(&self, model_id: &str) -> Result<bool, ModelError> {
+        self.store.remove(model_id, &self.loaded_models())
+    }
     pub fn load(&self, model_id: &str, worker_kind: &str) -> Result<(), ModelError> {
         let model = self.store.get(model_id)?;
         if !model.compatible_workers.is_empty()

@@ -129,6 +129,52 @@ pub enum ControlCommand {
         #[serde(default)]
         reason: String,
     },
+    McpConnections,
+    McpConnectStdio {
+        app_id: String,
+        binding: String,
+        package_root: String,
+        command: String,
+        #[serde(default)]
+        args: Vec<String>,
+        era: crate::mcp::ProtocolEra,
+    },
+    McpDisconnect {
+        app_id: String,
+        binding: String,
+    },
+    McpListTools {
+        app_id: String,
+        binding: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        cursor: Option<String>,
+    },
+    McpCallTool {
+        app_id: String,
+        binding: String,
+        name: String,
+        #[serde(default)]
+        arguments: Value,
+    },
+    ModelList,
+    ModelImport {
+        source: String,
+        manifest: crate::model::ModelManifest,
+    },
+    ModelRemove {
+        model_id: String,
+    },
+    ModelLoad {
+        model_id: String,
+        worker: String,
+    },
+    ModelUnload {
+        model_id: String,
+    },
+    ModelCancel {
+        model_id: String,
+        request_id: String,
+    },
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]

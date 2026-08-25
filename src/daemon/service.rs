@@ -34,6 +34,8 @@ pub struct DaemonService {
     manager: Option<Arc<dyn crate::manager::AppManager>>,
     websocket_tunnels: Arc<Mutex<BTreeMap<String, crate::proxy::WebSocketTunnel>>>,
     streams: Arc<crate::runtime::stream::StreamManager>,
+    mcp: crate::mcp::ConnectionManager,
+    models: Option<crate::model::ModelManager>,
 }
 
 impl DaemonService {
@@ -45,7 +47,16 @@ impl DaemonService {
             streams: Arc::new(crate::runtime::stream::StreamManager::new(
                 crate::runtime::stream::StreamLimits::default(),
             )),
+            mcp: crate::mcp::ConnectionManager::default(),
+            models: None,
         }
+    }
+
+    pub fn with_ai_root(mut self, root: &std::path::Path) -> Result<Self, String> {
+        let store = crate::model::ModelStore::open(root.join("models"))
+            .map_err(|error| error.to_string())?;
+        self.models = Some(crate::model::ModelManager::new(store));
+        Ok(self)
     }
 
     pub fn with_manager(mut self, manager: Arc<dyn crate::manager::AppManager>) -> Self {
@@ -129,6 +140,42 @@ impl DaemonService {
             ControlCommand::StreamCancel { stream_id, reason } => {
                 self.stream_cancel(&stream_id, &reason)
             }
+            ControlCommand::McpConnections => {
+                serde_json::to_value(self.mcp.list()).map_err(|error| error.to_string())
+            }
+            ControlCommand::McpConnectStdio {
+                app_id,
+                binding,
+                package_root,
+                command,
+                args,
+                era,
+            } => self.mcp_connect_stdio(&app_id, &binding, &package_root, &command, &args, era),
+            ControlCommand::McpDisconnect { app_id, binding } => Ok(json!({
+                "disconnected": self.mcp.disconnect(&app_id, &binding)
+            })),
+            ControlCommand::McpListTools {
+                app_id,
+                binding,
+                cursor,
+            } => self.mcp_list_tools(&app_id, &binding, cursor.as_deref()),
+            ControlCommand::McpCallTool {
+                app_id,
+                binding,
+                name,
+                arguments,
+            } => self.mcp_call_tool(&app_id, &binding, &name, arguments),
+            ControlCommand::ModelList => self.model_list(),
+            ControlCommand::ModelImport { source, manifest } => {
+                self.model_import(&source, manifest)
+            }
+            ControlCommand::ModelRemove { model_id } => self.model_remove(&model_id),
+            ControlCommand::ModelLoad { model_id, worker } => self.model_load(&model_id, &worker),
+            ControlCommand::ModelUnload { model_id } => self.model_unload(&model_id),
+            ControlCommand::ModelCancel {
+                model_id,
+                request_id,
+            } => self.model_cancel(&model_id, &request_id),
         };
         match result {
             Ok(value) => ControlResponse::success(id, value),
@@ -717,6 +764,127 @@ impl DaemonService {
         self.streams
             .cancel(stream_id, reason)
             .map(|_| json!({ "streamId": stream_id, "cancelled": true }))
+            .map_err(|error| error.to_string())
+    }
+
+    fn mcp_connect_stdio(
+        &self,
+        app_id: &str,
+        binding: &str,
+        package_root: &str,
+        command: &str,
+        args: &[String],
+        era: crate::mcp::ProtocolEra,
+    ) -> Result<serde_json::Value, String> {
+        let transport = crate::mcp::StdioTransport::spawn(
+            std::path::Path::new(package_root),
+            std::path::Path::new(command),
+            args,
+        )
+        .map_err(|error| error.to_string())?;
+        let client = crate::mcp::McpClient::new(Arc::new(transport), era);
+        let server = if era == crate::mcp::ProtocolEra::Legacy {
+            Some(
+                client
+                    .initialize_legacy()
+                    .map_err(|error| error.to_string())?,
+            )
+        } else {
+            None
+        };
+        self.mcp
+            .connect(app_id, binding, client)
+            .map_err(|error| error.to_string())?;
+        Ok(json!({
+            "application": app_id,
+            "binding": binding,
+            "era": era,
+            "server": server,
+        }))
+    }
+
+    fn mcp_list_tools(
+        &self,
+        app_id: &str,
+        binding: &str,
+        cursor: Option<&str>,
+    ) -> Result<serde_json::Value, String> {
+        let (tools, next_cursor) = self
+            .mcp
+            .get(app_id, binding)
+            .and_then(|client| client.list_tools(cursor))
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "tools": tools, "nextCursor": next_cursor }))
+    }
+
+    fn mcp_call_tool(
+        &self,
+        app_id: &str,
+        binding: &str,
+        name: &str,
+        arguments: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        self.mcp
+            .get(app_id, binding)
+            .and_then(|client| client.call_tool(name, arguments))
+            .and_then(|result| {
+                serde_json::to_value(result)
+                    .map_err(|error| crate::mcp::McpError::Protocol(error.to_string()))
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn model_manager(&self) -> Result<&crate::model::ModelManager, String> {
+        self.models
+            .as_ref()
+            .ok_or_else(|| "model runtime is not configured".into())
+    }
+
+    fn model_list(&self) -> Result<serde_json::Value, String> {
+        let models = self
+            .model_manager()?
+            .list()
+            .map_err(|error| error.to_string())?;
+        Ok(json!({ "models": models }))
+    }
+
+    fn model_import(
+        &self,
+        source: &str,
+        manifest: crate::model::ModelManifest,
+    ) -> Result<serde_json::Value, String> {
+        let model = self
+            .model_manager()?
+            .import(std::path::Path::new(source), manifest)
+            .map_err(|error| error.to_string())?;
+        serde_json::to_value(model).map_err(|error| error.to_string())
+    }
+
+    fn model_remove(&self, model_id: &str) -> Result<serde_json::Value, String> {
+        self.model_manager()?
+            .remove(model_id)
+            .map(|removed| json!({ "modelId": model_id, "removed": removed }))
+            .map_err(|error| error.to_string())
+    }
+
+    fn model_load(&self, model_id: &str, worker: &str) -> Result<serde_json::Value, String> {
+        self.model_manager()?
+            .load(model_id, worker)
+            .map(|_| json!({ "modelId": model_id, "worker": worker, "loaded": true }))
+            .map_err(|error| error.to_string())
+    }
+
+    fn model_unload(&self, model_id: &str) -> Result<serde_json::Value, String> {
+        self.model_manager()?
+            .unload(model_id)
+            .map(|unloaded| json!({ "modelId": model_id, "unloaded": unloaded }))
+            .map_err(|error| error.to_string())
+    }
+
+    fn model_cancel(&self, model_id: &str, request_id: &str) -> Result<serde_json::Value, String> {
+        self.model_manager()?
+            .cancel(model_id, request_id)
+            .map(|_| json!({ "modelId": model_id, "requestId": request_id, "cancelled": true }))
             .map_err(|error| error.to_string())
     }
 

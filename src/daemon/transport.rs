@@ -15,7 +15,14 @@ pub fn run_server(
     pipe_name: &str,
     manager: Arc<dyn crate::manager::AppManager>,
 ) -> std::io::Result<()> {
-    let service = DaemonService::new(DaemonStateStore::new(state_path)).with_manager(manager);
+    let ai_root = state_path
+        .parent()
+        .and_then(Path::parent)
+        .unwrap_or_else(|| state_path.parent().unwrap_or(Path::new(".")));
+    let service = DaemonService::new(DaemonStateStore::new(state_path))
+        .with_manager(manager)
+        .with_ai_root(ai_root)
+        .map_err(std::io::Error::other)?;
     let recovery = service.recover_startup();
     for app_id in &recovery.recovered {
         eprintln!("alexd: recovered {app_id}");

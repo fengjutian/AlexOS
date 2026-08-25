@@ -70,6 +70,7 @@ pub trait RpcTransport: Send + Sync {
 
 pub struct StdioTransport {
     child: Mutex<Child>,
+    io_gate: Mutex<()>,
     stdin: Mutex<ChildStdin>,
     stdout: Mutex<BufReader<ChildStdout>>,
 }
@@ -117,6 +118,7 @@ impl StdioTransport {
         }
         Ok(Self {
             child: Mutex::new(child),
+            io_gate: Mutex::new(()),
             stdin: Mutex::new(stdin),
             stdout: Mutex::new(BufReader::new(stdout)),
         })
@@ -141,6 +143,10 @@ impl StdioTransport {
 
 impl RpcTransport for StdioTransport {
     fn request(&self, id: u64, method: &str, params: Value) -> Result<Value, McpError> {
+        let _gate = self
+            .io_gate
+            .lock()
+            .map_err(|_| McpError::Transport("stdio request lock poisoned".into()))?;
         self.write(&json!({"jsonrpc":"2.0","id":id,"method":method,"params":params}))?;
         let mut stdout = self
             .stdout
@@ -184,6 +190,10 @@ impl RpcTransport for StdioTransport {
         }
     }
     fn notify(&self, method: &str, params: Value) -> Result<(), McpError> {
+        let _gate = self
+            .io_gate
+            .lock()
+            .map_err(|_| McpError::Transport("stdio request lock poisoned".into()))?;
         self.write(&json!({"jsonrpc":"2.0","method":method,"params":params}))
     }
 }
