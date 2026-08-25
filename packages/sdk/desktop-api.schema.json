@@ -143,6 +143,8 @@
       "mcp.discover",
       "mcp.listTools",
       "mcp.callTool",
+      "mcp.callToolInteractive",
+      "mcp.respondInput",
       "mcp.audit",
       "mcp.listResources",
       "mcp.readResource",
@@ -2426,6 +2428,14 @@
     "mcp.callTool": {
       "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "arguments": { "$ref": "#/$defs/JsonValue" } }, "required": ["binding", "name"], "additionalProperties": false },
       "result": { "type": "object", "properties": { "content": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } }, "isError": { "type": "boolean" }, "structuredContent": { "$ref": "#/$defs/JsonValue" } }, "required": ["content", "isError"], "additionalProperties": false }
+    },
+    "mcp.callToolInteractive": {
+      "params": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "arguments": { "$ref": "#/$defs/JsonValue" } }, "required": ["binding", "name"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "streamId": { "type": "string" }, "binding": { "type": "string" }, "tool": { "type": "string" } }, "required": ["streamId", "binding", "tool"], "additionalProperties": false }
+    },
+    "mcp.respondInput": {
+      "params": { "type": "object", "properties": { "inputId": { "type": "string", "minLength": 1 }, "response": { "$ref": "#/$defs/JsonValue" } }, "required": ["inputId", "response"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "inputId": { "type": "string" }, "accepted": { "type": "boolean" } }, "required": ["inputId", "accepted"], "additionalProperties": false }
     },
     "mcp.audit": {
       "params": { "type": "object", "properties": { "limit": { "type": "integer", "minimum": 1, "maximum": 1000, "default": 200 } }, "additionalProperties": false },

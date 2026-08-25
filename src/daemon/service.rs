@@ -37,6 +37,96 @@ struct PendingMcpOAuth {
     created_at: std::time::Instant,
 }
 
+struct PendingMcpInput {
+    application: String,
+    response: Arc<(Mutex<Option<serde_json::Value>>, std::sync::Condvar)>,
+}
+
+struct StreamingMcpInputHandler {
+    application: String,
+    stream_id: String,
+    streams: Arc<crate::runtime::stream::StreamManager>,
+    cancellation: crate::runtime::stream::CancellationToken,
+    pending: Arc<Mutex<BTreeMap<String, PendingMcpInput>>>,
+    allowed: std::collections::BTreeSet<String>,
+    next_id: std::sync::atomic::AtomicU64,
+}
+
+impl crate::mcp::InputRequiredHandler for StreamingMcpInputHandler {
+    fn handle(
+        &self,
+        method: &str,
+        params: &serde_json::Value,
+    ) -> Result<serde_json::Value, crate::mcp::McpError> {
+        use std::sync::atomic::Ordering;
+        if !self.allowed.contains(method) {
+            return Err(crate::mcp::McpError::Authorization(format!(
+                "MRTR method {method:?} is not permitted"
+            )));
+        }
+        let input_id = format!(
+            "{}:{}",
+            self.stream_id,
+            self.next_id.fetch_add(1, Ordering::Relaxed)
+        );
+        let response = Arc::new((Mutex::new(None), std::sync::Condvar::new()));
+        self.pending
+            .lock()
+            .map_err(|_| crate::mcp::McpError::Transport("MCP input broker lock poisoned".into()))?
+            .insert(
+                input_id.clone(),
+                PendingMcpInput {
+                    application: self.application.clone(),
+                    response: Arc::clone(&response),
+                },
+            );
+        let payload = serde_json::to_vec(
+            &json!({"type":"inputRequired","inputId":input_id,"method":method,"params":params}),
+        )
+        .map_err(|error| crate::mcp::McpError::Protocol(error.to_string()))?;
+        push_stream_with_cancel(&self.streams, &self.stream_id, &self.cancellation, payload)?;
+        let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+        let (gate, changed) = &*response;
+        let mut value = gate.lock().map_err(|_| {
+            crate::mcp::McpError::Transport("MCP input response lock poisoned".into())
+        })?;
+        loop {
+            if let Some(value) = value.take() {
+                self.pending
+                    .lock()
+                    .ok()
+                    .and_then(|mut pending| pending.remove(&input_id));
+                return Ok(value);
+            }
+            if self.cancellation.is_cancelled() {
+                self.pending
+                    .lock()
+                    .ok()
+                    .and_then(|mut pending| pending.remove(&input_id));
+                return Err(crate::mcp::McpError::InputRequired(
+                    "MRTR interaction cancelled".into(),
+                ));
+            }
+            let now = std::time::Instant::now();
+            if now >= deadline {
+                self.pending
+                    .lock()
+                    .ok()
+                    .and_then(|mut pending| pending.remove(&input_id));
+                return Err(crate::mcp::McpError::InputRequired(
+                    "MRTR interaction timed out".into(),
+                ));
+            }
+            let waited = changed
+                .wait_timeout(value, std::time::Duration::from_millis(250))
+                .map_err(|_| {
+                    crate::mcp::McpError::Transport("MCP input response lock poisoned".into())
+                })?;
+            value = waited.0;
+        }
+    }
+}
+
 #[derive(Clone)]
 pub struct DaemonService {
     state: DaemonStateStore,
@@ -48,6 +138,7 @@ pub struct DaemonService {
     mcp_configs: Option<crate::mcp::ConnectionConfigStore>,
     mcp_tokens: Option<crate::mcp::oauth::TokenVault>,
     mcp_oauth_pending: Arc<Mutex<BTreeMap<String, PendingMcpOAuth>>>,
+    mcp_input_pending: Arc<Mutex<BTreeMap<String, PendingMcpInput>>>,
     models: Option<crate::model::ModelManager>,
 }
 
@@ -65,6 +156,7 @@ impl DaemonService {
             mcp_configs: None,
             mcp_tokens: None,
             mcp_oauth_pending: Arc::new(Mutex::new(BTreeMap::new())),
+            mcp_input_pending: Arc::new(Mutex::new(BTreeMap::new())),
             models: None,
         }
     }
@@ -287,6 +379,26 @@ impl DaemonService {
                 name,
                 arguments,
             } => self.mcp_call_tool(&id, &app_id, &binding, &name, arguments),
+            ControlCommand::McpCallToolInteractive {
+                app_id,
+                binding,
+                stream_id,
+                name,
+                arguments,
+                allowed_input_methods,
+            } => self.mcp_call_tool_interactive(
+                &app_id,
+                &binding,
+                &stream_id,
+                &name,
+                arguments,
+                allowed_input_methods,
+            ),
+            ControlCommand::McpInputRespond {
+                app_id,
+                input_id,
+                response,
+            } => self.mcp_input_respond(&app_id, &input_id, response),
             ControlCommand::McpAudit { app_id, limit } => self.mcp_audit(&app_id, limit),
             ControlCommand::McpOAuthBegin {
                 app_id,
@@ -1290,6 +1402,105 @@ impl DaemonService {
         Ok(json!({ "entries": entries }))
     }
 
+    fn mcp_call_tool_interactive(
+        &self,
+        app_id: &str,
+        binding: &str,
+        stream_id: &str,
+        name: &str,
+        arguments: serde_json::Value,
+        allowed_input_methods: Vec<String>,
+    ) -> Result<serde_json::Value, String> {
+        let base = self
+            .mcp
+            .get(app_id, binding)
+            .map_err(|error| error.to_string())?;
+        let cancellation = self
+            .streams
+            .open(app_id, stream_id)
+            .map_err(|error| error.to_string())?;
+        let handler = StreamingMcpInputHandler {
+            application: app_id.into(),
+            stream_id: stream_id.into(),
+            streams: Arc::clone(&self.streams),
+            cancellation: cancellation.clone(),
+            pending: Arc::clone(&self.mcp_input_pending),
+            allowed: allowed_input_methods.into_iter().collect(),
+            next_id: std::sync::atomic::AtomicU64::new(1),
+        };
+        let client = base
+            .with_input_handler(Arc::new(handler), 10)
+            .map_err(|error| error.to_string())?;
+        let streams = Arc::clone(&self.streams);
+        let worker_stream_id = stream_id.to_owned();
+        let tool = name.to_owned();
+        std::thread::Builder::new()
+            .name("alex-mcp-mrtr".into())
+            .spawn(move || {
+                let result = client.call_tool(&tool, arguments);
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                let terminal = match result {
+                    Ok(result) => {
+                        match serde_json::to_vec(&json!({"type":"result","result":result})) {
+                            Ok(payload) => match push_stream_with_cancel(
+                                &streams,
+                                &worker_stream_id,
+                                &cancellation,
+                                payload,
+                            ) {
+                                Ok(()) => crate::runtime::stream::StreamTerminal::Completed,
+                                Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                                    code: "MCP_MRTR_STREAM_FAILED".into(),
+                                    message: error.to_string(),
+                                },
+                            },
+                            Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                                code: "MCP_MRTR_ENCODE_FAILED".into(),
+                                message: error.to_string(),
+                            },
+                        }
+                    }
+                    Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                        code: "MCP_MRTR_FAILED".into(),
+                        message: error.to_string(),
+                    },
+                };
+                let _ = streams.finish(&worker_stream_id, terminal);
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(json!({"streamId":stream_id,"binding":binding,"tool":name}))
+    }
+
+    fn mcp_input_respond(
+        &self,
+        app_id: &str,
+        input_id: &str,
+        response: serde_json::Value,
+    ) -> Result<serde_json::Value, String> {
+        let pending = self
+            .mcp_input_pending
+            .lock()
+            .map_err(|_| "MCP input broker lock poisoned".to_owned())?;
+        let input = pending
+            .get(input_id)
+            .ok_or_else(|| "MCP input request was not found or already completed".to_owned())?;
+        if input.application != app_id {
+            return Err("MCP input request belongs to another application".into());
+        }
+        let (gate, changed) = &*input.response;
+        let mut slot = gate
+            .lock()
+            .map_err(|_| "MCP input response lock poisoned".to_owned())?;
+        if slot.is_some() {
+            return Err("MCP input request was already answered".into());
+        }
+        *slot = Some(response);
+        changed.notify_all();
+        Ok(json!({"inputId":input_id,"accepted":true}))
+    }
+
     fn mcp_listen(
         &self,
         app_id: &str,
@@ -1749,6 +1960,29 @@ fn now_ms() -> Option<u64> {
         .duration_since(UNIX_EPOCH)
         .ok()
         .and_then(|duration| u64::try_from(duration.as_millis()).ok())
+}
+
+fn push_stream_with_cancel(
+    streams: &crate::runtime::stream::StreamManager,
+    stream_id: &str,
+    cancellation: &crate::runtime::stream::CancellationToken,
+    payload: Vec<u8>,
+) -> Result<(), crate::mcp::McpError> {
+    loop {
+        if cancellation.is_cancelled() {
+            return Err(crate::mcp::McpError::InputRequired(
+                "stream cancelled".into(),
+            ));
+        }
+        match streams.push(stream_id, payload.clone()) {
+            Ok(_) => return Ok(()),
+            Err(crate::runtime::stream::StreamError::Backpressured { .. })
+            | Err(crate::runtime::stream::StreamError::BufferFull { .. }) => {
+                std::thread::sleep(std::time::Duration::from_millis(5));
+            }
+            Err(error) => return Err(crate::mcp::McpError::Transport(error.to_string())),
+        }
+    }
 }
 
 #[cfg(test)]

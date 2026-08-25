@@ -208,6 +208,15 @@ export function createAlexClient(transport = browserTransport()) {
       async callTool(binding, name, input = {}, options) {
         return invoke("mcp.callTool", { binding, name, arguments: input }, options);
       },
+      async *callToolInteractive(binding, name, input = {}, options) {
+        const decoder = new TextDecoder();
+        for await (const chunk of stream("mcp.callToolInteractive", { binding, name, arguments: input }, options)) {
+          yield JSON.parse(decoder.decode(chunk));
+        }
+      },
+      respondInput(inputId, response, options) {
+        return invoke("mcp.respondInput", { inputId, response }, options);
+      },
       async audit(limit = 200, options) {
         const result = await invoke("mcp.audit", { limit }, options);
         return result.entries ?? [];

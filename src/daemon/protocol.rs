@@ -209,6 +209,20 @@ pub enum ControlCommand {
         #[serde(default)]
         arguments: Value,
     },
+    McpCallToolInteractive {
+        app_id: String,
+        binding: String,
+        stream_id: String,
+        name: String,
+        #[serde(default)]
+        arguments: Value,
+        allowed_input_methods: Vec<String>,
+    },
+    McpInputRespond {
+        app_id: String,
+        input_id: String,
+        response: Value,
+    },
     McpAudit {
         app_id: String,
         #[serde(default = "default_audit_limit")]

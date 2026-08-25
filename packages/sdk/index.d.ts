@@ -340,6 +340,9 @@ export interface McpSubscriptionFilter {
   resourcesListChanged?: boolean;
   resourceSubscriptions?: string[];
 }
+export type McpInteractiveEvent =
+  | { type: "inputRequired"; inputId: string; method: "elicitation/create" | "sampling/createMessage" | "roots/list"; params: unknown }
+  | { type: "result"; result: { content: unknown[]; isError: boolean; structuredContent?: unknown } };
 
 export interface McpTool {
   name: string;
@@ -460,6 +463,8 @@ export interface AlexClient {
       input?: Record<string, unknown>,
       options?: InvokeOptions,
     ): Promise<{ content: unknown[]; isError: boolean; structuredContent?: unknown }>;
+    callToolInteractive(binding: string, name: string, input?: Record<string, unknown>, options?: StreamOptions): AsyncIterable<McpInteractiveEvent>;
+    respondInput(inputId: string, response: unknown, options?: InvokeOptions): Promise<{ inputId: string; accepted: boolean }>;
     audit(limit?: number, options?: InvokeOptions): Promise<McpAuditEntry[]>;
     listResources(binding: string, cursor?: string, options?: InvokeOptions): Promise<{ resources: unknown[]; nextCursor?: string }>;
     readResource(binding: string, uri: string, options?: InvokeOptions): Promise<{ contents: unknown[] }>;

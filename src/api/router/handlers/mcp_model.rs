@@ -19,6 +19,13 @@ struct McpCallParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpInputResponseParams {
+    input_id: String,
+    response: Value,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct McpResourceParams {
     binding: String,
     uri: String,
@@ -261,6 +268,62 @@ impl ApiRouter {
                 binding: params.binding,
                 name: params.name,
                 arguments: params.arguments,
+            },
+        )
+    }
+    pub(crate) fn mcp_call_tool_interactive(&self, request_id: &str, params: &Value) -> ApiResult {
+        let params: McpCallParams = parse_params(params)?;
+        self.mcp_scope(Some(&params.binding), Some(&params.name))?;
+        let runtime = self
+            .runtime
+            .as_ref()
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?;
+        let app_id = runtime
+            .app_id()
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        let mut allowed_input_methods = vec!["elicitation/create".to_owned()];
+        if self.model_use_scope(None).is_ok() {
+            allowed_input_methods.push("sampling/createMessage".into());
+        }
+        if self
+            .manifest
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, Permission::FilesystemRead { .. }))
+            && self.permission_granted("filesystem.read")
+        {
+            allowed_input_methods.push("roots/list".into());
+        }
+        let stream_id = format!("mcp-mrtr:{app_id}:{}:{request_id}", params.binding);
+        self.daemon_ai(
+            "mcp-call-tool-interactive",
+            crate::daemon::ControlCommand::McpCallToolInteractive {
+                app_id,
+                binding: params.binding,
+                stream_id,
+                name: params.name,
+                arguments: params.arguments,
+                allowed_input_methods,
+            },
+        )
+    }
+
+    pub(crate) fn mcp_respond_input(&self, params: &Value) -> ApiResult {
+        let params: McpInputResponseParams = parse_params(params)?;
+        self.mcp_scope(None, None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        self.daemon_ai(
+            "mcp-respond-input",
+            crate::daemon::ControlCommand::McpInputRespond {
+                app_id,
+                input_id: params.input_id,
+                response: params.response,
             },
         )
     }
