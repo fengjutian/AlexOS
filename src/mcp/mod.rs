@@ -1,5 +1,7 @@
 //! Model Context Protocol client primitives owned by alexd.
 
+pub mod oauth;
+
 use std::{
     collections::BTreeMap,
     fs::{self, OpenOptions},
@@ -202,6 +204,7 @@ pub struct StreamableHttpTransport {
     era: ProtocolEra,
     protocol_version: &'static str,
     session_id: Mutex<Option<String>>,
+    access_tokens: Option<Arc<dyn oauth::AccessTokenProvider>>,
 }
 
 impl StreamableHttpTransport {
@@ -240,7 +243,13 @@ impl StreamableHttpTransport {
                 ProtocolEra::Legacy => LEGACY_PROTOCOL_VERSION,
             },
             session_id: Mutex::new(None),
+            access_tokens: None,
         })
+    }
+
+    pub fn with_access_tokens(mut self, provider: Arc<dyn oauth::AccessTokenProvider>) -> Self {
+        self.access_tokens = Some(provider);
+        self
     }
 
     fn post(&self, method: &str, params: &Value, value: &Value) -> Result<Option<Value>, McpError> {
@@ -271,6 +280,11 @@ impl StreamableHttpTransport {
             .as_deref()
         {
             request = request.header("mcp-session-id", session_id);
+        }
+        if let Some(provider) = &self.access_tokens
+            && let Some(token) = provider.access_token()?
+        {
+            request = request.header("authorization", format!("Bearer {token}"));
         }
         let request = request
             .body(body)
@@ -692,6 +706,8 @@ pub enum PersistedTransport {
     },
     StreamableHttp {
         endpoint: String,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_account: Option<String>,
     },
 }
 
@@ -752,6 +768,17 @@ impl ConnectionConfigStore {
         Ok(self.load_unlocked()?.connections)
     }
 
+    pub fn get(
+        &self,
+        application: &str,
+        binding: &str,
+    ) -> Result<Option<PersistedConnection>, McpError> {
+        Ok(self
+            .list()?
+            .into_iter()
+            .find(|value| value.application == application && value.binding == binding))
+    }
+
     pub fn upsert(&self, connection: PersistedConnection) -> Result<(), McpError> {
         validate_identity(&connection.application, &connection.binding)?;
         let _gate = self
@@ -802,7 +829,7 @@ impl ConnectionConfigStore {
         }
         for connection in &file.connections {
             validate_identity(&connection.application, &connection.binding)?;
-            if let PersistedTransport::StreamableHttp { endpoint } = &connection.transport {
+            if let PersistedTransport::StreamableHttp { endpoint, .. } = &connection.transport {
                 StreamableHttpTransport::new(endpoint, connection.era)?;
             }
         }
@@ -903,6 +930,12 @@ fn validate_identity(application: &str, binding: &str) -> Result<(), McpError> {
 #[cfg(test)]
 mod tests {
     use super::*;
+    struct FixedToken;
+    impl oauth::AccessTokenProvider for FixedToken {
+        fn access_token(&self) -> Result<Option<String>, McpError> {
+            Ok(Some("secret-token".into()))
+        }
+    }
     struct Mock(Mutex<Vec<(String, Value)>>);
     impl RpcTransport for Mock {
         fn request(&self, _: u64, method: &str, params: Value) -> Result<Value, McpError> {
@@ -990,6 +1023,7 @@ mod tests {
             let mut content_length = 0;
             let mut saw_protocol = false;
             let mut saw_method = false;
+            let mut saw_authorization = false;
             loop {
                 let mut line = String::new();
                 reader.read_line(&mut line).unwrap();
@@ -1006,12 +1040,16 @@ mod tests {
                 if lower.starts_with("mcp-method: tools/list") {
                     saw_method = true;
                 }
+                if lower.starts_with("authorization: bearer secret-token") {
+                    saw_authorization = true;
+                }
             }
             let mut body = vec![0; content_length];
             reader.read_exact(&mut body).unwrap();
             assert!(request_line.starts_with("POST /mcp HTTP/1.1"));
             assert!(saw_protocol);
             assert!(saw_method);
+            assert!(saw_authorization);
             assert_eq!(
                 serde_json::from_slice::<Value>(&body).unwrap()["method"],
                 "tools/list"
@@ -1028,7 +1066,9 @@ mod tests {
             .unwrap();
             stream.flush().unwrap();
         });
-        let transport = StreamableHttpTransport::new(&endpoint, ProtocolEra::Modern).unwrap();
+        let transport = StreamableHttpTransport::new(&endpoint, ProtocolEra::Modern)
+            .unwrap()
+            .with_access_tokens(Arc::new(FixedToken));
         assert_eq!(
             transport.request(7, "tools/list", json!({})).unwrap(),
             json!({"tools":[]})
@@ -1048,6 +1088,7 @@ mod tests {
             era: ProtocolEra::Modern,
             transport: PersistedTransport::StreamableHttp {
                 endpoint: "https://mcp.example.test/v1".into(),
+                token_account: None,
             },
             enabled: true,
         };

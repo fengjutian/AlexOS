@@ -145,6 +145,8 @@ pub enum ControlCommand {
         binding: String,
         endpoint: String,
         era: crate::mcp::ProtocolEra,
+        #[serde(default, skip_serializing_if = "Option::is_none")]
+        token_account: Option<String>,
     },
     McpDisconnect {
         app_id: String,
@@ -205,6 +207,19 @@ pub enum ControlCommand {
         app_id: String,
         #[serde(default = "default_audit_limit")]
         limit: usize,
+    },
+    McpOAuthBegin {
+        app_id: String,
+        binding: String,
+        client_id: String,
+        redirect_uri: String,
+        #[serde(default)]
+        scopes: Vec<String>,
+    },
+    McpOAuthComplete {
+        state: String,
+        code: String,
+        issuer: String,
     },
     ModelList,
     ModelImport {
@@ -495,6 +510,7 @@ mod tests {
                 binding: "remote-search".into(),
                 endpoint: "https://mcp.example.test/v1".into(),
                 era: crate::mcp::ProtocolEra::Modern,
+                token_account: None,
             },
             ControlCommand::McpListTools {
                 app_id: "com.example.app".into(),
@@ -506,6 +522,13 @@ mod tests {
                 binding: "files".into(),
                 name: "read_file".into(),
                 arguments: serde_json::json!({"path":"README.md"}),
+            },
+            ControlCommand::McpOAuthBegin {
+                app_id: "com.example.app".into(),
+                binding: "remote".into(),
+                client_id: "https://alex.example/client.json".into(),
+                redirect_uri: "http://127.0.0.1:34991/callback".into(),
+                scopes: vec!["tools:read".into()],
             },
             ControlCommand::ModelImport {
                 source: "model.gguf".into(),

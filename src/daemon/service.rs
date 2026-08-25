@@ -29,6 +29,15 @@ pub struct RecoveryReport {
 }
 
 #[derive(Clone)]
+struct PendingMcpOAuth {
+    application: String,
+    binding: String,
+    token_account: String,
+    request: crate::mcp::oauth::AuthorizationRequest,
+    created_at: std::time::Instant,
+}
+
+#[derive(Clone)]
 pub struct DaemonService {
     state: DaemonStateStore,
     manager: Option<Arc<dyn crate::manager::AppManager>>,
@@ -37,6 +46,8 @@ pub struct DaemonService {
     mcp: crate::mcp::ConnectionManager,
     mcp_audit: Option<crate::mcp::AuditLog>,
     mcp_configs: Option<crate::mcp::ConnectionConfigStore>,
+    mcp_tokens: Option<crate::mcp::oauth::TokenVault>,
+    mcp_oauth_pending: Arc<Mutex<BTreeMap<String, PendingMcpOAuth>>>,
     models: Option<crate::model::ModelManager>,
 }
 
@@ -52,6 +63,8 @@ impl DaemonService {
             mcp: crate::mcp::ConnectionManager::default(),
             mcp_audit: None,
             mcp_configs: None,
+            mcp_tokens: None,
+            mcp_oauth_pending: Arc::new(Mutex::new(BTreeMap::new())),
             models: None,
         }
     }
@@ -72,6 +85,9 @@ impl DaemonService {
             crate::mcp::ConnectionConfigStore::open(root.join("mcp").join("connections.json"))
                 .map_err(|error| error.to_string())?,
         );
+        self.mcp_tokens = Some(crate::mcp::oauth::TokenVault::new(Arc::new(
+            crate::platform::secret::native(),
+        )));
         self.restore_mcp_connections();
         Ok(self)
     }
@@ -178,7 +194,8 @@ impl DaemonService {
                 binding,
                 endpoint,
                 era,
-            } => self.mcp_connect_http(&app_id, &binding, &endpoint, era),
+                token_account,
+            } => self.mcp_connect_http(&app_id, &binding, &endpoint, era, token_account.as_deref()),
             ControlCommand::McpDisconnect { app_id, binding } => {
                 self.mcp_disconnect(&app_id, &binding)
             }
@@ -256,6 +273,18 @@ impl DaemonService {
                 arguments,
             } => self.mcp_call_tool(&id, &app_id, &binding, &name, arguments),
             ControlCommand::McpAudit { app_id, limit } => self.mcp_audit(&app_id, limit),
+            ControlCommand::McpOAuthBegin {
+                app_id,
+                binding,
+                client_id,
+                redirect_uri,
+                scopes,
+            } => self.mcp_oauth_begin(&app_id, &binding, &client_id, &redirect_uri, &scopes),
+            ControlCommand::McpOAuthComplete {
+                state,
+                code,
+                issuer,
+            } => self.mcp_oauth_complete(&state, &code, &issuer),
             ControlCommand::ModelList => self.model_list(),
             ControlCommand::ModelImport { source, manifest } => {
                 self.model_import(&source, manifest)
@@ -923,9 +952,19 @@ impl DaemonService {
         binding: &str,
         endpoint: &str,
         era: crate::mcp::ProtocolEra,
+        token_account: Option<&str>,
     ) -> Result<serde_json::Value, String> {
-        let transport = crate::mcp::StreamableHttpTransport::new(endpoint, era)
+        let mut transport = crate::mcp::StreamableHttpTransport::new(endpoint, era)
             .map_err(|error| error.to_string())?;
+        if let Some(account) = token_account {
+            let vault = self
+                .mcp_tokens
+                .clone()
+                .ok_or_else(|| "MCP OAuth token vault is unavailable".to_owned())?;
+            let provider = crate::mcp::oauth::VaultAccessTokenProvider::new(vault, account)
+                .map_err(|error| error.to_string())?;
+            transport = transport.with_access_tokens(Arc::new(provider));
+        }
         let client = crate::mcp::McpClient::new(Arc::new(transport), era);
         let server = if era == crate::mcp::ProtocolEra::Legacy {
             Some(
@@ -946,6 +985,7 @@ impl DaemonService {
                 era,
                 transport: crate::mcp::PersistedTransport::StreamableHttp {
                     endpoint: endpoint.into(),
+                    token_account: token_account.map(str::to_owned),
                 },
                 enabled: true,
             })
@@ -1001,8 +1041,16 @@ impl DaemonService {
                             args,
                             value.era,
                         ),
-                    crate::mcp::PersistedTransport::StreamableHttp { endpoint } => service
-                        .mcp_connect_http(&value.application, &value.binding, endpoint, value.era),
+                    crate::mcp::PersistedTransport::StreamableHttp {
+                        endpoint,
+                        token_account,
+                    } => service.mcp_connect_http(
+                        &value.application,
+                        &value.binding,
+                        endpoint,
+                        value.era,
+                        token_account.as_deref(),
+                    ),
                 };
                 if let Err(error) = result {
                     eprintln!(
@@ -1100,6 +1148,112 @@ impl DaemonService {
             .recent(app_id, limit)
             .map_err(|error| error.to_string())?;
         Ok(json!({ "entries": entries }))
+    }
+
+    fn mcp_oauth_begin(
+        &self,
+        app_id: &str,
+        binding: &str,
+        client_id: &str,
+        redirect_uri: &str,
+        scopes: &[String],
+    ) -> Result<serde_json::Value, String> {
+        let config = self
+            .mcp_configs
+            .as_ref()
+            .ok_or_else(|| "MCP connection store is unavailable".to_owned())?
+            .get(app_id, binding)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("MCP connection {app_id}/{binding} is not configured"))?;
+        let crate::mcp::PersistedTransport::StreamableHttp { endpoint, .. } = config.transport
+        else {
+            return Err("OAuth is only valid for Streamable HTTP connections".into());
+        };
+        let oauth = crate::mcp::oauth::OAuthClient::default();
+        let resource = oauth
+            .discover_resource(&endpoint)
+            .map_err(|error| error.to_string())?;
+        let issuer = resource
+            .authorization_servers
+            .first()
+            .ok_or_else(|| "OAuth resource has no authorization server".to_owned())?;
+        let metadata = oauth
+            .discover_authorization_server(issuer)
+            .map_err(|error| error.to_string())?;
+        let request = oauth
+            .begin(&endpoint, &metadata, client_id, redirect_uri, scopes)
+            .map_err(|error| error.to_string())?;
+        let token_account = format!("{app_id}:{binding}");
+        let pending = PendingMcpOAuth {
+            application: app_id.into(),
+            binding: binding.into(),
+            token_account,
+            request: request.clone(),
+            created_at: std::time::Instant::now(),
+        };
+        let mut values = self
+            .mcp_oauth_pending
+            .lock()
+            .map_err(|_| "MCP OAuth pending-state lock poisoned".to_owned())?;
+        values.retain(|_, value| value.created_at.elapsed() < std::time::Duration::from_secs(600));
+        if values.len() >= 32 {
+            return Err("MCP OAuth pending-state limit reached".into());
+        }
+        values.insert(request.state.clone(), pending);
+        Ok(json!({
+            "authorizationUrl": request.authorization_url,
+            "state": request.state,
+            "expiresInMs": 600_000,
+        }))
+    }
+
+    fn mcp_oauth_complete(
+        &self,
+        state: &str,
+        code: &str,
+        issuer: &str,
+    ) -> Result<serde_json::Value, String> {
+        let pending = self
+            .mcp_oauth_pending
+            .lock()
+            .map_err(|_| "MCP OAuth pending-state lock poisoned".to_owned())?
+            .remove(state)
+            .ok_or_else(|| "MCP OAuth state is unknown or already consumed".to_owned())?;
+        if pending.created_at.elapsed() >= std::time::Duration::from_secs(600) {
+            return Err("MCP OAuth state expired".into());
+        }
+        let tokens = crate::mcp::oauth::OAuthClient::default()
+            .exchange_code(&pending.request, code, state, issuer)
+            .map_err(|error| error.to_string())?;
+        self.mcp_tokens
+            .as_ref()
+            .ok_or_else(|| "MCP OAuth token vault is unavailable".to_owned())?
+            .save(&pending.token_account, &tokens)
+            .map_err(|error| error.to_string())?;
+        let config = self
+            .mcp_configs
+            .as_ref()
+            .ok_or_else(|| "MCP connection store is unavailable".to_owned())?
+            .get(&pending.application, &pending.binding)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| "MCP connection was removed during authorization".to_owned())?;
+        let crate::mcp::PersistedTransport::StreamableHttp { endpoint, .. } = config.transport
+        else {
+            return Err("MCP connection transport changed during authorization".into());
+        };
+        self.mcp.disconnect(&pending.application, &pending.binding);
+        self.mcp_connect_http(
+            &pending.application,
+            &pending.binding,
+            &endpoint,
+            config.era,
+            Some(&pending.token_account),
+        )?;
+        Ok(json!({
+            "application": pending.application,
+            "binding": pending.binding,
+            "authorized": true,
+        }))
     }
 
     fn model_manager(&self) -> Result<&crate::model::ModelManager, String> {
@@ -1554,6 +1708,7 @@ mod tests {
                 era: crate::mcp::ProtocolEra::Modern,
                 transport: crate::mcp::PersistedTransport::StreamableHttp {
                     endpoint: "https://mcp.example.test/v1".into(),
+                    token_account: None,
                 },
                 enabled: true,
             })
