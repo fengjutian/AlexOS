@@ -99,6 +99,11 @@ pub fn native() -> NativeDesktopPlatform {
     NativeDesktopPlatform
 }
 
+#[cfg(target_os = "windows")]
+pub fn initialize_notification_identity() -> Result<(), NativeError> {
+    implementation::initialize_notification_identity()
+}
+
 /// UI-thread entry points used by WebView hosts. Keeping these here avoids
 /// duplicating platform dialog construction in each event loop.
 pub fn pick_paths_on_ui_thread(spec: OpenDialogSpec) -> Result<Vec<PathBuf>, NativeError> {

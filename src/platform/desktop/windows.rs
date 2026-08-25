@@ -2,6 +2,81 @@ use std::path::PathBuf;
 
 use super::{AppPaths, NativeError, OpenDialogSpec, SaveDialogSpec};
 
+pub const ALEX_APP_USER_MODEL_ID: &str = "AlexOS.Runtime";
+
+fn native_failed(error: impl std::fmt::Display) -> NativeError {
+    NativeError::Failed(error.to_string())
+}
+
+pub(super) fn initialize_notification_identity() -> Result<(), NativeError> {
+    use windows::{
+        Win32::{
+            Foundation::PROPERTYKEY,
+            System::Com::{
+                CLSCTX_INPROC_SERVER, COINIT_APARTMENTTHREADED, CoCreateInstance, CoInitializeEx,
+                IPersistFile, StructuredStorage::PROPVARIANT,
+            },
+            UI::Shell::{
+                IShellLinkW, PropertiesSystem::IPropertyStore,
+                SetCurrentProcessExplicitAppUserModelID, ShellLink,
+            },
+        },
+        core::{GUID, HSTRING, Interface},
+    };
+
+    unsafe { SetCurrentProcessExplicitAppUserModelID(&HSTRING::from(ALEX_APP_USER_MODEL_ID)) }
+        .map_err(native_failed)?;
+
+    let appdata = std::env::var_os("APPDATA")
+        .map(PathBuf::from)
+        .ok_or_else(|| NativeError::Failed("APPDATA is not set".into()))?;
+    let shortcut = appdata
+        .join("Microsoft")
+        .join("Windows")
+        .join("Start Menu")
+        .join("Programs")
+        .join("Alex OS.lnk");
+    if shortcut.is_file() {
+        return Ok(());
+    }
+    if let Some(parent) = shortcut.parent() {
+        std::fs::create_dir_all(parent).map_err(native_failed)?;
+    }
+
+    let init = unsafe { CoInitializeEx(None, COINIT_APARTMENTTHREADED) };
+    if init.is_err() && init.0 != windows::Win32::Foundation::RPC_E_CHANGED_MODE.0 {
+        return Err(native_failed(windows::core::Error::from_hresult(init)));
+    }
+
+    let executable = std::env::current_exe().map_err(native_failed)?;
+    let executable = HSTRING::from(executable.as_os_str());
+    let shortcut_path = HSTRING::from(shortcut.as_os_str());
+    let link: IShellLinkW = unsafe { CoCreateInstance(&ShellLink, None, CLSCTX_INPROC_SERVER) }
+        .map_err(native_failed)?;
+    unsafe {
+        link.SetPath(&executable).map_err(native_failed)?;
+        link.SetDescription(&HSTRING::from("Alex OS Runtime"))
+            .map_err(native_failed)?;
+    }
+
+    // PKEY_AppUserModel_ID = {9F4C2855-9F79-4B39-A8D0-E1D42DE1D5F3}, 5.
+    const APP_USER_MODEL_ID_KEY: PROPERTYKEY = PROPERTYKEY {
+        fmtid: GUID::from_u128(0x9f4c2855_9f79_4b39_a8d0_e1d42de1d5f3),
+        pid: 5,
+    };
+    let store: IPropertyStore = link.cast().map_err(native_failed)?;
+    let value = PROPVARIANT::from(ALEX_APP_USER_MODEL_ID);
+    unsafe {
+        store
+            .SetValue(&APP_USER_MODEL_ID_KEY, &value)
+            .map_err(native_failed)?;
+        store.Commit().map_err(native_failed)?;
+    }
+    let persist: IPersistFile = link.cast().map_err(native_failed)?;
+    unsafe { persist.Save(&shortcut_path, true) }.map_err(native_failed)?;
+    Ok(())
+}
+
 pub(super) fn confirm_permission(app_name: &str, permission: &str) -> Result<bool, NativeError> {
     use rfd::{MessageButtons, MessageDialog, MessageDialogResult, MessageLevel};
     let result = MessageDialog::new()
@@ -101,7 +176,8 @@ pub(super) fn open_external(url: &str) -> Result<(), NativeError> {
 pub(super) fn show_notification(title: &str, body: &str) -> Result<(), NativeError> {
     use windows::{
         Data::Xml::Dom::XmlDocument,
-        UI::Notifications::{ToastNotification, ToastNotificationManager},
+        Foundation::TypedEventHandler,
+        UI::Notifications::{ToastFailedEventArgs, ToastNotification, ToastNotificationManager},
         core::HSTRING,
     };
     let escape = |value: &str| {
@@ -123,9 +199,28 @@ pub(super) fn show_notification(title: &str, body: &str) -> Result<(), NativeErr
         .map_err(|e| NativeError::Failed(e.to_string()))?;
     let toast = ToastNotification::CreateToastNotification(&document)
         .map_err(|e| NativeError::Failed(e.to_string()))?;
-    let notifier = ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from("Alex OS"))
-        .map_err(|e| NativeError::Failed(e.to_string()))?;
-    notifier
-        .Show(&toast)
-        .map_err(|e| NativeError::Failed(e.to_string()))
+    let (failed_tx, failed_rx) = std::sync::mpsc::sync_channel(1);
+    let failure_handler =
+        TypedEventHandler::<ToastNotification, ToastFailedEventArgs>::new(move |_, args| {
+            let code = args
+                .as_ref()
+                .and_then(|args| args.ErrorCode().ok())
+                .map(|code| code.0)
+                .unwrap_or_default();
+            let _ = failed_tx.try_send(code);
+            Ok(())
+        });
+    let failed_token = toast.Failed(&failure_handler).map_err(native_failed)?;
+    let notifier =
+        ToastNotificationManager::CreateToastNotifierWithId(&HSTRING::from(ALEX_APP_USER_MODEL_ID))
+            .map_err(native_failed)?;
+    notifier.Show(&toast).map_err(native_failed)?;
+    if let Ok(code) = failed_rx.recv_timeout(std::time::Duration::from_millis(500)) {
+        let _ = toast.RemoveFailed(failed_token);
+        return Err(NativeError::Failed(format!(
+            "Windows rejected the toast notification (HRESULT {code:#010x})"
+        )));
+    }
+    let _ = toast.RemoveFailed(failed_token);
+    Ok(())
 }

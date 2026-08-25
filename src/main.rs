@@ -427,6 +427,8 @@ fn days_from_civil(z: i64) -> (i32, i32, i32) {
 /// message instead. Detection is the same code path as
 /// `alex doctor`, so the surfaced message is identical.
 fn require_webview2() -> Result<(), Box<dyn std::error::Error>> {
+    #[cfg(windows)]
+    alex::platform::desktop::initialize_notification_identity()?;
     if let Err(error) = alex::webview2::detect() {
         eprintln!("error: {error}");
         return Err(error.into());
@@ -463,12 +465,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
         }
         Commands::Validate { path } => {
             let app = load_application(&path)?;
-            println!(
-                "valid: {} {} ({})",
-                app.name(),
-                app.version(),
-                app.id()
-            );
+            println!("valid: {} {} ({})", app.name(), app.version(), app.id());
         }
         Commands::Inspect { path } => {
             let app = load_app(&path)?;

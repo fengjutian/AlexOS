@@ -13,6 +13,7 @@ pub mod mcp;
 pub mod model;
 pub mod platform;
 pub mod runtime;
+pub mod runtime_provider;
 pub mod webview;
 
 pub use api::{authorization, ipc, permission, permission_shim};
