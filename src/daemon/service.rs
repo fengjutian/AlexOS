@@ -1936,7 +1936,9 @@ impl DaemonService {
             .set_read_timeout(Some(std::time::Duration::from_secs(5)))
             .map_err(|error| error.to_string())?;
         let mut buffer = [0_u8; 16 * 1024];
-        let size = stream.read(&mut buffer).map_err(|error| error.to_string())?;
+        let size = stream
+            .read(&mut buffer)
+            .map_err(|error| error.to_string())?;
         let request = std::str::from_utf8(&buffer[..size])
             .map_err(|_| "OAuth callback request was not UTF-8".to_owned())?;
         let line = request
@@ -1955,7 +1957,9 @@ impl DaemonService {
         if url.path() != "/oauth/callback" {
             return Err("OAuth callback path is invalid".into());
         }
-        let query = url.query_pairs().collect::<std::collections::BTreeMap<_, _>>();
+        let query = url
+            .query_pairs()
+            .collect::<std::collections::BTreeMap<_, _>>();
         let state = query
             .get("state")
             .ok_or_else(|| "OAuth callback state is missing".to_owned())?;

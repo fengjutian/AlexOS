@@ -239,6 +239,9 @@ export function createAlexClient(transport = browserTransport()) {
       oauthBegin(binding, clientId, redirectUri, scopes = [], options) {
         return invoke("mcp.oauthBegin", { binding, clientId, redirectUri, scopes }, options);
       },
+      oauthAuthorize(binding, clientId, scopes = [], options) {
+        return invoke("mcp.oauthLoopback", { binding, clientId, scopes }, options);
+      },
       oauthComplete(state, code, issuer, options) {
         return invoke("mcp.oauthComplete", { state, code, issuer }, options);
       },

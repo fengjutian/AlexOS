@@ -72,6 +72,7 @@ pub const ALWAYS: &[&str] = &[
     "mcp.respondInput",
     "mcp.presentInput",
     "mcp.oauthBegin",
+    "mcp.oauthLoopback",
     "mcp.oauthComplete",
     "mcp.audit",
     "mcp.listResources",
@@ -573,6 +574,13 @@ pub const METHODS: &[MethodDescriptor] = &[
     },
     MethodDescriptor {
         name: "mcp.oauthBegin",
+        domain: "mcp",
+        availability: "always",
+        permission: "mcp.use",
+        execution: "blocking",
+    },
+    MethodDescriptor {
+        name: "mcp.oauthLoopback",
         domain: "mcp",
         availability: "always",
         permission: "mcp.use",

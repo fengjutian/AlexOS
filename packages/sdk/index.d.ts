@@ -498,6 +498,7 @@ export interface AlexClient {
     presentInput(inputId: string, message: string, title?: string, options?: InvokeOptions): Promise<{ inputId: string; accepted: boolean }>;
     callToolNative(binding: string, name: string, input?: Record<string, unknown>, options?: StreamOptions): AsyncIterable<McpInteractiveEvent>;
     oauthBegin(binding: string, clientId: string, redirectUri: string, scopes?: string[], options?: InvokeOptions): Promise<McpOAuthAuthorization>;
+    oauthAuthorize(binding: string, clientId: string, scopes?: string[], options?: InvokeOptions): Promise<McpOAuthAuthorization & { redirectUri: string }>;
     oauthComplete(state: string, code: string, issuer: string, options?: InvokeOptions): Promise<{ application: string; binding: string; authorized: boolean }>;
     audit(limit?: number, options?: InvokeOptions): Promise<McpAuditEntry[]>;
     listResources(binding: string, cursor?: string, options?: InvokeOptions): Promise<{ resources: unknown[]; nextCursor?: string }>;

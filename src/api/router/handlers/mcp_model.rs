@@ -45,6 +45,15 @@ struct McpOAuthBeginParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct McpOAuthLoopbackParams {
+    binding: String,
+    client_id: String,
+    #[serde(default)]
+    scopes: Vec<String>,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct McpOAuthCompleteParams {
     state: String,
     code: String,
@@ -429,6 +438,37 @@ impl ApiRouter {
                 scopes: params.scopes,
             },
         )
+    }
+
+    pub(crate) fn mcp_oauth_loopback(&self, params: &Value) -> ApiResult {
+        let params: McpOAuthLoopbackParams = parse_params(params)?;
+        self.mcp_scope(Some(&params.binding), None)?;
+        let app_id = self
+            .runtime
+            .as_ref()
+            .and_then(|runtime| runtime.app_id())
+            .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
+            .to_owned();
+        let result = self.daemon_ai(
+            "mcp-oauth-loopback",
+            crate::daemon::ControlCommand::McpOAuthLoopback {
+                app_id,
+                binding: params.binding,
+                client_id: params.client_id,
+                scopes: params.scopes,
+            },
+        )?;
+        let authorization_url = result
+            .get("authorizationUrl")
+            .and_then(Value::as_str)
+            .ok_or((
+                "AI_RUNTIME_FAILURE",
+                "OAuth loopback response omitted authorizationUrl".into(),
+            ))?;
+        self.desktop_services
+            .open_external(authorization_url)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        Ok(result)
     }
 
     pub(crate) fn mcp_oauth_complete(&self, params: &Value) -> ApiResult {
