@@ -1079,6 +1079,14 @@ pub struct ConnectionHealthMonitor {
 
 impl ConnectionHealthMonitor {
     pub fn start(manager: ConnectionManager, interval: Duration) -> Result<Self, McpError> {
+        Self::start_with_recovery(manager, interval, Arc::new(|_| {}))
+    }
+
+    pub fn start_with_recovery(
+        manager: ConnectionManager,
+        interval: Duration,
+        recover: Arc<dyn Fn(ConnectionInfo) + Send + Sync>,
+    ) -> Result<Self, McpError> {
         if interval < Duration::from_millis(100) {
             return Err(McpError::InvalidConfig(
                 "MCP health interval must be at least 100ms".into(),
@@ -1103,6 +1111,7 @@ impl ConnectionHealthMonitor {
                             .get(&connection.application, &connection.binding)
                             .and_then(|client| client.ping());
                         let key = (connection.application.clone(), connection.binding.clone());
+                        let mut should_recover = false;
                         if let Ok(mut statuses) = inner.statuses.lock() {
                             let previous = statuses
                                 .get(&key)
@@ -1112,11 +1121,13 @@ impl ConnectionHealthMonitor {
                             } else {
                                 previous.saturating_add(1)
                             };
+                            should_recover =
+                                failures >= 3 && failures.saturating_sub(2).is_power_of_two();
                             statuses.insert(
                                 key,
                                 ConnectionHealth {
-                                    application: connection.application,
-                                    binding: connection.binding,
+                                    application: connection.application.clone(),
+                                    binding: connection.binding.clone(),
                                     state: match failures {
                                         0 => ConnectionHealthState::Healthy,
                                         1 | 2 => ConnectionHealthState::Degraded,
@@ -1137,6 +1148,9 @@ impl ConnectionHealthMonitor {
                                     last_error: result.err().map(|error| error.to_string()),
                                 },
                             );
+                        }
+                        if should_recover {
+                            recover(connection);
                         }
                     }
                     let slices = (interval.as_millis() / 100).max(1);

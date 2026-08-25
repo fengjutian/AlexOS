@@ -189,10 +189,27 @@ impl DaemonService {
         self.mcp_tokens = Some(crate::mcp::oauth::TokenVault::new(Arc::new(
             crate::platform::secret::native(),
         )));
+        let recovery_service = self.clone();
         self.mcp_health = Some(
-            crate::mcp::ConnectionHealthMonitor::start(
+            crate::mcp::ConnectionHealthMonitor::start_with_recovery(
                 self.mcp.clone(),
                 std::time::Duration::from_secs(15),
+                Arc::new(move |connection| {
+                    let service = recovery_service.clone();
+                    let identity = format!("{}/{}", connection.application, connection.binding);
+                    if let Err(error) =
+                        crate::runtime::task_executor::mcp_executor().submit(move || {
+                            if let Err(error) = service.reconnect_persisted_mcp(
+                                &connection.application,
+                                &connection.binding,
+                            ) {
+                                eprintln!("alexd: MCP recovery failed for {identity}: {error}");
+                            }
+                        })
+                    {
+                        eprintln!("alexd: MCP recovery queue rejected: {error}");
+                    }
+                }),
             )
             .map_err(|error| error.to_string())?,
         );
@@ -430,6 +447,12 @@ impl DaemonService {
                 redirect_uri,
                 scopes,
             } => self.mcp_oauth_begin(&app_id, &binding, &client_id, &redirect_uri, &scopes),
+            ControlCommand::McpOAuthLoopback {
+                app_id,
+                binding,
+                client_id,
+                scopes,
+            } => self.mcp_oauth_loopback(&app_id, &binding, &client_id, &scopes),
             ControlCommand::McpOAuthComplete {
                 app_id,
                 state,
@@ -1375,6 +1398,42 @@ impl DaemonService {
         }
     }
 
+    fn reconnect_persisted_mcp(&self, app_id: &str, binding: &str) -> Result<(), String> {
+        let config = self
+            .mcp_configs
+            .as_ref()
+            .ok_or_else(|| "MCP connection store is unavailable".to_owned())?
+            .get(app_id, binding)
+            .map_err(|error| error.to_string())?
+            .ok_or_else(|| format!("MCP connection {app_id}/{binding} is no longer configured"))?;
+        if !config.enabled {
+            return Ok(());
+        }
+        self.mcp.disconnect(app_id, binding);
+        match &config.transport {
+            crate::mcp::PersistedTransport::Stdio { command, args } => {
+                self.mcp_connect_stdio(app_id, binding, command, args, config.era)?;
+            }
+            crate::mcp::PersistedTransport::StreamableHttp {
+                endpoint,
+                token_account,
+            } => {
+                self.mcp_connect_http(
+                    app_id,
+                    binding,
+                    endpoint,
+                    config.era,
+                    token_account.as_deref(),
+                )?;
+            }
+        }
+        self.mcp_configs
+            .as_ref()
+            .expect("connection store checked above")
+            .upsert(config)
+            .map_err(|error| error.to_string())
+    }
+
     fn mcp_list_tools(
         &self,
         app_id: &str,
@@ -1596,8 +1655,7 @@ impl DaemonService {
         stream_id: &str,
         filter: crate::mcp::SubscriptionFilter,
     ) -> Result<serde_json::Value, String> {
-        let client = self
-            .mcp
+        self.mcp
             .get(app_id, binding)
             .map_err(|error| error.to_string())?;
         let cancellation = self
@@ -1605,6 +1663,9 @@ impl DaemonService {
             .open(app_id, stream_id)
             .map_err(|error| error.to_string())?;
         let streams = Arc::clone(&self.streams);
+        let connections = self.mcp.clone();
+        let application = app_id.to_owned();
+        let subscription_binding = binding.to_owned();
         let worker_stream_id = stream_id.to_owned();
         std::thread::Builder::new()
             .name("alex-mcp-subscription".into())
@@ -1630,18 +1691,35 @@ impl DaemonService {
                         }
                     }
                 };
-                let result = client.listen(filter, &mut emit);
-                if cancellation.is_cancelled() {
-                    return;
+                let mut retry = std::time::Duration::from_millis(250);
+                loop {
+                    if cancellation.is_cancelled() {
+                        return;
+                    }
+                    let result = connections
+                        .get(&application, &subscription_binding)
+                        .and_then(|client| client.listen(filter.clone(), &mut emit));
+                    if cancellation.is_cancelled() {
+                        return;
+                    }
+                    if result.is_ok() {
+                        let _ = streams.finish(
+                            &worker_stream_id,
+                            crate::runtime::stream::StreamTerminal::Completed,
+                        );
+                        return;
+                    }
+                    let deadline = std::time::Instant::now() + retry;
+                    while std::time::Instant::now() < deadline {
+                        if cancellation.is_cancelled() {
+                            return;
+                        }
+                        std::thread::sleep(std::time::Duration::from_millis(50));
+                    }
+                    retry = retry
+                        .saturating_mul(2)
+                        .min(std::time::Duration::from_secs(30));
                 }
-                let terminal = match result {
-                    Ok(()) => crate::runtime::stream::StreamTerminal::Completed,
-                    Err(error) => crate::runtime::stream::StreamTerminal::Failed {
-                        code: "MCP_SUBSCRIPTION_LOST".into(),
-                        message: error.to_string(),
-                    },
-                };
-                let _ = streams.finish(&worker_stream_id, terminal);
             })
             .map_err(|error| {
                 let _ = self.streams.finish(
@@ -1768,6 +1846,141 @@ impl DaemonService {
             "binding": pending.binding,
             "authorized": true,
         }))
+    }
+
+    fn mcp_oauth_loopback(
+        &self,
+        app_id: &str,
+        binding: &str,
+        client_id: &str,
+        scopes: &[String],
+    ) -> Result<serde_json::Value, String> {
+        let listener = std::net::TcpListener::bind((std::net::Ipv4Addr::LOCALHOST, 0))
+            .map_err(|error| format!("failed to bind OAuth loopback callback: {error}"))?;
+        listener
+            .set_nonblocking(true)
+            .map_err(|error| format!("failed to configure OAuth loopback callback: {error}"))?;
+        let port = listener
+            .local_addr()
+            .map_err(|error| error.to_string())?
+            .port();
+        let redirect_uri = format!("http://127.0.0.1:{port}/oauth/callback");
+        let result = self.mcp_oauth_begin(app_id, binding, client_id, &redirect_uri, scopes)?;
+        let state = result["state"]
+            .as_str()
+            .ok_or_else(|| "OAuth begin omitted state".to_owned())?
+            .to_owned();
+        let service = self.clone();
+        let application = app_id.to_owned();
+        let worker_state = state.clone();
+        std::thread::Builder::new()
+            .name("alex-mcp-oauth-loopback".into())
+            .spawn(move || {
+                let deadline = std::time::Instant::now() + std::time::Duration::from_secs(600);
+                loop {
+                    if std::time::Instant::now() >= deadline {
+                        return;
+                    }
+                    match listener.accept() {
+                        Ok((mut stream, address)) => {
+                            if !address.ip().is_loopback() {
+                                continue;
+                            }
+                            let response = service.handle_oauth_loopback_stream(
+                                &application,
+                                &worker_state,
+                                &mut stream,
+                            );
+                            let (status, body) = match response {
+                                Ok(()) => ("200 OK", "Authorization completed. You can close this window."),
+                                Err(error) => {
+                                    eprintln!("alexd: OAuth loopback callback failed: {error}");
+                                    ("400 Bad Request", "Authorization failed. Return to Alex OS and try again.")
+                                }
+                            };
+                            let reply = format!(
+                                "HTTP/1.1 {status}\r\nContent-Type: text/plain; charset=utf-8\r\nContent-Length: {}\r\nConnection: close\r\nCache-Control: no-store\r\n\r\n{body}",
+                                body.len()
+                            );
+                            use std::io::Write as _;
+                            let _ = stream.write_all(reply.as_bytes());
+                            return;
+                        }
+                        Err(error) if error.kind() == std::io::ErrorKind::WouldBlock => {
+                            std::thread::sleep(std::time::Duration::from_millis(25));
+                        }
+                        Err(error) => {
+                            eprintln!("alexd: OAuth loopback listener failed: {error}");
+                            return;
+                        }
+                    }
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(json!({
+            "authorizationUrl": result["authorizationUrl"],
+            "state": state,
+            "redirectUri": redirect_uri,
+            "expiresInMs": 600_000
+        }))
+    }
+
+    fn handle_oauth_loopback_stream(
+        &self,
+        app_id: &str,
+        expected_state: &str,
+        stream: &mut std::net::TcpStream,
+    ) -> Result<(), String> {
+        use std::io::Read as _;
+        stream
+            .set_read_timeout(Some(std::time::Duration::from_secs(5)))
+            .map_err(|error| error.to_string())?;
+        let mut buffer = [0_u8; 16 * 1024];
+        let size = stream.read(&mut buffer).map_err(|error| error.to_string())?;
+        let request = std::str::from_utf8(&buffer[..size])
+            .map_err(|_| "OAuth callback request was not UTF-8".to_owned())?;
+        let line = request
+            .lines()
+            .next()
+            .ok_or_else(|| "OAuth callback request was empty".to_owned())?;
+        let mut parts = line.split_whitespace();
+        if parts.next() != Some("GET") {
+            return Err("OAuth callback must use GET".into());
+        }
+        let target = parts
+            .next()
+            .ok_or_else(|| "OAuth callback target is missing".to_owned())?;
+        let url = url::Url::parse(&format!("http://127.0.0.1{target}"))
+            .map_err(|error| error.to_string())?;
+        if url.path() != "/oauth/callback" {
+            return Err("OAuth callback path is invalid".into());
+        }
+        let query = url.query_pairs().collect::<std::collections::BTreeMap<_, _>>();
+        let state = query
+            .get("state")
+            .ok_or_else(|| "OAuth callback state is missing".to_owned())?;
+        if state.as_ref() != expected_state {
+            return Err("OAuth callback state mismatch".into());
+        }
+        let code = query
+            .get("code")
+            .ok_or_else(|| "OAuth callback code is missing".to_owned())?;
+        let issuer = self
+            .mcp_oauth_pending
+            .lock()
+            .map_err(|_| "MCP OAuth pending-state lock poisoned".to_owned())?
+            .get(expected_state)
+            .ok_or_else(|| "OAuth state is no longer pending".to_owned())?
+            .request
+            .issuer
+            .clone();
+        if let Some(returned) = query.get("iss")
+            && returned.as_ref() != issuer
+        {
+            return Err("OAuth callback issuer mismatch".into());
+        }
+        self.mcp_oauth_complete(app_id, expected_state, code, &issuer)?;
+        Ok(())
     }
 
     fn model_manager(&self) -> Result<&crate::model::ModelManager, String> {

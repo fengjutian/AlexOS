@@ -239,6 +239,13 @@ pub enum ControlCommand {
         #[serde(default)]
         scopes: Vec<String>,
     },
+    McpOAuthLoopback {
+        app_id: String,
+        binding: String,
+        client_id: String,
+        #[serde(default)]
+        scopes: Vec<String>,
+    },
     McpOAuthComplete {
         app_id: String,
         state: String,
