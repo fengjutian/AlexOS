@@ -8,6 +8,8 @@ pub mod core;
 pub mod daemon;
 pub mod data;
 pub mod instance;
+pub mod mcp;
+pub mod model;
 pub mod platform;
 pub mod runtime;
 pub mod webview;
