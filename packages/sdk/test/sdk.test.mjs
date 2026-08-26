@@ -156,11 +156,13 @@ test("Agent Runtime SDK creates, streams, controls, and reads persistent runs", 
   await client.agent.deny(run.id);
   await client.agent.cancel(run.id);
   await client.agent.status(run.id);
+  await client.agent.waitChildren(run.id, 500, true);
   assert.equal((await client.agent.list())[0].id, "run-1");
   assert.equal((await client.agent.history(run.id))[0].type, "checkpoint");
   assert.equal((await client.agent.timeline(run.id))[0].sequence, 1);
   assert.equal(events.at(-1).state, "completed");
-  assert.deepEqual(calls.map(({ method }) => method), ["agent.create", "agent.start", "agent.pause", "agent.resume", "agent.approve", "agent.deny", "agent.cancel", "agent.status", "agent.list", "agent.history", "agent.timeline"]);
+  assert.deepEqual(calls.map(({ method }) => method), ["agent.create", "agent.start", "agent.pause", "agent.resume", "agent.approve", "agent.deny", "agent.cancel", "agent.status", "agent.waitChildren", "agent.list", "agent.history", "agent.timeline"]);
+  assert.deepEqual(calls.find(({ method }) => method === "agent.waitChildren").params, { parentRunId: run.id, waitMs: 500, cancelOnTimeout: true });
 });
 
 test("app instance namespace uses the product-facing API", async () => {

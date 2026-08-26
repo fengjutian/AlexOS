@@ -28,6 +28,15 @@ struct AgentScheduleParams {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentWaitChildrenParams {
+    parent_run_id: String,
+    #[serde(default)]
+    wait_ms: u32,
+    #[serde(default)]
+    cancel_on_timeout: bool,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentHistoryParams {
     run_id: String,
     #[serde(default = "default_history_limit")]
@@ -126,6 +135,19 @@ impl ApiRouter {
             crate::daemon::ControlCommand::AgentChildren {
                 app_id: self.agent_app_id()?,
                 parent_run_id: params.run_id,
+            },
+        )
+    }
+    pub(crate) fn agent_wait_children(&self, params: &Value) -> ApiResult {
+        self.agent_permission()?;
+        let params: AgentWaitChildrenParams = parse_params(params)?;
+        self.daemon_agent(
+            "agent-wait-children",
+            crate::daemon::ControlCommand::AgentWaitChildren {
+                app_id: self.agent_app_id()?,
+                parent_run_id: params.parent_run_id,
+                wait_ms: params.wait_ms.min(30_000),
+                cancel_on_timeout: params.cancel_on_timeout,
             },
         )
     }

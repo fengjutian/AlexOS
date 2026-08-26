@@ -631,6 +631,7 @@ export interface AlexClient {
     create(spec: AgentSpec, messages?: unknown[], options?: InvokeOptions): Promise<AgentRun>;
     spawnChild(parentRunId: string, spec: AgentSpec, messages?: unknown[], options?: InvokeOptions): Promise<AgentRun>;
     children(runId: string, options?: InvokeOptions): Promise<AgentRun[]>;
+    waitChildren(parentRunId: string, waitMs?: number, cancelOnTimeout?: boolean, options?: InvokeOptions): Promise<unknown>;
     schedule(runId: string, scheduledAtMs: number, options?: InvokeOptions): Promise<AgentRun>;
     scheduled(options?: InvokeOptions): Promise<AgentRun[]>;
     start(runId: string, options?: StreamOptions): AsyncIterable<AgentEvent>;

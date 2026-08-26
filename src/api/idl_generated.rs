@@ -110,6 +110,7 @@ pub const ALWAYS: &[&str] = &[
     "agent.create",
     "agent.spawnChild",
     "agent.children",
+    "agent.waitChildren",
     "agent.schedule",
     "agent.scheduled",
     "agent.start",
@@ -863,6 +864,13 @@ pub const METHODS: &[MethodDescriptor] = &[
     },
     MethodDescriptor {
         name: "agent.children",
+        domain: "agent",
+        availability: "always",
+        permission: "agent.run",
+        execution: "blocking",
+    },
+    MethodDescriptor {
+        name: "agent.waitChildren",
         domain: "agent",
         availability: "always",
         permission: "agent.run",

@@ -358,6 +358,12 @@ pub enum ControlCommand {
         app_id: String,
         parent_run_id: String,
     },
+    AgentWaitChildren {
+        app_id: String,
+        parent_run_id: String,
+        wait_ms: u32,
+        cancel_on_timeout: bool,
+    },
     AgentSchedule {
         app_id: String,
         run_id: String,

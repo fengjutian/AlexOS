@@ -395,6 +395,7 @@ mod tests {
             providers: vec![super::super::hardware::ComputeProvider::Cpu],
             max_concurrency: 1,
             memory_overhead_mb: 64,
+            memory_limit_mb: 1024,
         };
         let mut bytes = Vec::new();
         {

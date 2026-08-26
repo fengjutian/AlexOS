@@ -25,6 +25,10 @@ pub struct HardwareDevice {
     pub provider: ComputeProvider,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub memory_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub available_memory_mb: Option<u64>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub utilization_percent: Option<u32>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -33,6 +37,49 @@ pub struct HardwareProfile {
     pub logical_cpus: usize,
     pub devices: Vec<HardwareDevice>,
     pub providers: Vec<ComputeProvider>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct DevicePlacement {
+    pub device_id: String,
+    pub provider: ComputeProvider,
+    pub reserved_memory_mb: u64,
+}
+
+/// Select the least busy compatible device that has enough currently
+/// available memory, retaining a safety margin for display and OS workloads.
+pub fn select_device(
+    profile: &HardwareProfile,
+    providers: &[ComputeProvider],
+    required_memory_mb: u64,
+) -> Option<DevicePlacement> {
+    profile
+        .devices
+        .iter()
+        .filter(|device| providers.contains(&device.provider))
+        .filter_map(|device| {
+            let available = device.available_memory_mb.or(device.memory_mb)?;
+            let safety = if device.kind == "cpu" {
+                available / 4
+            } else {
+                (device.memory_mb.unwrap_or(available) / 10).max(512)
+            };
+            let schedulable = available.saturating_sub(safety);
+            (required_memory_mb <= schedulable).then_some((device, schedulable))
+        })
+        .min_by_key(|(device, schedulable)| {
+            (
+                device.utilization_percent.unwrap_or(0),
+                std::cmp::Reverse(*schedulable),
+                device.id.as_str(),
+            )
+        })
+        .map(|(device, _)| DevicePlacement {
+            device_id: device.id.clone(),
+            provider: device.provider,
+            reserved_memory_mb: required_memory_mb,
+        })
 }
 
 pub fn discover() -> HardwareProfile {
@@ -45,6 +92,8 @@ pub fn discover() -> HardwareProfile {
         kind: "cpu".into(),
         provider: ComputeProvider::Cpu,
         memory_mb: physical_memory_mb(),
+        available_memory_mb: available_physical_memory_mb(),
+        utilization_percent: None,
     }];
     discover_accelerators(&mut devices);
     devices.sort_by(|a, b| a.id.cmp(&b.id));
@@ -64,6 +113,7 @@ pub fn discover() -> HardwareProfile {
 
 #[cfg(windows)]
 fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
+    discover_nvidia_smi(devices);
     // Fixed command and arguments only. CSV output is treated as untrusted data.
     let output = Command::new("wmic")
         .args([
@@ -99,6 +149,8 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
             kind: "gpu".into(),
             provider: ComputeProvider::DirectMl,
             memory_mb,
+            available_memory_mb: None,
+            utilization_percent: None,
         });
         if lower.contains("nvidia") {
             devices.push(HardwareDevice {
@@ -107,6 +159,8 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
                 kind: "gpu".into(),
                 provider: ComputeProvider::Cuda,
                 memory_mb,
+                available_memory_mb: None,
+                utilization_percent: None,
             });
         }
     }
@@ -130,8 +184,41 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
                 kind: "npu".into(),
                 provider: ComputeProvider::DirectMl,
                 memory_mb: None,
+                available_memory_mb: None,
+                utilization_percent: None,
             });
         }
+    }
+}
+
+#[cfg(windows)]
+fn discover_nvidia_smi(devices: &mut Vec<HardwareDevice>) {
+    let Ok(output) = Command::new("nvidia-smi")
+        .args([
+            "--query-gpu=uuid,name,memory.total,memory.free,utilization.gpu",
+            "--format=csv,noheader,nounits",
+        ])
+        .output()
+    else {
+        return;
+    };
+    if !output.status.success() {
+        return;
+    }
+    for line in String::from_utf8_lossy(&output.stdout).lines() {
+        let values = line.split(',').map(str::trim).collect::<Vec<_>>();
+        if values.len() != 5 || values[0].is_empty() {
+            continue;
+        }
+        devices.push(HardwareDevice {
+            id: format!("gpu:{}:cuda", values[0]),
+            name: values[1].into(),
+            kind: "gpu".into(),
+            provider: ComputeProvider::Cuda,
+            memory_mb: values[2].parse().ok(),
+            available_memory_mb: values[3].parse().ok(),
+            utilization_percent: values[4].parse::<u32>().ok().map(|v| v.min(100)),
+        });
     }
 }
 
@@ -144,6 +231,8 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
             kind: "gpu".into(),
             provider: ComputeProvider::Cuda,
             memory_mb: None,
+            available_memory_mb: None,
+            utilization_percent: None,
         });
     }
     if Path::new("/dev/kfd").exists() {
@@ -153,6 +242,8 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
             kind: "gpu".into(),
             provider: ComputeProvider::Rocm,
             memory_mb: None,
+            available_memory_mb: None,
+            utilization_percent: None,
         });
     }
     if Path::new("/dev/accel").exists() {
@@ -162,6 +253,8 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
             kind: "npu".into(),
             provider: ComputeProvider::Cpu,
             memory_mb: None,
+            available_memory_mb: None,
+            utilization_percent: None,
         });
     }
 }
@@ -174,6 +267,8 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
         kind: "gpu-npu".into(),
         provider: ComputeProvider::CoreMl,
         memory_mb: physical_memory_mb(),
+        available_memory_mb: available_physical_memory_mb(),
+        utilization_percent: None,
     });
 }
 
@@ -191,6 +286,30 @@ fn physical_memory_mb() -> Option<u64> {
             .ok()
     })?;
     Some(kb / 1024)
+}
+
+#[cfg(target_os = "linux")]
+fn available_physical_memory_mb() -> Option<u64> {
+    let text = std::fs::read_to_string("/proc/meminfo").ok()?;
+    let kb = text.lines().find_map(|line| {
+        line.strip_prefix("MemAvailable:")?
+            .split_whitespace()
+            .next()?
+            .parse::<u64>()
+            .ok()
+    })?;
+    Some(kb / 1024)
+}
+
+#[cfg(windows)]
+fn available_physical_memory_mb() -> Option<u64> {
+    use windows::Win32::System::SystemInformation::{GlobalMemoryStatusEx, MEMORYSTATUSEX};
+    let mut status = MEMORYSTATUSEX {
+        dwLength: std::mem::size_of::<MEMORYSTATUSEX>() as u32,
+        ..Default::default()
+    };
+    unsafe { GlobalMemoryStatusEx(&mut status).ok()? };
+    Some(status.ullAvailPhys / 1024 / 1024)
 }
 
 #[cfg(windows)]
@@ -222,8 +341,21 @@ fn physical_memory_mb() -> Option<u64> {
         .map(|bytes| bytes / 1024 / 1024)
 }
 
+#[cfg(target_os = "macos")]
+fn available_physical_memory_mb() -> Option<u64> {
+    // Unified memory is shared with the CPU. A precise value requires Mach
+    // host statistics; until that adapter is present, do not report total as
+    // available and let the scheduler retain its safety reserve.
+    None
+}
+
 #[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
 fn physical_memory_mb() -> Option<u64> {
+    None
+}
+
+#[cfg(not(any(windows, target_os = "linux", target_os = "macos")))]
+fn available_physical_memory_mb() -> Option<u64> {
     None
 }
 
@@ -236,5 +368,40 @@ mod tests {
         assert!(profile.logical_cpus >= 1);
         assert!(profile.providers.contains(&ComputeProvider::Cpu));
         assert!(profile.devices.iter().any(|device| device.kind == "cpu"));
+    }
+
+    #[test]
+    fn scheduler_prefers_lower_utilization_and_enforces_headroom() {
+        let profile = HardwareProfile {
+            logical_cpus: 8,
+            providers: vec![ComputeProvider::Cuda],
+            devices: vec![
+                HardwareDevice {
+                    id: "busy".into(),
+                    name: "busy".into(),
+                    kind: "gpu".into(),
+                    provider: ComputeProvider::Cuda,
+                    memory_mb: Some(16_384),
+                    available_memory_mb: Some(12_000),
+                    utilization_percent: Some(90),
+                },
+                HardwareDevice {
+                    id: "idle".into(),
+                    name: "idle".into(),
+                    kind: "gpu".into(),
+                    provider: ComputeProvider::Cuda,
+                    memory_mb: Some(8_192),
+                    available_memory_mb: Some(7_000),
+                    utilization_percent: Some(5),
+                },
+            ],
+        };
+        assert_eq!(
+            select_device(&profile, &[ComputeProvider::Cuda], 4_000)
+                .unwrap()
+                .device_id,
+            "idle"
+        );
+        assert!(select_device(&profile, &[ComputeProvider::Cuda], 11_000).is_none());
     }
 }

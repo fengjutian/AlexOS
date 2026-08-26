@@ -26,7 +26,8 @@ Example `worker.json`:
   "args": ["--threads", "8"],
   "providers": ["cuda", "directMl", "cpu"],
   "maxConcurrency": 1,
-  "memoryOverheadMb": 256
+  "memoryOverheadMb": 256,
+  "memoryLimitMb": 8192
 }
 ```
 
@@ -53,7 +54,16 @@ Load:
 ```
 
 The request contains the complete `ModelManifest`, not only the abbreviated
-object shown above.
+object shown above. Process workers also receive a daemon-selected placement:
+
+```json
+{"placement":{"deviceId":"gpu:GPU-123:cuda","provider":"cuda","reservedMemoryMb":6144}}
+```
+
+Alex prefers the least-utilized compatible device with enough current free
+memory and retains a GPU safety margin. NVIDIA free memory and utilization are
+sampled from `nvidia-smi`; CPU scheduling uses currently available physical
+memory. The signed worker descriptor contributes its fixed runtime overhead.
 
 Generate and events:
 
@@ -104,4 +114,6 @@ deadline; expiry terminates the process. EOF, protocol corruption and timeout
 failures trigger a clean respawn from the daemon-owned descriptor, and alexd
 restores the models previously loaded by that worker before publishing the
 replacement. Runtime status exposes worker PID and health. OS-level worker
-memory enforcement remains runtime work.
+memory enforcement is mandatory on Windows: `memoryLimitMb` becomes a hard
+Job Object process-tree ceiling. The handle survives for the worker lifetime
+and is recreated after a crash; dropping it terminates the complete tree.

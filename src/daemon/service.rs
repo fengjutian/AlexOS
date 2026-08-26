@@ -608,6 +608,17 @@ impl DaemonService {
             ControlCommand::AgentChildren { app_id, parent_run_id } => {
                 self.agent_children(&app_id, &parent_run_id)
             }
+            ControlCommand::AgentWaitChildren {
+                app_id,
+                parent_run_id,
+                wait_ms,
+                cancel_on_timeout,
+            } => self.agent_wait_children(
+                &app_id,
+                &parent_run_id,
+                wait_ms,
+                cancel_on_timeout,
+            ),
             ControlCommand::AgentSchedule { app_id, run_id, scheduled_at_ms } => {
                 self.agent_schedule(&app_id, &run_id, scheduled_at_ms)
             }
@@ -2625,6 +2636,22 @@ impl DaemonService {
         self.agent_manager()?
             .children(app_id, parent_run_id)
             .map(|runs| json!({"runs": runs}))
+            .map_err(|error| error.to_string())
+    }
+
+    fn agent_wait_children(
+        &self,
+        app_id: &str,
+        parent_run_id: &str,
+        wait_ms: u32,
+        cancel_on_timeout: bool,
+    ) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .wait_children(app_id, parent_run_id, wait_ms, cancel_on_timeout)
+            .and_then(|result| {
+                serde_json::to_value(result)
+                    .map_err(|error| crate::agent::AgentError::Invalid(error.to_string()))
+            })
             .map_err(|error| error.to_string())
     }
 

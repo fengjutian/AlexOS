@@ -378,6 +378,14 @@ pub struct EmbeddingResponse {
 pub trait InferenceWorker: Send + Sync {
     fn kind(&self) -> &str;
     fn load(&self, model: &ModelManifest, blob: &Path) -> Result<(), ModelError>;
+    fn load_on(
+        &self,
+        model: &ModelManifest,
+        blob: &Path,
+        _placement: &hardware::DevicePlacement,
+    ) -> Result<(), ModelError> {
+        self.load(model, blob)
+    }
     fn generate(
         &self,
         request: &GenerateRequest,
@@ -456,6 +464,7 @@ impl ProcessInferenceWorker {
         root: &Path,
         command: &Path,
         args: &[String],
+        memory_limit_mb: u32,
     ) -> Result<Self, ModelError> {
         let kind = kind.into();
         if kind.is_empty() {
@@ -618,6 +627,17 @@ impl InferenceWorker for ProcessInferenceWorker {
             "loaded",
         )
     }
+    fn load_on(
+        &self,
+        model: &ModelManifest,
+        blob: &Path,
+        placement: &hardware::DevicePlacement,
+    ) -> Result<(), ModelError> {
+        self.operation(
+            serde_json::json!({"protocol":1,"type":"load","model":model,"path":blob,"placement":placement}),
+            "loaded",
+        )
+    }
     fn generate(
         &self,
         request: &GenerateRequest,
@@ -736,6 +756,9 @@ struct WorkerLaunchSpec {
     root: PathBuf,
     command: PathBuf,
     args: Vec<String>,
+    memory_limit_mb: u32,
+    providers: Vec<hardware::ComputeProvider>,
+    memory_overhead_mb: u64,
 }
 
 impl ModelManager {
@@ -861,6 +884,7 @@ impl ModelManager {
                 &root,
                 &descriptor.command,
                 &descriptor.args,
+                descriptor.memory_limit_mb,
             )?);
             let loaded = self
                 .loaded
@@ -872,7 +896,31 @@ impl ModelManager {
                 .collect::<Vec<_>>();
             for model_id in loaded {
                 let manifest = self.store.get(&model_id)?;
-                worker.load(&manifest, &self.store.blob_path(&model_id)?)?;
+                let required_memory_mb = manifest
+                    .size_bytes
+                    .saturating_add(1024 * 1024 - 1)
+                    / (1024 * 1024)
+                    + descriptor.memory_overhead_mb;
+                let providers = if descriptor.providers.is_empty() {
+                    &[hardware::ComputeProvider::Cpu][..]
+                } else {
+                    descriptor.providers.as_slice()
+                };
+                let placement = hardware::select_device(
+                    &hardware::discover(),
+                    providers,
+                    required_memory_mb,
+                )
+                .ok_or_else(|| {
+                    ModelError::Worker(format!(
+                        "no compatible device can restore {model_id} ({required_memory_mb} MiB)"
+                    ))
+                })?;
+                worker.load_on(
+                    &manifest,
+                    &self.store.blob_path(&model_id)?,
+                    &placement,
+                )?;
             }
             self.worker_launches
                 .lock()
@@ -883,6 +931,9 @@ impl ModelManager {
                         root: root.clone(),
                         command: descriptor.command.clone(),
                         args: descriptor.args.clone(),
+                        memory_limit_mb: descriptor.memory_limit_mb,
+                        providers: descriptor.providers.clone(),
+                        memory_overhead_mb: descriptor.memory_overhead_mb,
                     },
                 );
             self.register_worker(worker)?;
@@ -913,9 +964,31 @@ impl ModelManager {
             ));
         }
         let worker = self.worker(worker_kind)?;
-        let evicted = self
-            .resources
-            .reserve(model_id, worker_kind, model.size_bytes)?;
+        let launch = self
+            .worker_launches
+            .lock()
+            .map_err(|_| ModelError::Worker("worker launch registry lock poisoned".into()))?
+            .get(worker_kind)
+            .cloned();
+        let providers = launch
+            .as_ref()
+            .map(|launch| launch.providers.as_slice())
+            .filter(|providers| !providers.is_empty())
+            .unwrap_or(&[hardware::ComputeProvider::Cpu]);
+        let required_memory_mb = model.size_bytes.saturating_add(1024 * 1024 - 1) / (1024 * 1024)
+            + launch.as_ref().map_or(0, |value| value.memory_overhead_mb);
+        let placement =
+            hardware::select_device(&hardware::discover(), providers, required_memory_mb)
+                .ok_or_else(|| {
+                    ModelError::Worker(format!(
+                        "no compatible device has {required_memory_mb} MiB available"
+                    ))
+                })?;
+        let evicted = self.resources.reserve(
+            model_id,
+            worker_kind,
+            required_memory_mb.saturating_mul(1024 * 1024),
+        )?;
         for allocation in evicted {
             if let Ok(evicted_worker) = self.worker(&allocation.worker) {
                 let _ = evicted_worker.unload(&allocation.model_id);
@@ -924,7 +997,7 @@ impl ModelManager {
                 loaded.remove(&allocation.model_id);
             }
         }
-        if let Err(error) = worker.load(&model, &self.store.blob_path(model_id)?) {
+        if let Err(error) = worker.load_on(&model, &self.store.blob_path(model_id)?, &placement) {
             self.resources.release(model_id);
             return Err(self.recover_after_failure(worker_kind, error));
         }
@@ -1070,6 +1143,7 @@ impl ModelManager {
             &launch.root,
             &launch.command,
             &launch.args,
+            launch.memory_limit_mb,
         )?);
         let loaded = self
             .loaded
@@ -1081,7 +1155,31 @@ impl ModelManager {
             .collect::<Vec<_>>();
         for model_id in loaded {
             let manifest = self.store.get(&model_id)?;
-            replacement.load(&manifest, &self.store.blob_path(&model_id)?)?;
+            let required_memory_mb = manifest
+                .size_bytes
+                .saturating_add(1024 * 1024 - 1)
+                / (1024 * 1024)
+                + launch.memory_overhead_mb;
+            let providers = if launch.providers.is_empty() {
+                &[hardware::ComputeProvider::Cpu][..]
+            } else {
+                launch.providers.as_slice()
+            };
+            let placement = hardware::select_device(
+                &hardware::discover(),
+                providers,
+                required_memory_mb,
+            )
+            .ok_or_else(|| {
+                ModelError::Worker(format!(
+                    "no compatible device can restore {model_id} ({required_memory_mb} MiB)"
+                ))
+            })?;
+            replacement.load_on(
+                &manifest,
+                &self.store.blob_path(&model_id)?,
+                &placement,
+            )?;
         }
         self.workers
             .lock()
@@ -1125,6 +1223,11 @@ pub(super) fn validate_worker_descriptor(
     if descriptor.max_concurrency == 0 || descriptor.max_concurrency > 256 {
         return Err(ModelError::InvalidMetadata(
             "worker maxConcurrency must be between 1 and 256".into(),
+        ));
+    }
+    if !(256..=1_048_576).contains(&descriptor.memory_limit_mb) {
+        return Err(ModelError::InvalidMetadata(
+            "worker memoryLimitMb must be between 256 and 1048576".into(),
         ));
     }
     let unique = descriptor.providers.iter().collect::<BTreeSet<_>>();
@@ -1348,6 +1451,7 @@ mod tests {
                 providers: vec![hardware::ComputeProvider::Cpu],
                 max_concurrency: 1,
                 memory_overhead_mb: 0,
+                memory_limit_mb: 1024,
             },
         )
         .unwrap();
@@ -1366,6 +1470,7 @@ mod tests {
             providers: Vec::new(),
             max_concurrency: 1,
             memory_overhead_mb: 0,
+            memory_limit_mb: 1024,
         };
         let error = validate_worker_descriptor(&descriptor, Path::new("mock")).unwrap_err();
         assert!(error.to_string().contains("directory name"));

@@ -189,6 +189,28 @@ pub struct AgentRun {
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChildRunSummary {
+    pub run_id: String,
+    pub state: AgentState,
+    pub step: u32,
+    pub usage: AgentUsage,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub final_message: Option<Value>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct ChildRunAggregation {
+    pub parent_run_id: String,
+    pub complete: bool,
+    pub timed_out: bool,
+    pub children: Vec<ChildRunSummary>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
 #[serde(tag = "type", rename_all = "camelCase")]
 pub enum AgentEvent {
     State {
@@ -432,6 +454,40 @@ impl AgentManager {
             .iter()
             .map(|id| self.status(application, id))
             .collect()
+    }
+
+    /// Wait for every direct child to reach a terminal state and return a
+    /// compact deterministic result suitable for parent-agent orchestration.
+    pub fn wait_children(
+        &self,
+        application: &str,
+        parent_run_id: &str,
+        wait_ms: u32,
+        cancel_on_timeout: bool,
+    ) -> Result<ChildRunAggregation, AgentError> {
+        let deadline = std::time::Instant::now()
+            + std::time::Duration::from_millis(u64::from(wait_ms.min(30_000)));
+        loop {
+            let children = self.children(application, parent_run_id)?;
+            let complete = children.iter().all(|run| is_terminal(run.state));
+            if complete || std::time::Instant::now() >= deadline {
+                if !complete && cancel_on_timeout {
+                    for run in &children {
+                        if !is_terminal(run.state) {
+                            let _ = self.cancel(application, &run.id);
+                        }
+                    }
+                }
+                let children = self.children(application, parent_run_id)?;
+                return Ok(ChildRunAggregation {
+                    parent_run_id: parent_run_id.into(),
+                    complete: children.iter().all(|run| is_terminal(run.state)),
+                    timed_out: !complete,
+                    children: children.into_iter().map(summarize_child).collect(),
+                });
+            }
+            std::thread::sleep(std::time::Duration::from_millis(25));
+        }
     }
 
     pub fn schedule(
@@ -1043,12 +1099,25 @@ impl AgentManager {
         if current.state == AgentState::Cancelled {
             return Ok(current);
         }
+        // Snapshot before mutation. Cancellation then propagates depth-first;
+        // terminal children remain immutable while live descendants receive
+        // their in-memory cancellation token immediately.
+        for child_id in current.child_run_ids.clone() {
+            let child = self.status(application, &child_id)?;
+            if child.state != AgentState::Completed && child.state != AgentState::Cancelled {
+                self.cancel(application, &child_id)?;
+            }
+        }
+        self.signal_cancel(run_id);
+        self.set_terminalish(application, run_id, AgentState::Cancelled)
+    }
+
+    fn signal_cancel(&self, run_id: &str) {
         if let Ok(values) = self.cancellations.lock()
             && let Some(token) = values.get(run_id)
         {
             token.store(true, Ordering::Release);
         }
-        self.set_terminalish(application, run_id, AgentState::Cancelled)
     }
     pub fn resume(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
         let mut run = self.status(application, run_id)?;
@@ -1361,6 +1430,30 @@ fn value_summary(value: &Value) -> String {
         .as_str()
         .map(str::to_owned)
         .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_default())
+}
+
+fn is_terminal(state: AgentState) -> bool {
+    matches!(
+        state,
+        AgentState::Completed | AgentState::Failed | AgentState::Cancelled
+    )
+}
+
+fn summarize_child(run: AgentRun) -> ChildRunSummary {
+    let final_message = run
+        .messages
+        .iter()
+        .rev()
+        .find(|message| message.get("role").and_then(Value::as_str) == Some("assistant"))
+        .cloned();
+    ChildRunSummary {
+        run_id: run.id,
+        state: run.state,
+        step: run.step,
+        usage: run.usage,
+        final_message,
+        error: run.last_error,
+    }
 }
 
 fn resolve_tool<'a>(
@@ -2085,6 +2178,16 @@ mod tests {
             Err(AgentError::NotFound(_))
         ));
         manager.cancel("com.example.app", &parent.id).unwrap();
+        assert_eq!(
+            manager.status("com.example.app", &child.id).unwrap().state,
+            AgentState::Cancelled
+        );
+        let aggregation = manager
+            .wait_children("com.example.app", &parent.id, 0, false)
+            .unwrap();
+        assert!(aggregation.complete);
+        assert!(!aggregation.timed_out);
+        assert_eq!(aggregation.children[0].run_id, child.id);
         assert!(matches!(
             manager.spawn_child("com.example.app", &parent.id, spec, vec![]),
             Err(AgentError::Conflict(_))

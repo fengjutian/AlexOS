@@ -128,6 +128,7 @@ export type AlexCapability =
   | "agent.create"
   | "agent.spawnChild"
   | "agent.children"
+  | "agent.waitChildren"
   | "agent.schedule"
   | "agent.scheduled"
   | "agent.start"
@@ -277,6 +278,7 @@ export interface AlexMethodMap {
   "agent.create": { params: { "spec": AgentSpec; "messages"?: Array<JsonValue> }; result: JsonValue };
   "agent.spawnChild": { params: { "parentRunId": string; "spec": AgentSpec; "messages"?: Array<JsonValue> }; result: JsonValue };
   "agent.children": { params: AgentRunId; result: { "runs": Array<JsonValue> } };
+  "agent.waitChildren": { params: { "parentRunId": string; "waitMs"?: number; "cancelOnTimeout"?: boolean }; result: JsonValue };
   "agent.schedule": { params: { "runId": string; "scheduledAtMs": number }; result: JsonValue };
   "agent.scheduled": { params: Empty; result: { "runs": Array<JsonValue> } };
   "agent.start": { params: AgentRunId; result: { "runId": string; "streamId": string } };
