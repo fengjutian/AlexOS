@@ -309,6 +309,15 @@ pub enum ControlCommand {
     ModelProviders,
     ModelHardware,
     ModelRuntimeStatus,
+    ModelWorkerPackages,
+    ModelWorkerInstall {
+        request: crate::model::worker_packages::WorkerPackageRequest,
+    },
+    ModelWorkerActivate {
+        kind: String,
+        version: String,
+        triple: String,
+    },
     ModelProviderUpsert {
         config: crate::model::remote::RemoteProviderConfig,
     },

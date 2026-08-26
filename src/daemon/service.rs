@@ -187,6 +187,7 @@ pub struct DaemonService {
     mcp_approvals: crate::mcp::ApprovalStore,
     models: Option<crate::model::ModelManager>,
     model_downloads: Option<crate::model::download_tasks::ModelDownloadManager>,
+    worker_packages: Option<crate::model::worker_packages::WorkerPackageStore>,
     agents: Option<crate::agent::AgentManager>,
     agent_scheduler: Option<Arc<crate::agent::AgentScheduler>>,
 }
@@ -210,6 +211,7 @@ impl DaemonService {
             mcp_approvals: crate::mcp::ApprovalStore::default(),
             models: None,
             model_downloads: None,
+            worker_packages: None,
             agents: None,
             agent_scheduler: None,
         }
@@ -223,6 +225,9 @@ impl DaemonService {
             root.join("models").join("download-tasks.json"),
         )?;
         let models = crate::model::ModelManager::new(store);
+        let worker_packages =
+            crate::model::worker_packages::WorkerPackageStore::open(&root.join("runtimes"))
+                .map_err(|error| error.to_string())?;
         models
             .register_process_workers(&root.join("runtimes"))
             .map_err(|error| error.to_string())?;
@@ -244,6 +249,7 @@ impl DaemonService {
         self.agents = Some(agents);
         self.models = Some(models);
         self.model_downloads = Some(model_downloads);
+        self.worker_packages = Some(worker_packages);
         self.mcp_audit = Some(
             crate::mcp::AuditLog::open(root.join("audit").join("mcp.jsonl"))
                 .map_err(|error| error.to_string())?,
@@ -570,6 +576,9 @@ impl DaemonService {
             ControlCommand::ModelProviders => self.model_providers(),
             ControlCommand::ModelHardware => Ok(json!(crate::model::hardware::discover())),
             ControlCommand::ModelRuntimeStatus => self.model_runtime_status(),
+            ControlCommand::ModelWorkerPackages => self.model_worker_packages(),
+            ControlCommand::ModelWorkerInstall { request } => self.model_worker_install(request),
+            ControlCommand::ModelWorkerActivate { kind, version, triple } => self.model_worker_activate(&kind, &version, &triple),
             ControlCommand::ModelProviderUpsert { config } => self.model_provider_upsert(config),
             ControlCommand::ModelProviderRemove { provider_id } => {
                 self.model_provider_remove(&provider_id)
@@ -2241,6 +2250,47 @@ impl DaemonService {
             "resources": self.model_manager()?.resource_status(),
             "workers": self.model_manager()?.worker_health()
         }))
+    }
+    fn worker_package_store(
+        &self,
+    ) -> Result<&crate::model::worker_packages::WorkerPackageStore, String> {
+        self.worker_packages
+            .as_ref()
+            .ok_or_else(|| "worker package store is not configured".into())
+    }
+    fn model_worker_packages(&self) -> Result<serde_json::Value, String> {
+        self.worker_package_store()?
+            .list()
+            .map(|packages| json!({"packages":packages}))
+            .map_err(|error| error.to_string())
+    }
+    fn model_worker_install(
+        &self,
+        request: crate::model::worker_packages::WorkerPackageRequest,
+    ) -> Result<serde_json::Value, String> {
+        let store = self.worker_package_store()?;
+        let installed = store
+            .download_install(&request)
+            .map_err(|error| error.to_string())?;
+        self.model_manager()?
+            .register_process_workers(&store.runtimes_root())
+            .map_err(|error| error.to_string())?;
+        serde_json::to_value(installed).map_err(|error| error.to_string())
+    }
+    fn model_worker_activate(
+        &self,
+        kind: &str,
+        version: &str,
+        triple: &str,
+    ) -> Result<serde_json::Value, String> {
+        let store = self.worker_package_store()?;
+        store
+            .activate(kind, version, triple)
+            .map_err(|error| error.to_string())?;
+        self.model_manager()?
+            .register_process_workers(&store.runtimes_root())
+            .map_err(|error| error.to_string())?;
+        Ok(json!({"kind":kind,"version":version,"triple":triple,"active":true}))
     }
 
     fn model_import(

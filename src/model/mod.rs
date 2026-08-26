@@ -27,6 +27,7 @@ pub mod download_tasks;
 pub mod hardware;
 pub mod remote;
 pub mod resource;
+pub mod worker_packages;
 
 const INDEX_SCHEMA_VERSION: u32 = 1;
 const WORKER_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
@@ -815,7 +816,11 @@ impl ModelManager {
         directories.sort();
 
         let mut registered = 0;
-        for root in directories {
+        let package_store = worker_packages::WorkerPackageStore::open(runtimes_root)?;
+        for kind_root in directories {
+            let root = package_store
+                .active_root(&kind_root)?
+                .unwrap_or_else(|| kind_root.clone());
             let descriptor_path = root.join("worker.json");
             if !descriptor_path.is_file() {
                 continue;
@@ -824,7 +829,7 @@ impl ModelManager {
                 .map_err(|error| {
                     ModelError::InvalidMetadata(format!("{}: {error}", descriptor_path.display()))
                 })?;
-            validate_worker_descriptor(&descriptor, &root)?;
+            validate_worker_descriptor(&descriptor, &kind_root)?;
             let worker = ProcessInferenceWorker::spawn(
                 descriptor.kind.clone(),
                 &root,
@@ -1048,7 +1053,7 @@ impl ModelManager {
     }
 }
 
-fn validate_worker_descriptor(
+pub(super) fn validate_worker_descriptor(
     descriptor: &WorkerDescriptor,
     root: &Path,
 ) -> Result<(), ModelError> {

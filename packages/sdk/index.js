@@ -312,6 +312,16 @@ export function createAlexClient(transport = browserTransport()) {
       runtimeStatus(options) {
         return invoke("model.runtimeStatus", {}, options);
       },
+      async workerPackages(options) {
+        const result = await invoke("model.workerPackages", {}, options);
+        return result.packages ?? [];
+      },
+      workerInstall(request, options) {
+        return invoke("model.workerInstall", request, options);
+      },
+      workerActivate(kind, version, triple, options) {
+        return invoke("model.workerActivate", { kind, version, triple }, options);
+      },
       remove(modelId, options) {
         return invoke("model.remove", { modelId }, options);
       },
