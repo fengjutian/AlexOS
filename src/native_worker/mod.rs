@@ -106,6 +106,7 @@ pub struct NativeWorkerStatus {
     pub worker_id: String,
     pub pid: u32,
     pub running: bool,
+    pub isolated: bool,
     pub capabilities: Vec<String>,
     pub resources: Option<crate::manifest_v2::ServiceResources>,
 }
@@ -149,7 +150,8 @@ impl NativeWorkerManager {
             });
         }
         let descriptor = load_descriptor(&package_root.join(&spec.descriptor))?;
-        let process = NativeWorkerProcess::spawn(package_root, &descriptor)?;
+        let limits = resource_limits(spec.resources.as_ref());
+        let process = NativeWorkerProcess::spawn_confined(package_root, &descriptor, &limits)?;
         let slot = Arc::new(Mutex::new(ManagedWorker {
             descriptor,
             resources: spec.resources.clone(),
@@ -305,8 +307,22 @@ fn status_for(
         worker_id: worker.descriptor.id.clone(),
         pid: worker.process.pid(),
         running: worker.process.is_running()?,
+        isolated: worker.process.is_isolated(),
         capabilities: worker.descriptor.capabilities.clone(),
         resources: worker.resources.clone(),
+    })
+}
+
+fn resource_limits(
+    resources: Option<&crate::manifest_v2::ServiceResources>,
+) -> crate::container::ResourceLimits {
+    resources.map_or_else(crate::container::ResourceLimits::default, |resources| {
+        crate::container::ResourceLimits {
+            memory_mb: resources.memory_mb,
+            cpu_percent: resources.cpu_percent,
+            processes: resources.processes,
+            data_quota_mb: resources.data_quota_mb,
+        }
     })
 }
 
@@ -358,6 +374,7 @@ fn validate_identifier(label: &str, value: &str) -> Result<(), NativeWorkerError
 /// Dropping it kills and reaps the worker so it cannot outlive the host.
 pub struct NativeWorkerProcess {
     child: Child,
+    isolation: crate::container::isolation::IsolationHandle,
     input: BufWriter<ChildStdin>,
     responses: Receiver<Result<WorkerResponse, NativeWorkerError>>,
     output_thread: Option<JoinHandle<()>>,
@@ -369,6 +386,18 @@ impl NativeWorkerProcess {
         package_root: &Path,
         descriptor: &NativeWorkerDescriptor,
     ) -> Result<Self, NativeWorkerError> {
+        Self::spawn_confined(
+            package_root,
+            descriptor,
+            &crate::container::ResourceLimits::default(),
+        )
+    }
+
+    pub fn spawn_confined(
+        package_root: &Path,
+        descriptor: &NativeWorkerDescriptor,
+        limits: &crate::container::ResourceLimits,
+    ) -> Result<Self, NativeWorkerError> {
         let executable = descriptor.executable(package_root)?;
         let mut child = Command::new(executable)
             .args(&descriptor.args)
@@ -377,6 +406,16 @@ impl NativeWorkerProcess {
             .stdout(Stdio::piped())
             .stderr(Stdio::inherit())
             .spawn()?;
+        let isolation = match crate::container::isolation::confine_process(limits, child.id()) {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(NativeWorkerError::Protocol(format!(
+                    "cannot confine native worker: {error}"
+                )));
+            }
+        };
         let input = child
             .stdin
             .take()
@@ -391,6 +430,7 @@ impl NativeWorkerProcess {
             .spawn(move || pump_responses(output, response_tx))?;
         Ok(Self {
             child,
+            isolation,
             input: BufWriter::new(input),
             responses,
             output_thread: Some(output_thread),
@@ -400,6 +440,10 @@ impl NativeWorkerProcess {
 
     pub fn pid(&self) -> u32 {
         self.child.id()
+    }
+
+    pub fn is_isolated(&self) -> bool {
+        self.isolation.is_real_boundary()
     }
 
     pub fn is_running(&mut self) -> Result<bool, NativeWorkerError> {
@@ -622,5 +666,20 @@ mod tests {
         ));
         assert_eq!(manager.stop_application("com.example.one").unwrap(), 0);
         assert!(manager.list("com.example.two").unwrap().is_empty());
+    }
+
+    #[test]
+    fn manifest_resources_project_to_isolation_limits() {
+        let resources = crate::manifest_v2::ServiceResources {
+            memory_mb: Some(512),
+            cpu_percent: Some(25),
+            processes: Some(2),
+            data_quota_mb: Some(128),
+        };
+        let limits = resource_limits(Some(&resources));
+        assert_eq!(limits.memory_mb, Some(512));
+        assert_eq!(limits.cpu_percent, Some(25));
+        assert_eq!(limits.processes, Some(2));
+        assert_eq!(limits.data_quota_mb, Some(128));
     }
 }

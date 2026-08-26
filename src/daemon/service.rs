@@ -262,6 +262,45 @@ impl DaemonService {
             .map_err(|error| error.to_string())
     }
 
+    fn start_installed_native_worker(
+        &self,
+        application: &str,
+        binding: &str,
+    ) -> Result<serde_json::Value, String> {
+        let manager = self.manager.as_ref().ok_or("app manager is unavailable")?;
+        let details = manager
+            .get_app(application)
+            .map_err(|error| error.to_string())?;
+        let manifest = crate::core::application_manifest::load_application(&details.install_path)
+            .map_err(|error| error.to_string())?;
+        let resolved = manifest.resolve().map_err(|error| error.to_string())?;
+        if resolved.id != application {
+            return Err("installed manifest identity does not match the requested app".into());
+        }
+        let status = self.native_worker_start(&resolved, &details.install_path, binding)?;
+        serde_json::to_value(status).map_err(|error| error.to_string())
+    }
+
+    fn invoke_native_worker_command(
+        &self,
+        application: &str,
+        binding: &str,
+        method: &str,
+        arguments: serde_json::Value,
+        timeout_ms: u64,
+    ) -> Result<serde_json::Value, String> {
+        if !(1..=120_000).contains(&timeout_ms) {
+            return Err("native worker timeoutMs must be in 1..=120000".into());
+        }
+        self.native_worker_invoke(
+            application,
+            binding,
+            method,
+            arguments,
+            std::time::Duration::from_millis(timeout_ms),
+        )
+    }
+
     pub fn with_ai_root(mut self, root: &std::path::Path) -> Result<Self, String> {
         let store = crate::model::ModelStore::open(root.join("models"))
             .map_err(|error| error.to_string())?;
@@ -385,6 +424,28 @@ impl DaemonService {
                 arguments,
                 timeout_ms,
             } => self.invoke_service(&id, &app_id, &service, &method, &arguments, timeout_ms),
+            ControlCommand::NativeWorkerStart { app_id, binding } => {
+                self.start_installed_native_worker(&app_id, &binding)
+            }
+            ControlCommand::NativeWorkerInvoke {
+                app_id,
+                binding,
+                method,
+                arguments,
+                timeout_ms,
+            } => self.invoke_native_worker_command(
+                &app_id,
+                &binding,
+                &method,
+                arguments,
+                timeout_ms,
+            ),
+            ControlCommand::NativeWorkerStatus { app_id } => self
+                .native_worker_status(&app_id)
+                .and_then(|status| serde_json::to_value(status).map_err(|e| e.to_string())),
+            ControlCommand::NativeWorkerStop { app_id, binding } => self
+                .native_worker_stop(&app_id, &binding)
+                .map(|()| json!({ "stopped": true })),
             ControlCommand::OpenServiceWebSocket { app_id, service } => {
                 self.open_service_websocket(&app_id, &service)
             }
@@ -4382,5 +4443,34 @@ mod tests {
         // crashed app, and a future successful start
         // of another service should not be masked.
         assert_ne!(app.observed, ObservedState::Crashed);
+    }
+
+    #[test]
+    fn native_worker_control_surface_lists_and_bounds_timeout() {
+        let temp = tempfile::tempdir().unwrap();
+        let service = DaemonService::new(DaemonStateStore::new(temp.path().join("state.json")));
+        let status = service.handle(ControlRequest {
+            protocol: PROTOCOL_VERSION,
+            id: "native-status".into(),
+            command: ControlCommand::NativeWorkerStatus {
+                app_id: "com.example.app".into(),
+            },
+        });
+        assert!(status.ok);
+        assert_eq!(status.result, Some(json!([])));
+
+        let invoke = service.handle(ControlRequest {
+            protocol: PROTOCOL_VERSION,
+            id: "native-invoke".into(),
+            command: ControlCommand::NativeWorkerInvoke {
+                app_id: "com.example.app".into(),
+                binding: "image".into(),
+                method: "image.resize".into(),
+                arguments: json!({}),
+                timeout_ms: 0,
+            },
+        });
+        assert!(!invoke.ok);
+        assert!(invoke.error.unwrap().contains("timeoutMs"));
     }
 }

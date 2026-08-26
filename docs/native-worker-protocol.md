@@ -64,5 +64,12 @@ nativeWorkers:
 
 Daemon 已持有按 `(application, binding)` 隔离的 Worker Manager，支持启动、调用、状态、
 停止、按应用清理和 shutdown 全量清理；调用方法必须精确匹配描述符声明的 capability。
-Named Pipe 控制命令、签名安装、流式事件、主动取消，以及 Windows Job Object 的
-CPU/内存/进程树强制仍属于后续切片。模型推理 Worker 继续使用其专用协议，不由本通用协议替换。
+Named Pipe v1 已开放 `nativeWorkerStart`、`nativeWorkerInvoke`、`nativeWorkerStatus` 和
+`nativeWorkerStop`；调用超时限制为 1–120000 ms，默认 30000 ms。Daemon 从已安装应用目录
+重新加载并验证 Manifest，不接受客户端提供的可执行路径。
+
+签名安装、流式事件、主动取消，以及 Windows Job Object 的 CPU 强制仍属于后续切片。
+Worker 启动后已通过统一隔离层绑定 Windows Job Object；`memoryMb` 和 `processes` 分别成为
+进程内存与进程树硬限制，Job handle 关闭会终止完整进程树。`cpuPercent` 和 `dataQuotaMb`
+目前会进入隔离配置与状态，但尚未形成硬限制。非 Windows 平台当前只提供进程生命周期管理，
+并在状态中的 `isolated` 返回 `false`。模型推理 Worker 继续使用其专用协议，不由本通用协议替换。

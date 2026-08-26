@@ -83,6 +83,26 @@ pub enum ControlCommand {
         #[serde(default = "default_invoke_timeout_ms")]
         timeout_ms: u64,
     },
+    NativeWorkerStart {
+        app_id: String,
+        binding: String,
+    },
+    NativeWorkerInvoke {
+        app_id: String,
+        binding: String,
+        method: String,
+        #[serde(default)]
+        arguments: Value,
+        #[serde(default = "default_invoke_timeout_ms")]
+        timeout_ms: u64,
+    },
+    NativeWorkerStatus {
+        app_id: String,
+    },
+    NativeWorkerStop {
+        app_id: String,
+        binding: String,
+    },
     OpenServiceWebSocket {
         app_id: String,
         #[serde(default = "default_service_name")]
@@ -593,6 +613,64 @@ mod tests {
                 ..
             } if service == "main"
         ));
+    }
+
+    #[test]
+    fn native_worker_commands_round_trip_and_default_timeout() {
+        let request: ControlRequest = serde_json::from_value(serde_json::json!({
+            "protocol": 1,
+            "id": "native-1",
+            "command": {
+                "type": "nativeWorkerInvoke",
+                "params": {
+                    "appId": "com.example.image",
+                    "binding": "image",
+                    "method": "image.resize",
+                    "arguments": { "width": 80 }
+                }
+            }
+        }))
+        .unwrap();
+        assert!(matches!(
+            request.command,
+            ControlCommand::NativeWorkerInvoke {
+                timeout_ms: 30_000,
+                ..
+            }
+        ));
+        let encoded = serde_json::to_value(&request).unwrap();
+        assert_eq!(encoded["command"]["type"], "nativeWorkerInvoke");
+        assert_eq!(
+            serde_json::from_value::<ControlRequest>(encoded).unwrap(),
+            request
+        );
+
+        for command in [
+            ControlCommand::NativeWorkerStart {
+                app_id: "com.example.image".into(),
+                binding: "image".into(),
+            },
+            ControlCommand::NativeWorkerStatus {
+                app_id: "com.example.image".into(),
+            },
+            ControlCommand::NativeWorkerStop {
+                app_id: "com.example.image".into(),
+                binding: "image".into(),
+            },
+        ] {
+            let value = serde_json::to_value(ControlRequest {
+                protocol: 1,
+                id: "native-control".into(),
+                command: command.clone(),
+            })
+            .unwrap();
+            assert_eq!(
+                serde_json::from_value::<ControlRequest>(value)
+                    .unwrap()
+                    .command,
+                command
+            );
+        }
     }
 
     #[test]
