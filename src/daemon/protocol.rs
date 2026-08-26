@@ -107,6 +107,16 @@ pub enum ControlCommand {
         app_id: String,
         binding: String,
     },
+    NativeWorkerInvokeStream {
+        app_id: String,
+        binding: String,
+        method: String,
+        stream_id: String,
+        #[serde(default)]
+        arguments: Value,
+        #[serde(default = "default_invoke_timeout_ms")]
+        timeout_ms: u64,
+    },
     OpenServiceWebSocket {
         app_id: String,
         #[serde(default = "default_service_name")]

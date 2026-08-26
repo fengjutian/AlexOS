@@ -92,3 +92,13 @@ Windows Native Worker Manager 已切换到 Restricted Token + stdio + Job Object
 Worker 环境不再继承 Daemon 的完整环境，只保留 `SystemRoot`、`WINDIR`、`TEMP`、`TMP`，并由
 Host 注入 `ALEX_PACKAGE_ROOT`、`ALEX_APP_ID` 和 `ALEX_WORKER_BINDING`。非 Windows 路径同样
 清空继承环境并注入对应的 `ALEX_*` 身份字段。
+
+流式协议核心允许 Worker 在终止响应前发送任意数量的事件帧：
+
+```json
+{"protocol":1,"requestId":"native-1","event":{"type":"delta","text":"hello"}}
+```
+
+每个事件仍受 1 MiB 帧上限、协议版本和 `requestId` 校验。流式调用逐帧执行 Host 回调，回调
+拒绝或协议损坏会终止 Worker；普通非流式调用收到事件会报协议错误。接入 Daemon 的信用流
+`StreamManager` 与 Named Pipe 流式启动命令仍是下一切片。

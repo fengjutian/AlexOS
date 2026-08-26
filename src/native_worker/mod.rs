@@ -60,6 +60,8 @@ pub struct WorkerResponse {
     pub result: Option<Value>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub error: Option<WorkerErrorBody>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub event: Option<Value>,
 }
 
 #[derive(Debug, Serialize)]
@@ -220,6 +222,39 @@ impl NativeWorkerManager {
         worker
             .process
             .invoke_cancellable(method, params, timeout, &cancellation)
+    }
+
+    pub fn invoke_streaming<F>(
+        &self,
+        application: &str,
+        binding: &str,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        on_event: F,
+    ) -> Result<Value, NativeWorkerError>
+    where
+        F: FnMut(Value) -> Result<(), NativeWorkerError>,
+    {
+        let slot = self.slot(application, binding)?;
+        let cancellation = self.cancellation(application, binding)?;
+        cancellation.store(false, Ordering::Release);
+        let mut worker = slot.lock().map_err(|_| NativeWorkerError::LockPoisoned)?;
+        if !worker
+            .descriptor
+            .capabilities
+            .iter()
+            .any(|value| value == method)
+        {
+            return Err(NativeWorkerError::CapabilityDenied {
+                application: application.into(),
+                binding: binding.into(),
+                method: method.into(),
+            });
+        }
+        worker
+            .process
+            .invoke_streaming(method, params, timeout, &cancellation, on_event)
     }
 
     pub fn cancel(&self, application: &str, binding: &str) -> Result<(), NativeWorkerError> {
@@ -684,6 +719,38 @@ impl NativeWorkerProcess {
         timeout: Duration,
         cancellation: &AtomicBool,
     ) -> Result<Value, NativeWorkerError> {
+        self.invoke_with_events(method, params, timeout, cancellation, |_| {
+            Err(NativeWorkerError::Protocol(
+                "worker sent a stream event to a non-streaming invocation".into(),
+            ))
+        })
+    }
+
+    pub fn invoke_streaming<F>(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        cancellation: &AtomicBool,
+        on_event: F,
+    ) -> Result<Value, NativeWorkerError>
+    where
+        F: FnMut(Value) -> Result<(), NativeWorkerError>,
+    {
+        self.invoke_with_events(method, params, timeout, cancellation, on_event)
+    }
+
+    fn invoke_with_events<F>(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        cancellation: &AtomicBool,
+        mut on_event: F,
+    ) -> Result<Value, NativeWorkerError>
+    where
+        F: FnMut(Value) -> Result<(), NativeWorkerError>,
+    {
         validate_identifier("method", method)?;
         if timeout.is_zero() {
             return Err(NativeWorkerError::Protocol(
@@ -732,7 +799,24 @@ impl NativeWorkerProcess {
             }
             let wait = (active_deadline - now).min(Duration::from_millis(50));
             match self.responses.recv_timeout(wait) {
-                Ok(response) => break response?,
+                Ok(response) => {
+                    let response = response?;
+                    validate_response_identity(&response, &request_id)?;
+                    if let Some(event) = response.event {
+                        if response.result.is_some() || response.error.is_some() {
+                            self.terminate();
+                            return Err(NativeWorkerError::Protocol(
+                                "stream event cannot include result or error".into(),
+                            ));
+                        }
+                        if let Err(error) = on_event(event) {
+                            self.terminate();
+                            return Err(error);
+                        }
+                        continue;
+                    }
+                    break response;
+                }
                 Err(RecvTimeoutError::Timeout) => continue,
                 Err(RecvTimeoutError::Disconnected) => {
                     self.terminate();
@@ -813,9 +897,10 @@ fn validate_response(
     response: WorkerResponse,
     request_id: &str,
 ) -> Result<Value, NativeWorkerError> {
-    if response.protocol != NATIVE_WORKER_PROTOCOL || response.request_id != request_id {
+    validate_response_identity(&response, request_id)?;
+    if response.event.is_some() {
         return Err(NativeWorkerError::Protocol(
-            "protocol version or requestId mismatch".into(),
+            "terminal response cannot contain an event".into(),
         ));
     }
     match (response.result, response.error) {
@@ -828,6 +913,18 @@ fn validate_response(
             "response must contain exactly one of result or error".into(),
         )),
     }
+}
+
+fn validate_response_identity(
+    response: &WorkerResponse,
+    request_id: &str,
+) -> Result<(), NativeWorkerError> {
+    if response.protocol != NATIVE_WORKER_PROTOCOL || response.request_id != request_id {
+        return Err(NativeWorkerError::Protocol(
+            "protocol version or requestId mismatch".into(),
+        ));
+    }
+    Ok(())
 }
 
 pub fn write_frame<W: Write, T: Serialize>(
@@ -920,6 +1017,7 @@ mod tests {
             request_id: "native-2".into(),
             result: Some(serde_json::json!(true)),
             error: None,
+            event: None,
         };
         assert!(validate_response(mismatch, "native-1").is_err());
 
@@ -931,6 +1029,7 @@ mod tests {
                 code: "FAILED".into(),
                 message: "failed".into(),
             }),
+            event: None,
         };
         assert!(validate_response(ambiguous, "native-1").is_err());
     }
@@ -956,6 +1055,18 @@ mod tests {
                 "requestId": "native-7"
             })
         );
+    }
+
+    #[test]
+    fn stream_event_frame_round_trips_and_is_not_terminal() {
+        let frame: WorkerResponse = serde_json::from_value(serde_json::json!({
+            "protocol": 1,
+            "requestId": "native-3",
+            "event": { "type": "delta", "text": "hello" }
+        }))
+        .unwrap();
+        assert_eq!(frame.event.as_ref().unwrap()["type"], "delta");
+        assert!(validate_response(frame, "native-3").is_err());
     }
 
     #[test]

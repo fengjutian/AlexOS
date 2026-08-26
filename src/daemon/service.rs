@@ -301,6 +301,92 @@ impl DaemonService {
         )
     }
 
+    fn invoke_native_worker_stream(
+        &self,
+        application: &str,
+        binding: &str,
+        method: &str,
+        stream_id: &str,
+        arguments: serde_json::Value,
+        timeout_ms: u64,
+    ) -> Result<serde_json::Value, String> {
+        if !(1..=120_000).contains(&timeout_ms) {
+            return Err("native worker timeoutMs must be in 1..=120000".into());
+        }
+        let cancellation = self
+            .streams
+            .open(application, stream_id)
+            .map_err(|error| error.to_string())?;
+        let manager = self.native_workers.clone();
+        let streams = Arc::clone(&self.streams);
+        let application = application.to_owned();
+        let binding = binding.to_owned();
+        let method = method.to_owned();
+        let stream_id = stream_id.to_owned();
+        let response_stream_id = stream_id.clone();
+        std::thread::Builder::new()
+            .name("alex-native-worker-stream".into())
+            .spawn(move || {
+                let stream_for_event = stream_id.clone();
+                let mut emit = |event: serde_json::Value| {
+                    let payload = serde_json::to_vec(&event)
+                        .map_err(|error| crate::native_worker::NativeWorkerError::Protocol(error.to_string()))?;
+                    loop {
+                        if cancellation.is_cancelled() {
+                            let _ = manager.cancel(&application, &binding);
+                            return Err(crate::native_worker::NativeWorkerError::Cancelled);
+                        }
+                        match streams.push(&stream_for_event, payload.clone()) {
+                            Ok(_) => return Ok(()),
+                            Err(crate::runtime::stream::StreamError::Backpressured { .. })
+                            | Err(crate::runtime::stream::StreamError::BufferFull { .. }) => {
+                                std::thread::sleep(std::time::Duration::from_millis(5));
+                            }
+                            Err(error) => {
+                                return Err(crate::native_worker::NativeWorkerError::Protocol(
+                                    error.to_string(),
+                                ));
+                            }
+                        }
+                    }
+                };
+                let result = manager.invoke_streaming(
+                    &application,
+                    &binding,
+                    &method,
+                    arguments,
+                    std::time::Duration::from_millis(timeout_ms),
+                    &mut emit,
+                );
+                if cancellation.is_cancelled() {
+                    return;
+                }
+                let terminal = match result {
+                    Ok(result) => {
+                        let payload = serde_json::to_vec(&json!({"type":"result","result":result}));
+                        match payload.and_then(|payload| {
+                            streams.push(&stream_id, payload).map(|_| ()).map_err(|error| {
+                                serde_json::Error::io(std::io::Error::other(error.to_string()))
+                            })
+                        }) {
+                            Ok(()) => crate::runtime::stream::StreamTerminal::Completed,
+                            Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                                code: "NATIVE_WORKER_STREAM_RESULT_FAILED".into(),
+                                message: error.to_string(),
+                            },
+                        }
+                    }
+                    Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                        code: "NATIVE_WORKER_STREAM_FAILED".into(),
+                        message: error.to_string(),
+                    },
+                };
+                let _ = streams.finish(&stream_id, terminal);
+            })
+            .map_err(|error| error.to_string())?;
+        Ok(json!({"streamId": response_stream_id, "binding": binding, "method": method}))
+    }
+
     pub fn with_ai_root(mut self, root: &std::path::Path) -> Result<Self, String> {
         let store = crate::model::ModelStore::open(root.join("models"))
             .map_err(|error| error.to_string())?;
@@ -451,6 +537,21 @@ impl DaemonService {
                 .cancel(&app_id, &binding)
                 .map(|()| json!({ "cancelRequested": true }))
                 .map_err(|error| error.to_string()),
+            ControlCommand::NativeWorkerInvokeStream {
+                app_id,
+                binding,
+                method,
+                stream_id,
+                arguments,
+                timeout_ms,
+            } => self.invoke_native_worker_stream(
+                &app_id,
+                &binding,
+                &method,
+                &stream_id,
+                arguments,
+                timeout_ms,
+            ),
             ControlCommand::OpenServiceWebSocket { app_id, service } => {
                 self.open_service_websocket(&app_id, &service)
             }
