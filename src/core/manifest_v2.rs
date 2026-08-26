@@ -583,7 +583,9 @@ impl ApplicationManifestV2 {
 
 fn validate_resources(resources: &ServiceResources, label: &str) -> Result<(), ManifestV2Error> {
     if resources.memory_mb == Some(0) {
-        return Err(validation(format!("{label} resources.memoryMb must be > 0")));
+        return Err(validation(format!(
+            "{label} resources.memoryMb must be > 0"
+        )));
     }
     if resources.cpu_percent.is_some_and(|cpu| cpu > 100) {
         return Err(validation(format!(
@@ -591,7 +593,9 @@ fn validate_resources(resources: &ServiceResources, label: &str) -> Result<(), M
         )));
     }
     if resources.processes == Some(0) {
-        return Err(validation(format!("{label} resources.processes must be > 0")));
+        return Err(validation(format!(
+            "{label} resources.processes must be > 0"
+        )));
     }
     if resources.data_quota_mb == Some(0) {
         return Err(validation(format!(
@@ -648,8 +652,15 @@ mod tests {
         let temp = tempfile::tempdir().unwrap();
         std::fs::create_dir_all(temp.path().join("server")).unwrap();
         std::fs::create_dir_all(temp.path().join("python")).unwrap();
+        std::fs::create_dir_all(temp.path().join("native/bin")).unwrap();
         std::fs::write(temp.path().join("server/index.js"), "").unwrap();
         std::fs::write(temp.path().join("python/main.py"), "").unwrap();
+        std::fs::write(temp.path().join("native/bin/worker.bin"), "worker").unwrap();
+        std::fs::write(
+            temp.path().join("native/native-worker.json"),
+            r#"{"schemaVersion":1,"id":"com.example.image","command":"native/bin/worker.bin","capabilities":["image.resize"]}"#,
+        )
+        .unwrap();
         std::fs::write(temp.path().join("app.yaml"), yaml).unwrap();
         let manifest = load(temp.path()).unwrap();
         (temp, manifest)
@@ -680,6 +691,61 @@ services:
         );
         assert_eq!(manifest.start_order().unwrap(), ["worker", "api"]);
         assert_eq!(manifest.stop_order().unwrap(), ["api", "worker"]);
+    }
+
+    #[test]
+    fn loads_and_validates_native_worker_bindings() {
+        let (_temp, manifest) = fixture(
+            r#"
+schemaVersion: 2
+id: com.example.native
+name: native
+version: 1.0.0
+runtime: { node: "22" }
+services:
+  app: { runtime: node, command: server/index.js }
+nativeWorkers:
+  image:
+    descriptor: native/native-worker.json
+    resources: { memoryMb: 256, cpuPercent: 50, processes: 1 }
+"#,
+        );
+        let worker = manifest.native_workers.get("image").unwrap();
+        assert_eq!(worker.descriptor, "native/native-worker.json");
+        assert_eq!(worker.resources.as_ref().unwrap().memory_mb, Some(256));
+        let resolved = crate::core::application_manifest::ApplicationManifest::V2(manifest)
+            .resolve()
+            .unwrap();
+        assert!(resolved.native_workers.contains_key("image"));
+    }
+
+    #[test]
+    fn native_worker_binding_rejects_escaping_executable() {
+        let temp = tempfile::tempdir().unwrap();
+        std::fs::create_dir_all(temp.path().join("server")).unwrap();
+        std::fs::create_dir_all(temp.path().join("native")).unwrap();
+        std::fs::write(temp.path().join("server/index.js"), "").unwrap();
+        std::fs::write(
+            temp.path().join("native/native-worker.json"),
+            r#"{"schemaVersion":1,"id":"com.example.bad","command":"../outside.exe"}"#,
+        )
+        .unwrap();
+        std::fs::write(
+            temp.path().join("app.yaml"),
+            r#"
+schemaVersion: 2
+id: com.example.native
+name: native
+version: 1.0.0
+runtime: { node: "22" }
+services:
+  app: { runtime: node, command: server/index.js }
+nativeWorkers:
+  bad: { descriptor: native/native-worker.json }
+"#,
+        )
+        .unwrap();
+        assert!(load(temp.path()).is_err());
     }
 
     #[test]

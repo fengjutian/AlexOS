@@ -18,6 +18,18 @@ JSON Lines。stderr 仅用于日志。
 }
 ```
 
+应用通过 Manifest v2 绑定 Worker：
+
+```yaml
+nativeWorkers:
+  image:
+    descriptor: native/native-worker.json
+    resources:
+      memoryMb: 256
+      cpuPercent: 50
+      processes: 1
+```
+
 `command` 必须是相对路径；规范化后的可执行文件必须仍位于包目录内。Host 不执行 PATH
 查找，也不允许绝对路径。标识符只允许 ASCII 字母、数字、点、连字符和下划线。
 
@@ -50,6 +62,6 @@ JSON Lines。stderr 仅用于日志。
 
 ## 尚未接线
 
-Manifest v2 声明、Daemon 生命周期控制、签名安装、能力授权、流式事件、主动取消，以及
-Windows Job Object 的 CPU/内存/进程树强制仍属于后续切片。模型推理 Worker 继续使用其专用
-协议，不由本通用协议替换。
+Daemon 生命周期控制、签名安装、能力授权、流式事件、主动取消，以及 Windows Job Object
+的 CPU/内存/进程树强制仍属于后续切片。模型推理 Worker 继续使用其专用协议，不由本通用
+协议替换。
