@@ -1,10 +1,14 @@
 title: Alex Runtime
 description: AI Application Runtime documentation
-theme: just-the-docs
 remote_theme: just-the-docs/just-the-docs@v0.10.1
 color_scheme: light
 logo: "/assets/images/alex-runtime-wordmark.svg"
 favicon_ico: "/assets/images/favicon.svg"
+repository: fengjutian/AlexOS
+
+plugins:
+  - jekyll-remote-theme
+  - jekyll-seo-tag
 
 # We don't want Jekyll to drop files starting with `_` (we have nothing in
 # docs/ that needs excluding), but we do want to skip the moved-aside file
@@ -29,6 +33,7 @@ nav_external_links:
 heading_anchors: true
 nav_sort: case_insensitive
 nav_fold: true
+enable_copy_code_button: true
 back_to_top: true
 back_to_top_text: "返回顶部"
 footer_content: "Alex Runtime · Experimental AI Application Runtime · MIT License"
