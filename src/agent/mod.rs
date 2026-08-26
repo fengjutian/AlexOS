@@ -178,6 +178,10 @@ pub struct AgentRun {
     pub updated_at_ms: u64,
     pub started_at_ms: Option<u64>,
     pub last_error: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub parent_run_id: Option<String>,
+    #[serde(default)]
+    pub child_run_ids: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -205,6 +209,9 @@ pub enum AgentEvent {
         removed_messages: usize,
         estimated_tokens_before: u64,
         estimated_tokens_after: u64,
+    },
+    ChildSpawned {
+        child_run_id: String,
     },
     Checkpoint {
         step: u32,
@@ -354,6 +361,8 @@ impl AgentManager {
             updated_at_ms: now,
             started_at_ms: None,
             last_error: None,
+            parent_run_id: None,
+            child_run_ids: Vec::new(),
         };
         self.save(&run)?;
         self.append_event(
@@ -364,6 +373,37 @@ impl AgentManager {
             },
         )?;
         Ok(run)
+    }
+
+    pub fn spawn_child(
+        &self,
+        application: &str,
+        parent_run_id: &str,
+        spec: AgentSpec,
+        initial_messages: Vec<Value>,
+    ) -> Result<AgentRun, AgentError> {
+        let gate = self.run_gate(parent_run_id)?;
+        let _guard = gate.lock().map_err(|_| AgentError::Conflict("parent run lock poisoned".into()))?;
+        let mut parent = self.status(application, parent_run_id)?;
+        if matches!(parent.state, AgentState::Completed | AgentState::Failed | AgentState::Cancelled) {
+            return Err(AgentError::Conflict("terminal run cannot spawn a child".into()));
+        }
+        if parent.child_run_ids.len() >= 64 {
+            return Err(AgentError::Budget("maximum child runs reached".into()));
+        }
+        let mut child = self.create(application, spec, initial_messages)?;
+        child.parent_run_id = Some(parent_run_id.into());
+        self.save(&child)?;
+        parent.child_run_ids.push(child.id.clone());
+        parent.updated_at_ms = now_ms();
+        self.save(&parent)?;
+        self.append_event(&parent, &AgentEvent::ChildSpawned { child_run_id: child.id.clone() })?;
+        Ok(child)
+    }
+
+    pub fn children(&self, application: &str, parent_run_id: &str) -> Result<Vec<AgentRun>, AgentError> {
+        let parent = self.status(application, parent_run_id)?;
+        parent.child_run_ids.iter().map(|id| self.status(application, id)).collect()
     }
 
     pub fn status(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
