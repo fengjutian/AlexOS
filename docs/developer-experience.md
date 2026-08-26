@@ -607,8 +607,8 @@ HarmonyOS / Mobile / Enterprise。
 
 | 步骤 | 范围 | 工期 | 状态 |
 | --- | --- | --- | --- |
-| 1 | SDK 加层 (`alex.models / alex.agent / alex.mcp` 包装 IPC) + 1 个端到端 sample (react + Ollama + filesystem MCP 直调 IPC) | 3-4 天 | 未开始 |
-| 2 | Manifest v2 扩 `models:` `mcp_servers:` `agent:` 块,pack/install/daemon 回归 | 1 周 | 未开始 |
+| 1 | SDK 加层 (`alex.model / alex.agent / alex.mcp`) + React MCP 端到端 sample | 3-4 天 | 已完成；Ollama 场景继续扩展 |
+| 2 | Manifest v2 扩 Model / `mcpServers` / Agent 块，pack/install/daemon 回归 | 1 周 | 已完成基础切片 |
 | 3 | `alex create` 交互式问题 + 4 模板(react-ts / vue-ts / py-fastapi / rust) | 3-4 天 | 未开始 |
 | 4 | 受管 Node Runtime(§0.3 阶段一)+ `alex dev` 拉起 node 不用 PATH | 1 周+ | 未开始 |
 | 5 | `alex dashboard` + `alex test --sandbox` 落地 | 1 周 | 未开始 |

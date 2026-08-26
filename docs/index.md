@@ -14,14 +14,26 @@ Runtime 在不同平台负责安装、服务编排、进程、运行时、权限
 [`docs/status.md`](status.md),未完成项见 [`docs/roadmap.md`](roadmap.md),产品
 边界见 [`docs/product-requirements.md`](product-requirements.md)。
 
-Model / MCP / Agent 协议见 [`docs/ai-runtime-implementation.md`](ai-runtime-implementation.md);
-本地推理进程见 [`docs/model-worker-protocol.md`](model-worker-protocol.md);Plugin →
-Host 反向 IPC 见 [`docs/reverse-ipc.md`](reverse-ipc.md);Docker 式应用容器与未来
-OCI 适配见 [`docs/alex-container-design.md`](alex-container-design.md);应用管理 UI
-设计见 [`docs/app-manager-ui-design.md`](app-manager-ui-design.md)。
+## 文档导航
+
+| 目标 | 首选文档 | 说明 |
+| --- | --- | --- |
+| 了解当前能做什么 | [`status.md`](status.md) | 已实现能力与真实限制 |
+| 查看后续开发 | [`roadmap.md`](roadmap.md) | 按优先级维护的未完成项 |
+| 开发桌面应用 | [`developer-experience.md`](developer-experience.md) | Manifest、开发循环和项目结构 |
+| 查询 Desktop API | [`DESKTOP_API_REFERENCE.md`](DESKTOP_API_REFERENCE.md) | 从 schema 自动生成的方法签名 |
+| 使用 MCP | [`mcp-runtime.md`](mcp-runtime.md) | 配置、权限、工具、OAuth、审计和示例 |
+| 使用 Model Worker | [`model-worker-protocol.md`](model-worker-protocol.md) | 本地模型进程协议 |
+| 使用 Agent Runtime | [`agent-runtime.md`](agent-runtime.md) | Agent 生命周期、预算和审批 |
+| 理解系统结构 | [`architecture.md`](architecture.md) | Daemon、Shell、Runtime 与数据流 |
+| 查看产品边界 | [`product-requirements.md`](product-requirements.md) | 产品目标与非目标 |
+
+设计提案与事实状态分开维护：设计文档描述目标形态，`status.md` 描述当前代码，`roadmap.md`
+只记录尚未完成的工作。方法级 Desktop API 文档不手写，以生成 Reference 为准。
 
 ## 目录
 
+- [文档导航](#文档导航)
 - [这是什么](#这是什么)
 - [快速开始](#快速开始)
 - [自举](#自举)

@@ -19,6 +19,8 @@ nav_order: 6
 - `storage.*` 原子持久化存储，以及 `paths.*` 应用目录。
 - 打开/多选/目录/保存对话框、剪贴板、通知和外部链接。
 - RPC/service 运行时、取消、状态、重启和订阅事件。
+- MCP 连接、健康、发现、工具调用、交互输入、Resources、Prompts、Completion、OAuth、审计与
+  断线恢复监听；v1/v2 Manifest 均可声明受校验的 `mcpServers`。
 - 进程启动/终止，以及插件安装、权限、信任库、审计和容器 API。
 - 生产 shell 的多窗口：独立 IPC、窗口事件、拖放、service proxy 和关闭同步。
 - Service WebSocket 使用带随机 capability 路径的 loopback 隧道，自动注入应用身份和
@@ -28,6 +30,10 @@ nav_order: 6
 
 `alex dev` 与生产 Shell 共享同一套原生窗口、菜单、托盘和全局快捷键宿主，并在
 此基础上启用文件监听、自动刷新和 DevTools。
+
+`examples/desktop-api` 提供完整 MCP 工作台。开发模式的 Vite Server 内置 loopback-only
+MCP endpoint，可直接验证三个虚拟文件工具、Resource、Prompt、Completion、Ping 和 SSE 通知；
+它不是生产 MCP Server 打包方案。
 
 ## 实验能力
 
