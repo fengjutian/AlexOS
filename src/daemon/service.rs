@@ -324,13 +324,36 @@ impl DaemonService {
         let method = method.to_owned();
         let stream_id = stream_id.to_owned();
         let response_stream_id = stream_id.clone();
+        let response_binding = binding.clone();
+        let response_method = method.clone();
+        let done = Arc::new(std::sync::atomic::AtomicBool::new(false));
+        let monitor_done = Arc::clone(&done);
+        let monitor_cancellation = cancellation.clone();
+        let monitor_manager = manager.clone();
+        let monitor_application = application.clone();
+        let monitor_binding = binding.clone();
+        let worker_done = Arc::clone(&done);
         std::thread::Builder::new()
+            .name("alex-native-worker-stream-cancel".into())
+            .spawn(move || {
+                use std::sync::atomic::Ordering;
+                while !monitor_done.load(Ordering::Acquire) {
+                    if monitor_cancellation.is_cancelled() {
+                        let _ = monitor_manager.cancel(&monitor_application, &monitor_binding);
+                        break;
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(10));
+                }
+            })
+            .map_err(|error| error.to_string())?;
+        let worker = std::thread::Builder::new()
             .name("alex-native-worker-stream".into())
             .spawn(move || {
                 let stream_for_event = stream_id.clone();
                 let mut emit = |event: serde_json::Value| {
-                    let payload = serde_json::to_vec(&event)
-                        .map_err(|error| crate::native_worker::NativeWorkerError::Protocol(error.to_string()))?;
+                    let payload = serde_json::to_vec(&event).map_err(|error| {
+                        crate::native_worker::NativeWorkerError::Protocol(error.to_string())
+                    })?;
                     loop {
                         if cancellation.is_cancelled() {
                             let _ = manager.cancel(&application, &binding);
@@ -359,32 +382,32 @@ impl DaemonService {
                     &mut emit,
                 );
                 if cancellation.is_cancelled() {
+                    worker_done.store(true, std::sync::atomic::Ordering::Release);
                     return;
                 }
                 let terminal = match result {
-                    Ok(result) => {
-                        let payload = serde_json::to_vec(&json!({"type":"result","result":result}));
-                        match payload.and_then(|payload| {
-                            streams.push(&stream_id, payload).map(|_| ()).map_err(|error| {
-                                serde_json::Error::io(std::io::Error::other(error.to_string()))
-                            })
-                        }) {
-                            Ok(()) => crate::runtime::stream::StreamTerminal::Completed,
-                            Err(error) => crate::runtime::stream::StreamTerminal::Failed {
-                                code: "NATIVE_WORKER_STREAM_RESULT_FAILED".into(),
-                                message: error.to_string(),
-                            },
-                        }
-                    }
+                    Ok(result) => match emit(json!({"type":"result","result":result})) {
+                        Ok(()) => crate::runtime::stream::StreamTerminal::Completed,
+                        Err(error) => crate::runtime::stream::StreamTerminal::Failed {
+                            code: "NATIVE_WORKER_STREAM_RESULT_FAILED".into(),
+                            message: error.to_string(),
+                        },
+                    },
                     Err(error) => crate::runtime::stream::StreamTerminal::Failed {
                         code: "NATIVE_WORKER_STREAM_FAILED".into(),
                         message: error.to_string(),
                     },
                 };
                 let _ = streams.finish(&stream_id, terminal);
-            })
-            .map_err(|error| error.to_string())?;
-        Ok(json!({"streamId": response_stream_id, "binding": binding, "method": method}))
+                worker_done.store(true, std::sync::atomic::Ordering::Release);
+            });
+        if let Err(error) = worker {
+            done.store(true, std::sync::atomic::Ordering::Release);
+            return Err(error.to_string());
+        }
+        Ok(
+            json!({"streamId": response_stream_id, "binding": response_binding, "method": response_method}),
+        )
     }
 
     pub fn with_ai_root(mut self, root: &std::path::Path) -> Result<Self, String> {
@@ -4578,5 +4601,20 @@ mod tests {
         });
         assert!(!invoke.ok);
         assert!(invoke.error.unwrap().contains("timeoutMs"));
+
+        let stream = service.handle(ControlRequest {
+            protocol: PROTOCOL_VERSION,
+            id: "native-stream".into(),
+            command: ControlCommand::NativeWorkerInvokeStream {
+                app_id: "com.example.app".into(),
+                binding: "image".into(),
+                method: "image.resize".into(),
+                stream_id: "stream-native-1".into(),
+                arguments: json!({}),
+                timeout_ms: 0,
+            },
+        });
+        assert!(!stream.ok);
+        assert!(stream.error.unwrap().contains("timeoutMs"));
     }
 }

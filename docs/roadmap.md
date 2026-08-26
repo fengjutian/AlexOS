@@ -245,7 +245,8 @@ capabilities 明确报告，不能静默降级。
   fail-closed 路径，并清理继承环境；
 - 主动取消已通过 `nativeWorkerCancel`、进程内原子信号和 worker `cancel` 帧接线，5 秒内未收尾
   会强制回收 Worker；
-- Worker 多事件帧与 Host 流式回调核心已完成，待桥接 Daemon `StreamManager` 的信用与背压；
+- Worker 多事件帧、Host 流式回调及 `nativeWorkerInvokeStream` → Daemon `StreamManager`
+  信用/背压桥接已完成，消费者取消会转发到 Worker；
 - 稳定 ABI 或独立进程协议；
 - 内存和资源所有权；
 - 崩溃隔离；

@@ -675,6 +675,14 @@ mod tests {
                 app_id: "com.example.image".into(),
                 binding: "image".into(),
             },
+            ControlCommand::NativeWorkerInvokeStream {
+                app_id: "com.example.image".into(),
+                binding: "image".into(),
+                method: "image.resize".into(),
+                stream_id: "stream-1".into(),
+                arguments: serde_json::json!({"width": 80}),
+                timeout_ms: 30_000,
+            },
         ] {
             let value = serde_json::to_value(ControlRequest {
                 protocol: 1,

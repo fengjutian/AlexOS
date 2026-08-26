@@ -100,5 +100,10 @@ Host 注入 `ALEX_PACKAGE_ROOT`、`ALEX_APP_ID` 和 `ALEX_WORKER_BINDING`。非 
 ```
 
 每个事件仍受 1 MiB 帧上限、协议版本和 `requestId` 校验。流式调用逐帧执行 Host 回调，回调
-拒绝或协议损坏会终止 Worker；普通非流式调用收到事件会报协议错误。接入 Daemon 的信用流
-`StreamManager` 与 Named Pipe 流式启动命令仍是下一切片。
+拒绝或协议损坏会终止 Worker；普通非流式调用收到事件会报协议错误。
+
+Named Pipe 的 `nativeWorkerInvokeStream` 会创建 Daemon `StreamManager` 信用流并立即返回
+`streamId`。Worker 事件序列化为独立 chunk；信用不足或缓冲达到上限时生产线程暂停，直到消费者
+通过 `streamCredit` 授予额度并读取数据。消费者执行 `streamCancel` 时，独立监视器会调用
+Native Worker cancel，即使 Worker 当前没有产生事件也能取消。终止结果作为
+`{"type":"result","result":...}` 最后一块写入，随后流进入 completed 或 failed 状态。
