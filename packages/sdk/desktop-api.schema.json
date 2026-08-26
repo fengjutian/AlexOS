@@ -171,6 +171,9 @@
       "model.downloadResume",
       "model.hardware",
       "model.runtimeStatus",
+      "model.workerPackages",
+      "model.workerInstall",
+      "model.workerActivate",
       "model.remove",
       "model.load",
       "model.unload",
@@ -330,6 +333,14 @@
       "properties": { "kind": { "type": "string" }, "healthy": { "type": "boolean" }, "pid": { "type": ["integer", "null"] }, "error": { "type": ["string", "null"] } },
       "required": ["kind", "healthy"],
       "additionalProperties": false
+    },
+    "WorkerPackageManifest": {
+      "type": "object",
+      "properties": { "schemaVersion": { "const": 1 }, "engine": { "enum": ["llama-cpp", "onnx-runtime-genai"] }, "workerKind": { "enum": ["llama-cpp", "onnxruntime-genai"] }, "version": { "type": "string", "minLength": 1 }, "triple": { "type": "string", "minLength": 1 }, "url": { "type": "string", "pattern": "^https://" }, "sha256": { "type": "string", "pattern": "^[0-9a-fA-F]{64}$" }, "sizeBytes": { "type": "integer", "minimum": 1 }, "publisherKey": { "type": "string", "minLength": 1 } },
+      "required": ["schemaVersion", "engine", "workerKind", "version", "triple", "url", "sha256", "sizeBytes", "publisherKey"], "additionalProperties": false
+    },
+    "InstalledWorkerPackage": {
+      "type": "object", "properties": { "engine": { "enum": ["llama-cpp", "onnx-runtime-genai"] }, "workerKind": { "type": "string" }, "version": { "type": "string" }, "triple": { "type": "string" }, "root": { "type": "string" }, "active": { "type": "boolean" } }, "required": ["engine", "workerKind", "version", "triple", "root", "active"], "additionalProperties": false
     },
     "AgentSpec": {
       "type": "object",
@@ -2676,6 +2687,18 @@
     "model.runtimeStatus": {
       "params": { "$ref": "#/$defs/Empty" },
       "result": { "type": "object", "properties": { "hardware": { "$ref": "#/$defs/HardwareProfile" }, "resources": { "$ref": "#/$defs/ModelResourceStatus" }, "workers": { "type": "array", "items": { "$ref": "#/$defs/ModelWorkerHealth" } } }, "required": ["hardware", "resources", "workers"], "additionalProperties": false }
+    },
+    "model.workerPackages": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": { "type": "object", "properties": { "packages": { "type": "array", "items": { "$ref": "#/$defs/InstalledWorkerPackage" } } }, "required": ["packages"], "additionalProperties": false }
+    },
+    "model.workerInstall": {
+      "params": { "type": "object", "properties": { "manifest": { "$ref": "#/$defs/WorkerPackageManifest" }, "signature": { "type": "string", "minLength": 1 } }, "required": ["manifest", "signature"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/InstalledWorkerPackage" }
+    },
+    "model.workerActivate": {
+      "params": { "type": "object", "properties": { "kind": { "type": "string", "minLength": 1 }, "version": { "type": "string", "minLength": 1 }, "triple": { "type": "string", "minLength": 1 } }, "required": ["kind", "version", "triple"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "kind": { "type": "string" }, "version": { "type": "string" }, "triple": { "type": "string" }, "active": { "type": "boolean" } }, "required": ["kind", "version", "triple", "active"], "additionalProperties": false }
     },
     "model.remove": {
       "params": { "$ref": "#/$defs/ModelId" },

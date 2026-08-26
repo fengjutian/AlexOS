@@ -9,6 +9,8 @@ export type ModelDownloadTask = { "id": string; "request": ModelDownloadRequest;
 export type HardwareProfile = { "logicalCpus": number; "providers": Array<"cpu" | "cuda" | "directMl" | "coreMl" | "rocm">; "devices": Array<{ "id": string; "name": string; "kind": string; "provider": "cpu" | "cuda" | "directMl" | "coreMl" | "rocm"; "memoryMb"?: number | null }> };
 export type ModelResourceStatus = { "budget": { "memoryBytes": number; "maxLoadedModels": number; "maxConcurrentRequestsPerModel": number }; "allocatedBytes": number; "models": Array<{ "modelId": string; "worker": string; "memoryBytes": number; "activeRequests": number; "lastUsedMs": number }> };
 export type ModelWorkerHealth = { "kind": string; "healthy": boolean; "pid"?: number | null; "error"?: string | null };
+export type WorkerPackageManifest = { "schemaVersion": 1; "engine": "llama-cpp" | "onnx-runtime-genai"; "workerKind": "llama-cpp" | "onnxruntime-genai"; "version": string; "triple": string; "url": string; "sha256": string; "sizeBytes": number; "publisherKey": string };
+export type InstalledWorkerPackage = { "engine": "llama-cpp" | "onnx-runtime-genai"; "workerKind": string; "version": string; "triple": string; "root": string; "active": boolean };
 export type AgentSpec = { "model": string; "systemPrompt"?: string; "tools"?: Array<{ "binding": string; "name": string; "idempotent"?: boolean; "requireApproval"?: boolean; "dependsOn"?: Array<string> }>; "budget"?: { "maxSteps"?: number; "maxTokens"?: number; "maxToolCalls"?: number; "maxWallTimeMs"?: number; "maxContextTokens"?: number; "keepRecentMessages"?: number; "maxCostMicros"?: number; "inputCostMicrosPerMillion"?: number; "outputCostMicrosPerMillion"?: number; "toolCostMicros"?: { [key: string]: number } } };
 export type UpdateTask = { "id": string; "appId": string; "manifestUrl": string; "channel": "stable" | "beta" | "dev"; "state": string; "stage": string; "progress": number; "error": string | null };
 export type JsonValue = unknown;
@@ -107,6 +109,9 @@ export type AlexCapability =
   | "model.downloadResume"
   | "model.hardware"
   | "model.runtimeStatus"
+  | "model.workerPackages"
+  | "model.workerInstall"
+  | "model.workerActivate"
   | "model.remove"
   | "model.load"
   | "model.unload"
@@ -253,6 +258,9 @@ export interface AlexMethodMap {
   "model.downloadResume": { params: { "taskId": string }; result: ModelDownloadTask };
   "model.hardware": { params: Empty; result: HardwareProfile };
   "model.runtimeStatus": { params: Empty; result: { "hardware": HardwareProfile; "resources": ModelResourceStatus; "workers": Array<ModelWorkerHealth> } };
+  "model.workerPackages": { params: Empty; result: { "packages": Array<InstalledWorkerPackage> } };
+  "model.workerInstall": { params: { "manifest": WorkerPackageManifest; "signature": string }; result: InstalledWorkerPackage };
+  "model.workerActivate": { params: { "kind": string; "version": string; "triple": string }; result: { "kind": string; "version": string; "triple": string; "active": boolean } };
   "model.remove": { params: ModelId; result: { "modelId": string; "removed": boolean } };
   "model.load": { params: { "modelId": string; "worker": string }; result: { "modelId": string; "worker": string; "loaded": boolean } };
   "model.unload": { params: ModelId; result: { "modelId": string; "unloaded": boolean } };

@@ -193,6 +193,14 @@ impl WorkerPackageStore {
         )
     }
 
+    pub fn deactivate(&self, kind: &str) -> Result<(), ModelError> {
+        let path = self.root.join(kind).join("active.json");
+        if path.exists() {
+            fs::remove_file(path)?;
+        }
+        Ok(())
+    }
+
     pub fn active_root(&self, kind_root: &Path) -> Result<Option<PathBuf>, ModelError> {
         let path = kind_root.join("active.json");
         if !path.is_file() {
@@ -437,6 +445,9 @@ mod tests {
         let store = WorkerPackageStore::open(&temp.path().join("runtimes")).unwrap();
         let installed = store.install_archive(&request, &archive).unwrap();
         assert!(installed.active);
+        let listed = store.list().unwrap();
+        assert_eq!(listed.len(), 1);
+        assert!(listed[0].active);
         assert_eq!(
             store
                 .active_root(&temp.path().join("runtimes/model-workers/llama-cpp"))

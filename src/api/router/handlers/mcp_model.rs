@@ -117,7 +117,11 @@ struct ModelLoadParams {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
-struct ModelWorkerActivateParams { kind: String, version: String, triple: String }
+struct ModelWorkerActivateParams {
+    kind: String,
+    version: String,
+    triple: String,
+}
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -923,17 +927,30 @@ impl ApiRouter {
     }
     pub(crate) fn model_worker_packages(&self) -> ApiResult {
         self.require_model_manage()?;
-        self.daemon_ai("model-worker-packages", crate::daemon::ControlCommand::ModelWorkerPackages)
+        self.daemon_ai(
+            "model-worker-packages",
+            crate::daemon::ControlCommand::ModelWorkerPackages,
+        )
     }
     pub(crate) fn model_worker_install(&self, params: &Value) -> ApiResult {
         self.require_model_manage()?;
         let request: crate::model::worker_packages::WorkerPackageRequest = parse_params(params)?;
-        self.daemon_ai("model-worker-install", crate::daemon::ControlCommand::ModelWorkerInstall { request })
+        self.daemon_ai(
+            "model-worker-install",
+            crate::daemon::ControlCommand::ModelWorkerInstall { request },
+        )
     }
     pub(crate) fn model_worker_activate(&self, params: &Value) -> ApiResult {
         self.require_model_manage()?;
         let params: ModelWorkerActivateParams = parse_params(params)?;
-        self.daemon_ai("model-worker-activate", crate::daemon::ControlCommand::ModelWorkerActivate { kind: params.kind, version: params.version, triple: params.triple })
+        self.daemon_ai(
+            "model-worker-activate",
+            crate::daemon::ControlCommand::ModelWorkerActivate {
+                kind: params.kind,
+                version: params.version,
+                triple: params.triple,
+            },
+        )
     }
 
     pub(crate) fn model_provider_upsert(&self, params: &Value) -> ApiResult {

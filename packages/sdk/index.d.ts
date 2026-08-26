@@ -443,6 +443,10 @@ export interface ModelResourceStatus {
   models: Array<{ modelId: string; worker: string; memoryBytes: number; activeRequests: number; lastUsedMs: number }>;
 }
 export interface ModelWorkerHealth { kind: string; healthy: boolean; pid?: number | null; error?: string | null; }
+export type WorkerEngine = "llama-cpp" | "onnx-runtime-genai";
+export interface WorkerPackageManifest { schemaVersion: 1; engine: WorkerEngine; workerKind: "llama-cpp" | "onnxruntime-genai"; version: string; triple: string; url: string; sha256: string; sizeBytes: number; publisherKey: string; }
+export interface WorkerPackageRequest { manifest: WorkerPackageManifest; signature: string; }
+export interface InstalledWorkerPackage { engine: WorkerEngine; workerKind: string; version: string; triple: string; root: string; active: boolean; }
 
 export type ModelGenerateEvent =
   | { type: "delta"; text: string }
@@ -603,6 +607,9 @@ export interface AlexClient {
     downloadResume(taskId: string, options?: InvokeOptions): Promise<ModelDownloadTask>;
     hardware(options?: InvokeOptions): Promise<HardwareProfile>;
     runtimeStatus(options?: InvokeOptions): Promise<{ hardware: HardwareProfile; resources: ModelResourceStatus; workers: ModelWorkerHealth[] }>;
+    workerPackages(options?: InvokeOptions): Promise<InstalledWorkerPackage[]>;
+    workerInstall(request: WorkerPackageRequest, options?: InvokeOptions): Promise<InstalledWorkerPackage>;
+    workerActivate(kind: string, version: string, triple: string, options?: InvokeOptions): Promise<{ kind: string; version: string; triple: string; active: boolean }>;
     remove(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; removed: boolean }>;
     load(modelId: string, worker: string, options?: InvokeOptions): Promise<{ modelId: string; worker: string; loaded: boolean }>;
     unload(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; unloaded: boolean }>;

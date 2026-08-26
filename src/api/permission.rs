@@ -168,7 +168,9 @@ impl Permission {
             | "model.secretSet"
             | "model.secretDelete"
             | "model.secretExists" => Some("model.manage"),
-            "model.workerPackages" | "model.workerInstall" | "model.workerActivate" => Some("model.manage"),
+            "model.workerPackages" | "model.workerInstall" | "model.workerActivate" => {
+                Some("model.manage")
+            }
             "agent.create" | "agent.start" | "agent.pause" | "agent.resume" | "agent.cancel"
             | "agent.status" | "agent.list" | "agent.approve" | "agent.deny" | "agent.history"
             | "agent.timeline" | "agent.spawnChild" | "agent.children" | "agent.schedule"

@@ -1768,6 +1768,10 @@ impl ManagerRouter {
             "model-runtime-status",
             crate::daemon::ControlCommand::ModelRuntimeStatus,
         )?;
+        let worker_packages = self.daemon_command(
+            "model-worker-packages",
+            crate::daemon::ControlCommand::ModelWorkerPackages,
+        )?;
         let mut applications = Vec::new();
         for app in self
             .manager
@@ -1802,6 +1806,7 @@ impl ManagerRouter {
             "providerHealth": provider_health.get("providers").cloned().unwrap_or_default(),
             "modelDownloads": downloads.get("tasks").cloned().unwrap_or_default(),
             "modelRuntime": model_runtime,
+            "workerPackages": worker_packages.get("packages").cloned().unwrap_or_default(),
             "applications": applications
         }))
     }
@@ -1834,6 +1839,11 @@ impl ManagerRouter {
             },
             "model.downloadResume" => crate::daemon::ControlCommand::ModelDownloadResume {
                 task_id: required("taskId")?,
+            },
+            "model.workerActivate" => crate::daemon::ControlCommand::ModelWorkerActivate {
+                kind: required("kind")?,
+                version: required("version")?,
+                triple: required("triple")?,
             },
             "mcp.disconnect" => crate::daemon::ControlCommand::McpDisconnect {
                 app_id: required("appId")?,

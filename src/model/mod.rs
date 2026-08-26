@@ -416,6 +416,7 @@ pub struct ProcessInferenceWorker {
     writer: Mutex<ChildStdin>,
     reader: Mutex<BufReader<ChildStdout>>,
     operation: Mutex<()>,
+    _isolation: crate::container::isolation::IsolationHandle,
 }
 
 /// Daemon-owned description of a local inference runtime. Descriptors live at
@@ -435,10 +436,18 @@ pub struct WorkerDescriptor {
     pub max_concurrency: u32,
     #[serde(default)]
     pub memory_overhead_mb: u64,
+    /// Hard process-tree memory ceiling. On Windows this is enforced by a
+    /// Job Object for the complete lifetime of the worker.
+    #[serde(default = "default_worker_memory_limit_mb")]
+    pub memory_limit_mb: u32,
 }
 
 fn default_worker_concurrency() -> u32 {
     1
+}
+
+fn default_worker_memory_limit_mb() -> u32 {
+    8192
 }
 
 impl ProcessInferenceWorker {
@@ -471,6 +480,22 @@ impl ProcessInferenceWorker {
             .stdout(Stdio::piped())
             .stderr(Stdio::piped())
             .spawn()?;
+        let isolation = match crate::container::isolation::confine_process(
+            &crate::container::model::ResourceLimits {
+                memory_mb: Some(memory_limit_mb),
+                ..Default::default()
+            },
+            child.id(),
+        ) {
+            Ok(handle) => handle,
+            Err(error) => {
+                let _ = child.kill();
+                let _ = child.wait();
+                return Err(ModelError::Worker(format!(
+                    "failed to apply worker memory limit: {error}"
+                )));
+            }
+        };
         let writer = child
             .stdin
             .take()
@@ -492,6 +517,7 @@ impl ProcessInferenceWorker {
             writer: Mutex::new(writer),
             reader: Mutex::new(BufReader::new(reader)),
             operation: Mutex::new(()),
+            _isolation: isolation,
         })
     }
 
@@ -830,12 +856,24 @@ impl ModelManager {
                     ModelError::InvalidMetadata(format!("{}: {error}", descriptor_path.display()))
                 })?;
             validate_worker_descriptor(&descriptor, &kind_root)?;
-            let worker = ProcessInferenceWorker::spawn(
+            let worker: Arc<dyn InferenceWorker> = Arc::new(ProcessInferenceWorker::spawn(
                 descriptor.kind.clone(),
                 &root,
                 &descriptor.command,
                 &descriptor.args,
-            )?;
+            )?);
+            let loaded = self
+                .loaded
+                .lock()
+                .map_err(|_| ModelError::Worker("loaded registry lock poisoned".into()))?
+                .iter()
+                .filter(|(_, kind)| kind.as_str() == descriptor.kind)
+                .map(|(model, _)| model.clone())
+                .collect::<Vec<_>>();
+            for model_id in loaded {
+                let manifest = self.store.get(&model_id)?;
+                worker.load(&manifest, &self.store.blob_path(&model_id)?)?;
+            }
             self.worker_launches
                 .lock()
                 .map_err(|_| ModelError::Worker("worker launch registry lock poisoned".into()))?
@@ -847,7 +885,7 @@ impl ModelManager {
                         args: descriptor.args.clone(),
                     },
                 );
-            self.register_worker(Arc::new(worker))?;
+            self.register_worker(worker)?;
             registered += 1;
         }
         Ok(registered)

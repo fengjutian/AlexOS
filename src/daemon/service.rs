@@ -2269,12 +2269,36 @@ impl DaemonService {
         request: crate::model::worker_packages::WorkerPackageRequest,
     ) -> Result<serde_json::Value, String> {
         let store = self.worker_package_store()?;
+        let previous = store
+            .list()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|package| package.worker_kind == request.manifest.worker_kind && package.active);
         let installed = store
             .download_install(&request)
             .map_err(|error| error.to_string())?;
-        self.model_manager()?
+        if let Err(error) = self
+            .model_manager()?
             .register_process_workers(&store.runtimes_root())
-            .map_err(|error| error.to_string())?;
+        {
+            match previous {
+                Some(previous) => {
+                    store.activate(&previous.worker_kind, &previous.version, &previous.triple)
+                }
+                None => store.deactivate(&request.manifest.worker_kind),
+            }
+            .map_err(|rollback| {
+                format!("worker reload failed: {error}; rollback failed: {rollback}")
+            })?;
+            self.model_manager()?
+                .register_process_workers(&store.runtimes_root())
+                .map_err(|rollback| {
+                    format!("worker reload failed: {error}; in-memory rollback failed: {rollback}")
+                })?;
+            return Err(format!(
+                "worker reload failed; previous version restored: {error}"
+            ));
+        }
         serde_json::to_value(installed).map_err(|error| error.to_string())
     }
     fn model_worker_activate(
@@ -2284,12 +2308,38 @@ impl DaemonService {
         triple: &str,
     ) -> Result<serde_json::Value, String> {
         let store = self.worker_package_store()?;
+        let previous = store
+            .list()
+            .map_err(|error| error.to_string())?
+            .into_iter()
+            .find(|package| package.worker_kind == kind && package.active);
         store
             .activate(kind, version, triple)
             .map_err(|error| error.to_string())?;
-        self.model_manager()?
+        if let Err(error) = self
+            .model_manager()?
             .register_process_workers(&store.runtimes_root())
-            .map_err(|error| error.to_string())?;
+        {
+            match previous {
+                Some(previous) => {
+                    store.activate(&previous.worker_kind, &previous.version, &previous.triple)
+                }
+                None => store.deactivate(kind),
+            }
+            .map_err(|rollback| {
+                format!("worker activation failed: {error}; rollback failed: {rollback}")
+            })?;
+            self.model_manager()?
+                .register_process_workers(&store.runtimes_root())
+                .map_err(|rollback| {
+                    format!(
+                        "worker activation failed: {error}; in-memory rollback failed: {rollback}"
+                    )
+                })?;
+            return Err(format!(
+                "worker activation failed; previous version restored: {error}"
+            ));
+        }
         Ok(json!({"kind":kind,"version":version,"triple":triple,"active":true}))
     }
 

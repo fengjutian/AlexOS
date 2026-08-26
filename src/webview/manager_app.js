@@ -102,12 +102,14 @@
     const devices = runtime.hardware?.devices ?? [];
     const resources = runtime.resources ?? {};
     const workers = runtime.workers ?? [];
+    const workerPackages = overview.workerPackages ?? [];
     const budget = Number(resources.budget?.memoryBytes ?? 0);
     const allocated = Number(resources.allocatedBytes ?? 0);
     const usage = budget > 0 ? Math.min(100, allocated * 100 / budget) : 0;
     const resourceSummary = `<div class="service-row"><div><div class="name">Memory budget</div><div class="meta">${allocated} / ${budget} bytes · ${resources.models?.length ?? 0} loaded</div></div><progress max="100" value="${usage}"></progress></div>`;
     const workerRows = workers.map((worker) => `<div class="service-row"><div><div class="name">${escapeText(worker.kind)}</div><div class="meta">PID ${worker.pid ?? "-"}${worker.error ? ` · ${escapeText(worker.error)}` : ""}</div></div><span class="badge ${worker.healthy ? "running" : "error"}">${worker.healthy ? "healthy" : "crashed"}</span></div>`).join("");
-    $("ai-model-runtime").innerHTML = resourceSummary + workerRows + (devices.length
+    const packageRows = workerPackages.map((pkg) => `<div class="service-row"><div><div class="name">${escapeText(pkg.workerKind)} ${escapeText(pkg.version)}</div><div class="meta">${escapeText(pkg.engine)} · ${escapeText(pkg.triple)}</div></div><span class="badge ${pkg.active ? "running" : ""}">${pkg.active ? "active" : "installed"}</span>${pkg.active ? "" : `<button type="button" data-ai-action="model.workerActivate" data-kind="${escapeText(pkg.workerKind)}" data-version="${escapeText(pkg.version)}" data-triple="${escapeText(pkg.triple)}">Activate</button>`}</div>`).join("");
+    $("ai-model-runtime").innerHTML = resourceSummary + workerRows + packageRows + (devices.length
       ? devices.map((device) => `<div class="service-row"><div><div class="name">${escapeText(device.name)}</div><div class="meta">${escapeText(device.kind)} · ${escapeText(device.provider)}${device.memoryMb ? ` · ${Number(device.memoryMb)} MiB` : ""}</div></div><span class="badge running">available</span></div>`).join("")
       : '<p class="muted">No inference devices discovered.</p>');
 
@@ -735,6 +737,9 @@
       binding: button.dataset.binding,
       runId: button.dataset.runId,
       taskId: button.dataset.taskId,
+      kind: button.dataset.kind,
+      version: button.dataset.version,
+      triple: button.dataset.triple,
     };
     if ((operation === "provider.remove" || operation === "mcp.disconnect" || operation === "agent.cancel" || operation === "agent.deny")
         && !await confirmModal(`Confirm ${operation}?`, "Confirm", true)) return;
