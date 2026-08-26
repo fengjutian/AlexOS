@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Alex Container 设计
-nav_order: 8
+parent: 架构与设计
+nav_order: 6
 ---
 
 # Alex Container 技术实现设计

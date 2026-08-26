@@ -1,6 +1,7 @@
 ---
 layout: default
 title: AI Runtime 技术实施方案
+parent: 架构与设计
 nav_order: 5
 ---
 

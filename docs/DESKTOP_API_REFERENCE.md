@@ -1,3 +1,10 @@
+---
+layout: default
+title: Desktop API Reference
+parent: 参考手册
+nav_order: 2
+---
+
 # Desktop API reference
 
 Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.

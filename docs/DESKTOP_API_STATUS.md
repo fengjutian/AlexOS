@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Desktop API 状态
-nav_order: 6
+parent: 参考手册
+nav_order: 3
 ---
 
 # Desktop API status (2026-08-25 修订)

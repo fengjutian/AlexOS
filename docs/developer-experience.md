@@ -1,6 +1,7 @@
 ---
 layout: default
 title: Developer Experience
+parent: 架构与设计
 nav_order: 9
 ---
 

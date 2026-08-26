@@ -1,7 +1,8 @@
 ---
 layout: default
 title: 产品需求
-nav_order: 1
+parent: 架构与设计
+nav_order: 4
 ---
 
 # Alex Runtime 产品需求基线

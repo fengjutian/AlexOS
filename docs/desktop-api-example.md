@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Desktop API 示例
-nav_order: 8
+parent: 开发指南
+nav_order: 1
 ---
 
 # Desktop API 示例

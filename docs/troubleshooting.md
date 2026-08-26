@@ -1,7 +1,8 @@
 ---
 layout: default
 title: 错误诊断
-nav_order: 11
+parent: 开发指南
+nav_order: 4
 ---
 
 # 错误诊断

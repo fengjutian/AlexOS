@@ -1,0 +1,6 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="220" height="48" viewBox="0 0 220 48" role="img" aria-label="Alex Runtime">
+  <defs><linearGradient id="g" x1="0" y1="0" x2="1" y2="1"><stop stop-color="#7c3aed"/><stop offset="1" stop-color="#2563eb"/></linearGradient></defs>
+  <rect x="2" y="6" width="36" height="36" rx="11" fill="url(#g)"/>
+  <path d="M11 31 20 14l9 17h-5l-1.7-3.6h-4.8L15.8 31Zm8.2-7.6h1.4L20 20.5Z" fill="white"/>
+  <text x="48" y="29" font-family="Inter,Segoe UI,sans-serif" font-size="19" font-weight="700" fill="#f8fafc">Alex Runtime</text>
+</svg>

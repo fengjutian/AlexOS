@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Manifest Reference
-nav_order: 5
+parent: 参考手册
+nav_order: 1
 ---
 
 # Manifest Reference

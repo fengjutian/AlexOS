@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Native Worker 指南
-nav_order: 10
+parent: 开发指南
+nav_order: 3
 ---
 
 # Rust Native Worker 指南

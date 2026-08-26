@@ -1,7 +1,8 @@
 ---
 layout: default
 title: MCP Runtime
-nav_order: 7
+parent: 开发指南
+nav_order: 2
 ---
 
 # MCP Runtime

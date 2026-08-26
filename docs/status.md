@@ -1,7 +1,8 @@
 ---
 layout: default
 title: 实现状态
-nav_order: 3
+parent: 架构与设计
+nav_order: 2
 ---
 
 # Alex OS 实现状态

@@ -1,7 +1,8 @@
 ---
 layout: default
 title: 路线图
-nav_order: 4
+parent: 架构与设计
+nav_order: 3
 ---
 
 # Alex OS 路线图

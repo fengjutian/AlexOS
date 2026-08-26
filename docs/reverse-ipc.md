@@ -1,7 +1,8 @@
 ---
 layout: default
 title: Reverse IPC
-nav_order: 5
+parent: 架构与设计
+nav_order: 8
 ---
 
 # Reverse IPC — plugin backend → host 协议

@@ -1,3 +1,10 @@
+---
+layout: default
+title: Agent 内容安全
+parent: 架构与设计
+nav_order: 11
+---
+
 # Agent content security boundaries
 
 Alex treats MCP results, native-tool results and network request payloads as

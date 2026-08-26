@@ -1,3 +1,10 @@
+---
+layout: default
+title: Model Worker Packages
+parent: 参考手册
+nav_order: 4
+---
+
 # Model Worker packages
 
 Alex distributes llama.cpp and ONNX Runtime GenAI adapters as signed, versioned

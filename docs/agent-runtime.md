@@ -1,3 +1,10 @@
+---
+layout: default
+title: Agent Runtime
+parent: 架构与设计
+nav_order: 10
+---
+
 # Agent Runtime
 
 Alex Agent Runtime is owned by `alexd`. An agent run is a persistent workflow, not a single model request. State, events and checkpoints are stored below `agents/<run-id>/`; Shell and SDK clients only use authenticated Runtime RPC.

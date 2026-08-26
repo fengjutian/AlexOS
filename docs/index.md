@@ -4,51 +4,37 @@ title: 文档首页
 nav_order: 1
 ---
 
-# Alex Runtime
+<section class="alex-hero">
+  <p class="alex-hero__eyebrow">AI Application Runtime Infrastructure</p>
+  <h1>Build intelligent desktop apps on a governed runtime.</h1>
+  <p class="alex-hero__lead">Alex Runtime 统一管理 WebView、服务编排、Model、MCP、Agent、原生能力与权限边界，让应用代码专注于产品本身。</p>
+  <div class="alex-hero__actions">
+    <a class="alex-button alex-button--primary" href="#快速开始">5 分钟快速开始</a>
+    <a class="alex-button" href="status">查看实现状态</a>
+    <a class="alex-button" href="https://github.com/fengjutian/AlexOS">GitHub</a>
+  </div>
+</section>
 
-Alex Runtime 是一个实验性的 **AI Application Runtime**。目标是让开发者构建一次应用,由统一
-Runtime 在不同平台负责安装、服务编排、进程、运行时、权限、日志、更新和恢复。
+<div class="alex-badges">
+  <span class="alex-badge">v0.1.0 experimental</span>
+  <span class="alex-badge">Windows + WebView2</span>
+  <span class="alex-badge">Rust 2024</span>
+  <span class="alex-badge">Node · Model · MCP · Agent</span>
+</div>
 
-当前版本 `0.1.0`,定位是 **Windows + WebView2 + Node.js 桌面 AI 应用 Runtime**(不是
-操作系统内核,也未达生产发布标准)。Runtime MVP 关键件已在 `src/` 落地,详细状态见
-[`docs/status.md`](status.md),未完成项见 [`docs/roadmap.md`](roadmap.md),产品
-边界见 [`docs/product-requirements.md`](product-requirements.md)。
+## 从这里开始
 
-## 文档导航
+<div class="alex-grid">
+  <a class="alex-card" href="MANIFEST_REFERENCE"><span class="alex-card__icon">01</span><strong>配置应用</strong><span>Manifest v1/v2 字段、权限、服务、MCP 与 Native Worker。</span></a>
+  <a class="alex-card" href="desktop-api-example"><span class="alex-card__icon">02</span><strong>运行 Desktop API</strong><span>启动交互式 Playground，探索窗口、文件、网络和系统能力。</span></a>
+  <a class="alex-card" href="mcp-runtime"><span class="alex-card__icon">03</span><strong>构建 MCP 集成</strong><span>连接、工具、Resources、Prompts、OAuth、审计与生产部署。</span></a>
+  <a class="alex-card" href="architecture"><span class="alex-card__icon">04</span><strong>理解 Runtime</strong><span>Daemon、Shell、服务、权限和隔离边界的完整数据流。</span></a>
+  <a class="alex-card" href="DESKTOP_API_REFERENCE"><span class="alex-card__icon">API</span><strong>查询 API Reference</strong><span>由统一 schema 生成的方法、参数、结果和事件参考。</span></a>
+  <a class="alex-card" href="troubleshooting"><span class="alex-card__icon">?</span><strong>排查问题</strong><span>Manifest、Daemon、MCP、Native Worker 与常见错误码。</span></a>
+</div>
 
-| 目标 | 首选文档 | 说明 |
-| --- | --- | --- |
-| 了解当前能做什么 | [`status.md`](status.md) | 已实现能力与真实限制 |
-| 查看后续开发 | [`roadmap.md`](roadmap.md) | 按优先级维护的未完成项 |
-| 开发桌面应用 | [`developer-experience.md`](developer-experience.md) | Manifest、开发循环和项目结构 |
-| 查询 Desktop API | [`DESKTOP_API_REFERENCE.md`](DESKTOP_API_REFERENCE.md) | 从 schema 自动生成的方法签名 |
-| 配置 Manifest | [`MANIFEST_REFERENCE.md`](MANIFEST_REFERENCE.md) | v1/v2 字段、校验规则与示例 |
-| 运行 Desktop API 示例 | [`desktop-api-example.md`](desktop-api-example.md) | 页面、权限、MCP 与常见问题 |
-| 使用 MCP | [`mcp-runtime.md`](mcp-runtime.md) | 配置、权限、工具、OAuth、审计和示例 |
-| 使用 Model Worker | [`model-worker-protocol.md`](model-worker-protocol.md) | 本地模型进程协议 |
-| 编写 Native Worker | [`native-worker-guide.md`](native-worker-guide.md) | Descriptor、生命周期、安全和调试 |
-| 使用 Agent Runtime | [`agent-runtime.md`](agent-runtime.md) | Agent 生命周期、预算和审批 |
-| 排查错误 | [`troubleshooting.md`](troubleshooting.md) | 错误码、Manifest、MCP 与 Worker |
-| 理解系统结构 | [`architecture.md`](architecture.md) | Daemon、Shell、Runtime 与数据流 |
-| 查看产品边界 | [`product-requirements.md`](product-requirements.md) | 产品目标与非目标 |
-
-设计提案与事实状态分开维护：设计文档描述目标形态，`status.md` 描述当前代码，`roadmap.md`
-只记录尚未完成的工作。方法级 Desktop API 文档不手写，以生成 Reference 为准。
-
-## 目录
-
-- [文档导航](#文档导航)
-- [这是什么](#这是什么)
-- [快速开始](#快速开始)
-- [自举](#自举)
-- [已实现的能力](#已实现的能力)
-- [开发一个应用](#开发一个应用)
-- [签名、信任与安装](#签名信任与安装)
-- [权限管理](#权限管理)
-- [本地和远程更新](#本地和远程更新)
-- [SDK](#sdk)
-- [安全边界](#安全边界)
-- [验证](#验证)
+> Alex Runtime 当前是开发者预览版，不是操作系统内核，也尚未达到生产发布标准。真实能力以
+> [`status.md`](status.md) 为准，未完成工作以 [`roadmap.md`](roadmap.md) 为准。
 
 ## 这是什么
 

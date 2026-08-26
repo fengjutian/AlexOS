@@ -1,3 +1,10 @@
+---
+layout: default
+title: Native Worker Protocol
+parent: 参考手册
+nav_order: 6
+---
+
 # Rust Native Worker Protocol v1
 
 Rust Native Worker 是 Alex Runtime 的通用进程外原生扩展边界。第三方原生代码不得加载到

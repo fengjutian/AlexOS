@@ -1,3 +1,10 @@
+---
+layout: default
+title: Model Worker Protocol
+parent: 参考手册
+nav_order: 5
+---
+
 # Local Model Worker Protocol v1
 
 > 2026-08-25 修订：本文是 worker ↔ alexd 协议规范 v1。Runtime Provider 阶段（阶段九，参见

@@ -1,6 +1,7 @@
 ---
 layout: default
 title: App Manager UI 设计
+parent: 架构与设计
 nav_order: 7
 ---
 

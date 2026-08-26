@@ -1,3 +1,10 @@
+---
+layout: default
+title: 安全评估与稳定性
+parent: 架构与设计
+nav_order: 12
+---
+
 # Security eval, soak and fault-injection tests
 
 The default security evaluation is deterministic and offline:

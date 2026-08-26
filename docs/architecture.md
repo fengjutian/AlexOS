@@ -1,7 +1,8 @@
 ---
 layout: default
 title: 技术架构
-nav_order: 2
+parent: 架构与设计
+nav_order: 1
 ---
 
 # Alex Runtime 技术架构
