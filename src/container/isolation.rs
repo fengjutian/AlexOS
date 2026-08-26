@@ -173,8 +173,11 @@ impl JobHandle {
     fn new(limits: &ResourceLimits) -> Result<Self, IsolationError> {
         use windows::Win32::System::JobObjects::{
             CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JobObjectExtendedLimitInformation, SetInformationJobObject,
+            JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
+            JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
+            JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
+            JobObjectCpuRateControlInformation, JobObjectExtendedLimitInformation,
+            SetInformationJobObject,
         };
         use windows::core::PCWSTR;
 
@@ -224,6 +227,42 @@ impl JobHandle {
             return Err(IsolationError::Bind(format!(
                 "SetInformationJobObject: {set_err}"
             )));
+        }
+
+        if let Some(cpu_percent) = limits.cpu_percent {
+            if !(1..=100).contains(&cpu_percent) {
+                unsafe {
+                    let _ = windows::Win32::Foundation::CloseHandle(job);
+                }
+                return Err(IsolationError::Bind(
+                    "cpu_percent limit must be in 1..=100".into(),
+                ));
+            }
+            // Job Object CPU rate is expressed in 1/100 of one percent.
+            // HARD_CAP makes this an enforced ceiling rather than a weight.
+            let cpu_info = JOBOBJECT_CPU_RATE_CONTROL_INFORMATION {
+                ControlFlags: JOB_OBJECT_CPU_RATE_CONTROL_ENABLE
+                    | JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP,
+                Anonymous: JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0 {
+                    CpuRate: cpu_percent * 100,
+                },
+            };
+            let cpu_result = unsafe {
+                SetInformationJobObject(
+                    job,
+                    JobObjectCpuRateControlInformation,
+                    &cpu_info as *const _ as *const _,
+                    std::mem::size_of::<JOBOBJECT_CPU_RATE_CONTROL_INFORMATION>() as u32,
+                )
+            };
+            if let Err(error) = cpu_result {
+                unsafe {
+                    let _ = windows::Win32::Foundation::CloseHandle(job);
+                }
+                return Err(IsolationError::Bind(format!(
+                    "SetInformationJobObject(CPU rate): {error}"
+                )));
+            }
         }
 
         Ok(Self { raw: job.0 })

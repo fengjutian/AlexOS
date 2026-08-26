@@ -464,7 +464,7 @@ impl ApplicationManifestV2 {
                     )));
                 }
                 if let Some(cpu) = resources.cpu_percent
-                    && cpu > 100
+                    && !(1..=100).contains(&cpu)
                 {
                     return Err(validation(format!(
                         "service {name} resources.cpuPercent must be in 0..=100, got {cpu}"
@@ -587,7 +587,9 @@ fn validate_resources(resources: &ServiceResources, label: &str) -> Result<(), M
             "{label} resources.memoryMb must be > 0"
         )));
     }
-    if resources.cpu_percent.is_some_and(|cpu| cpu > 100) {
+    if resources
+        .cpu_percent
+        .is_some_and(|cpu| !(1..=100).contains(&cpu))
         return Err(validation(format!(
             "{label} resources.cpuPercent must be in 0..=100"
         )));
