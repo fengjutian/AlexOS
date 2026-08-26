@@ -3946,6 +3946,7 @@ mod tests {
             },
             backend: None,
             permissions: Vec::new(),
+            mcp_servers: Default::default(),
             extension_points: None,
         }
     }

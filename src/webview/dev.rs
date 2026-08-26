@@ -523,6 +523,7 @@ mod v2_projection_tests {
             },
             backend: None,
             permissions: Vec::new(),
+            mcp_servers: Default::default(),
             extension_points: None,
         };
         let unified = ApplicationManifest::V1(v1);
