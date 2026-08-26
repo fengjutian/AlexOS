@@ -22,6 +22,12 @@ struct AgentRunParams {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentScheduleParams {
+    run_id: String,
+    scheduled_at_ms: u64,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentHistoryParams {
     run_id: String,
     #[serde(default = "default_history_limit")]
@@ -120,6 +126,27 @@ impl ApiRouter {
             crate::daemon::ControlCommand::AgentChildren {
                 app_id: self.agent_app_id()?,
                 parent_run_id: params.run_id,
+            },
+        )
+    }
+    pub(crate) fn agent_schedule(&self, params: &Value) -> ApiResult {
+        self.agent_permission()?;
+        let params: AgentScheduleParams = parse_params(params)?;
+        self.daemon_agent(
+            "agent-schedule",
+            crate::daemon::ControlCommand::AgentSchedule {
+                app_id: self.agent_app_id()?,
+                run_id: params.run_id,
+                scheduled_at_ms: params.scheduled_at_ms,
+            },
+        )
+    }
+    pub(crate) fn agent_scheduled(&self) -> ApiResult {
+        self.agent_permission()?;
+        self.daemon_agent(
+            "agent-scheduled",
+            crate::daemon::ControlCommand::AgentScheduled {
+                app_id: self.agent_app_id()?,
             },
         )
     }

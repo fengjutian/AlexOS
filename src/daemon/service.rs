@@ -188,6 +188,7 @@ pub struct DaemonService {
     models: Option<crate::model::ModelManager>,
     model_downloads: Option<crate::model::download_tasks::ModelDownloadManager>,
     agents: Option<crate::agent::AgentManager>,
+    agent_scheduler: Option<Arc<crate::agent::AgentScheduler>>,
 }
 
 impl DaemonService {
@@ -210,6 +211,7 @@ impl DaemonService {
             models: None,
             model_downloads: None,
             agents: None,
+            agent_scheduler: None,
         }
     }
 
@@ -229,13 +231,17 @@ impl DaemonService {
         let remote_router = crate::model::remote::RemoteProviderRouter::open(root, secret_resolver)
             .map_err(|error| error.to_string())?;
         models.set_remote(remote_router);
-        self.agents = Some(
+        let agents =
             crate::agent::AgentManager::open(root.join("agents"), models.clone(), self.mcp.clone())
                 .map_err(|error| error.to_string())?
                 .with_native_tools(Arc::new(DaemonAgentNativeTools {
                     state: self.state.clone(),
-                })),
-        );
+                }));
+        self.agent_scheduler = Some(Arc::new(
+            crate::agent::AgentScheduler::start(agents.clone())
+                .map_err(|error| error.to_string())?,
+        ));
+        self.agents = Some(agents);
         self.models = Some(models);
         self.model_downloads = Some(model_downloads);
         self.mcp_audit = Some(
@@ -593,6 +599,10 @@ impl DaemonService {
             ControlCommand::AgentChildren { app_id, parent_run_id } => {
                 self.agent_children(&app_id, &parent_run_id)
             }
+            ControlCommand::AgentSchedule { app_id, run_id, scheduled_at_ms } => {
+                self.agent_schedule(&app_id, &run_id, scheduled_at_ms)
+            }
+            ControlCommand::AgentScheduled { app_id } => self.agent_scheduled(&app_id),
             ControlCommand::AgentStart {
                 app_id,
                 run_id,
@@ -2515,6 +2525,28 @@ impl DaemonService {
         self.agent_manager()?
             .children(app_id, parent_run_id)
             .map(|runs| json!({"runs": runs}))
+            .map_err(|error| error.to_string())
+    }
+
+    fn agent_schedule(
+        &self,
+        app_id: &str,
+        run_id: &str,
+        scheduled_at_ms: u64,
+    ) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .schedule(app_id, run_id, scheduled_at_ms)
+            .and_then(|run| {
+                serde_json::to_value(run)
+                    .map_err(|error| crate::agent::AgentError::Invalid(error.to_string()))
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn agent_scheduled(&self, app_id: &str) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .scheduled(app_id)
+            .map(|runs| json!({"runs":runs}))
             .map_err(|error| error.to_string())
     }
 

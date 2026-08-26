@@ -184,6 +184,8 @@ pub struct AgentRun {
     pub parent_run_id: Option<String>,
     #[serde(default)]
     pub child_run_ids: Vec<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub scheduled_at_ms: Option<u64>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -214,6 +216,9 @@ pub enum AgentEvent {
     },
     ChildSpawned {
         child_run_id: String,
+    },
+    Scheduled {
+        scheduled_at_ms: u64,
     },
     Checkpoint {
         step: u32,
@@ -365,6 +370,7 @@ impl AgentManager {
             last_error: None,
             parent_run_id: None,
             child_run_ids: Vec::new(),
+            scheduled_at_ms: None,
         };
         self.save(&run)?;
         self.append_event(
@@ -426,6 +432,85 @@ impl AgentManager {
             .iter()
             .map(|id| self.status(application, id))
             .collect()
+    }
+
+    pub fn schedule(
+        &self,
+        application: &str,
+        run_id: &str,
+        scheduled_at_ms: u64,
+    ) -> Result<AgentRun, AgentError> {
+        let now = now_ms();
+        if scheduled_at_ms > now.saturating_add(366 * 24 * 60 * 60 * 1_000) {
+            return Err(AgentError::Invalid(
+                "scheduled time is more than one year away".into(),
+            ));
+        }
+        let gate = self.run_gate(run_id)?;
+        let _guard = gate
+            .lock()
+            .map_err(|_| AgentError::Conflict("run lock poisoned".into()))?;
+        let mut run = self.status(application, run_id)?;
+        if matches!(
+            run.state,
+            AgentState::Running
+                | AgentState::WaitingTool
+                | AgentState::WaitingApproval
+                | AgentState::Completed
+                | AgentState::Cancelled
+        ) {
+            return Err(AgentError::Conflict(
+                "run cannot be scheduled from its current state".into(),
+            ));
+        }
+        run.state = AgentState::Queued;
+        run.scheduled_at_ms = Some(scheduled_at_ms);
+        run.generation = run.generation.saturating_add(1);
+        run.updated_at_ms = now;
+        run.last_error = None;
+        self.save(&run)?;
+        self.append_event(&run, &AgentEvent::Scheduled { scheduled_at_ms })?;
+        Ok(run)
+    }
+
+    pub fn scheduled(&self, application: &str) -> Result<Vec<AgentRun>, AgentError> {
+        Ok(self
+            .list(application)?
+            .into_iter()
+            .filter(|run| run.scheduled_at_ms.is_some())
+            .collect())
+    }
+
+    fn claim_due(&self, now: u64) -> Result<Vec<(String, String)>, AgentError> {
+        let mut due = Vec::new();
+        for entry in fs::read_dir(&self.root)? {
+            let path = entry?.path().join("state.json");
+            if !path.is_file() {
+                continue;
+            }
+            let Ok(snapshot) = read_json::<AgentRun>(&path) else {
+                continue;
+            };
+            if !snapshot.scheduled_at_ms.is_some_and(|time| time <= now) {
+                continue;
+            }
+            let gate = self.run_gate(&snapshot.id)?;
+            let Ok(_guard) = gate.try_lock() else {
+                continue;
+            };
+            let mut run = self.load(&snapshot.id)?;
+            if run.state != AgentState::Queued
+                || !run.scheduled_at_ms.is_some_and(|time| time <= now)
+            {
+                continue;
+            }
+            run.scheduled_at_ms = None;
+            run.state = AgentState::Queued;
+            run.updated_at_ms = now;
+            self.save(&run)?;
+            due.push((run.application, run.id));
+        }
+        Ok(due)
     }
 
     pub fn status(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
@@ -525,6 +610,13 @@ impl AgentManager {
         run_id: &str,
         emit: &mut dyn FnMut(AgentEvent) -> Result<(), AgentError>,
     ) -> Result<AgentRun, AgentError> {
+        let scheduled = self.status(application, run_id)?;
+        if scheduled
+            .scheduled_at_ms
+            .is_some_and(|time| time > now_ms())
+        {
+            return Err(AgentError::Conflict("scheduled run is not due yet".into()));
+        }
         let gate = self.run_gate(run_id)?;
         let _guard = gate
             .lock()
@@ -568,6 +660,13 @@ impl AgentManager {
         emit: &mut dyn FnMut(AgentEvent) -> Result<(), AgentError>,
     ) -> Result<AgentRun, AgentError> {
         let mut run = self.status(application, run_id)?;
+        if let Some(scheduled_at) = run.scheduled_at_ms {
+            if scheduled_at > now_ms() {
+                return Err(AgentError::Conflict("scheduled run is not due yet".into()));
+            }
+            run.scheduled_at_ms = None;
+            self.save(&run)?;
+        }
         if matches!(run.state, AgentState::Completed | AgentState::Cancelled) {
             return Ok(run);
         }
@@ -1121,6 +1220,48 @@ impl AgentManager {
         file.write_all(b"\n")?;
         file.flush()?;
         Ok(())
+    }
+}
+
+pub struct AgentScheduler {
+    stop: Arc<AtomicBool>,
+    handle: Mutex<Option<std::thread::JoinHandle<()>>>,
+}
+
+impl AgentScheduler {
+    pub fn start(manager: AgentManager) -> Result<Self, AgentError> {
+        let stop = Arc::new(AtomicBool::new(false));
+        let worker_stop = Arc::clone(&stop);
+        let handle = std::thread::Builder::new()
+            .name("alex-agent-scheduler".into())
+            .spawn(move || {
+                while !worker_stop.load(Ordering::Acquire) {
+                    match manager.claim_due(now_ms()) {
+                        Ok(runs) => {
+                            for (application, run_id) in runs {
+                                let _ = manager.execute(&application, &run_id, &mut |_| Ok(()));
+                            }
+                        }
+                        Err(error) => eprintln!("agent scheduler scan failed: {error}"),
+                    }
+                    std::thread::sleep(std::time::Duration::from_millis(250));
+                }
+            })?;
+        Ok(Self {
+            stop,
+            handle: Mutex::new(Some(handle)),
+        })
+    }
+}
+
+impl Drop for AgentScheduler {
+    fn drop(&mut self) {
+        self.stop.store(true, Ordering::Release);
+        if let Ok(handle) = self.handle.get_mut()
+            && let Some(handle) = handle.take()
+        {
+            let _ = handle.join();
+        }
     }
 }
 
@@ -1948,6 +2089,56 @@ mod tests {
             manager.spawn_child("com.example.app", &parent.id, spec, vec![]),
             Err(AgentError::Conflict(_))
         ));
+    }
+
+    #[test]
+    fn scheduled_runs_survive_reopen_and_are_claimed_once() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = runtime(&temp);
+        let run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: vec![],
+                    budget: AgentBudget::default(),
+                },
+                vec![],
+            )
+            .unwrap();
+        let due_at = now_ms().saturating_add(60_000);
+        manager
+            .schedule("com.example.app", &run.id, due_at)
+            .unwrap();
+        assert!(matches!(
+            manager.execute("com.example.app", &run.id, &mut |_| Ok(())),
+            Err(AgentError::Conflict(_))
+        ));
+        assert_eq!(
+            manager.status("com.example.app", &run.id).unwrap().state,
+            AgentState::Queued
+        );
+        let reopened = AgentManager::open(
+            temp.path().join("agents"),
+            manager.models.clone(),
+            manager.mcp.clone(),
+        )
+        .unwrap();
+        assert_eq!(reopened.scheduled("com.example.app").unwrap().len(), 1);
+        assert!(reopened.claim_due(due_at - 1).unwrap().is_empty());
+        assert_eq!(
+            reopened.claim_due(due_at).unwrap(),
+            vec![("com.example.app".into(), run.id.clone())]
+        );
+        assert!(reopened.claim_due(due_at).unwrap().is_empty());
+        assert!(
+            reopened
+                .status("com.example.app", &run.id)
+                .unwrap()
+                .scheduled_at_ms
+                .is_none()
+        );
     }
 
     #[test]

@@ -103,6 +103,8 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `agent.create` | always | agent.run | blocking |
 | `agent.spawnChild` | always | agent.run | blocking |
 | `agent.children` | always | agent.run | blocking |
+| `agent.schedule` | always | agent.run | blocking |
+| `agent.scheduled` | always | agent.run | blocking |
 | `agent.start` | always | agent.run | blocking |
 | `agent.pause` | always | agent.run | blocking |
 | `agent.resume` | always | agent.run | blocking |
@@ -141,6 +143,6 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `shortcuts.unregister` | nativeDesktop | shortcuts | native |
 | `shortcuts.list` | nativeDesktop | shortcuts | native |
 
-Typed JSON Schema coverage: 136/136 methods.
+Typed JSON Schema coverage: 138/138 methods.
 
 Common errors: `INVALID_PARAMS`, `PERMISSION_DENIED`, `OPERATION_FAILED`, `DEADLINE_EXCEEDED`, `HOST_BUSY`, `METHOD_NOT_FOUND`.

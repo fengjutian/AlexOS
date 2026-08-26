@@ -349,6 +349,14 @@ pub enum ControlCommand {
         app_id: String,
         parent_run_id: String,
     },
+    AgentSchedule {
+        app_id: String,
+        run_id: String,
+        scheduled_at_ms: u64,
+    },
+    AgentScheduled {
+        app_id: String,
+    },
     AgentStart {
         app_id: String,
         run_id: String,

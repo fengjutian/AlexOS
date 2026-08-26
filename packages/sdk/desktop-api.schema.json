@@ -187,6 +187,8 @@
       "agent.create",
       "agent.spawnChild",
       "agent.children",
+      "agent.schedule",
+      "agent.scheduled",
       "agent.start",
       "agent.pause",
       "agent.resume",
@@ -2737,6 +2739,14 @@
     },
     "agent.children": {
       "params": { "$ref": "#/$defs/AgentRunId" },
+      "result": { "type": "object", "properties": { "runs": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["runs"], "additionalProperties": false }
+    },
+    "agent.schedule": {
+      "params": { "type": "object", "properties": { "runId": { "type": "string", "minLength": 1 }, "scheduledAtMs": { "type": "integer", "minimum": 0 } }, "required": ["runId", "scheduledAtMs"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/JsonValue" }
+    },
+    "agent.scheduled": {
+      "params": { "$ref": "#/$defs/Empty" },
       "result": { "type": "object", "properties": { "runs": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["runs"], "additionalProperties": false }
     },
     "agent.start": {

@@ -70,6 +70,7 @@
       $("ai-model-runtime").textContent = "";
       $("ai-mcp").textContent = "";
       $("ai-agents").textContent = "";
+      $("ai-approvals").textContent = "";
     }
   }
 
@@ -123,6 +124,11 @@
     $("ai-agents").innerHTML = runs.length
       ? runs.map((run) => `<div class="service-row"><div><div class="name">${run.parentRunId ? "↳ " : ""}${escapeText(run.id)}</div><div class="meta">${escapeText(run.appName)} · step ${Number(run.step ?? 0)}${run.parentRunId ? ` · parent ${escapeText(run.parentRunId)}` : ` · ${run.childRunIds?.length ?? 0} children`}</div></div><span class="badge ${stateClass(run.state)}">${escapeText(formatState(run.state))}</span><div><button type="button" data-ai-action="agent.pause" data-app-id="${escapeText(run.appId)}" data-run-id="${escapeText(run.id)}">Pause</button><button type="button" data-ai-action="agent.resume" data-app-id="${escapeText(run.appId)}" data-run-id="${escapeText(run.id)}">Resume</button><button type="button" data-ai-action="agent.cancel" data-app-id="${escapeText(run.appId)}" data-run-id="${escapeText(run.id)}">Cancel</button></div></div>`).join("")
       : '<p class="muted">No Agent runs.</p>';
+
+    const approvals = runs.filter((run) => run.state === "waiting-approval" && run.pendingTool);
+    $("ai-approvals").innerHTML = approvals.length
+      ? approvals.map((run) => `<div class="service-row"><div><div class="name">${escapeText(run.pendingTool.binding)}/${escapeText(run.pendingTool.name)}</div><div class="meta">${escapeText(run.appName)} · run ${escapeText(run.id)} · arguments ${escapeText(JSON.stringify(run.pendingTool.arguments ?? {}))}</div></div><div><button type="button" data-ai-action="agent.approve" data-app-id="${escapeText(run.appId)}" data-run-id="${escapeText(run.id)}">Approve</button><button type="button" class="danger" data-ai-action="agent.deny" data-app-id="${escapeText(run.appId)}" data-run-id="${escapeText(run.id)}">Deny</button></div></div>`).join("")
+      : '<p class="muted">No Agent tool calls are waiting for approval.</p>';
   }
 
   // -- IPC helper -----------------------------------------------------------
@@ -730,7 +736,7 @@
       runId: button.dataset.runId,
       taskId: button.dataset.taskId,
     };
-    if ((operation === "provider.remove" || operation === "mcp.disconnect" || operation === "agent.cancel")
+    if ((operation === "provider.remove" || operation === "mcp.disconnect" || operation === "agent.cancel" || operation === "agent.deny")
         && !await confirmModal(`Confirm ${operation}?`, "Confirm", true)) return;
     button.disabled = true;
     try {

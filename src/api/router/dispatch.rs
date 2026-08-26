@@ -137,6 +137,8 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "agent.create" => router.agent_create(p),
         "agent.spawnChild" => router.agent_spawn_child(p),
         "agent.children" => router.agent_children(p),
+        "agent.schedule" => router.agent_schedule(p),
+        "agent.scheduled" => router.agent_scheduled(),
         "agent.start" => router.agent_start(&request.id, p),
         "agent.pause" => router.agent_action(p, "pause"),
         "agent.resume" => router.agent_action(p, "resume"),
