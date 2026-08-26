@@ -31,7 +31,15 @@
     { "name": "shortcut.register" },
     { "name": "notification.show" },
     { "name": "network.fetch", "origins": ["https://example.com"] },
-    { "name": "mcp.use" },
+    {
+      "name": "mcp.use",
+      "servers": ["filesystem"],
+      "tools": {
+        "filesystem": ["list_directory", "read_text_file", "write_text_file"]
+      },
+      "resources": { "filesystem": ["*"] },
+      "prompts": { "filesystem": ["*"] }
+    },
     { "name": "system.openExternal", "origins": ["https://example.com"] }
   ]
 }
