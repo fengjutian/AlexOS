@@ -896,9 +896,7 @@ impl ModelManager {
                 .collect::<Vec<_>>();
             for model_id in loaded {
                 let manifest = self.store.get(&model_id)?;
-                let required_memory_mb = manifest
-                    .size_bytes
-                    .saturating_add(1024 * 1024 - 1)
+                let required_memory_mb = manifest.size_bytes.saturating_add(1024 * 1024 - 1)
                     / (1024 * 1024)
                     + descriptor.memory_overhead_mb;
                 let providers = if descriptor.providers.is_empty() {
@@ -906,21 +904,14 @@ impl ModelManager {
                 } else {
                     descriptor.providers.as_slice()
                 };
-                let placement = hardware::select_device(
-                    &hardware::discover(),
-                    providers,
-                    required_memory_mb,
-                )
-                .ok_or_else(|| {
-                    ModelError::Worker(format!(
-                        "no compatible device can restore {model_id} ({required_memory_mb} MiB)"
-                    ))
-                })?;
-                worker.load_on(
-                    &manifest,
-                    &self.store.blob_path(&model_id)?,
-                    &placement,
-                )?;
+                let placement =
+                    hardware::select_device(&hardware::discover(), providers, required_memory_mb)
+                        .ok_or_else(|| {
+                        ModelError::Worker(format!(
+                            "no compatible device can restore {model_id} ({required_memory_mb} MiB)"
+                        ))
+                    })?;
+                worker.load_on(&manifest, &self.store.blob_path(&model_id)?, &placement)?;
             }
             self.worker_launches
                 .lock()
@@ -1155,9 +1146,7 @@ impl ModelManager {
             .collect::<Vec<_>>();
         for model_id in loaded {
             let manifest = self.store.get(&model_id)?;
-            let required_memory_mb = manifest
-                .size_bytes
-                .saturating_add(1024 * 1024 - 1)
+            let required_memory_mb = manifest.size_bytes.saturating_add(1024 * 1024 - 1)
                 / (1024 * 1024)
                 + launch.memory_overhead_mb;
             let providers = if launch.providers.is_empty() {
@@ -1165,21 +1154,14 @@ impl ModelManager {
             } else {
                 launch.providers.as_slice()
             };
-            let placement = hardware::select_device(
-                &hardware::discover(),
-                providers,
-                required_memory_mb,
-            )
-            .ok_or_else(|| {
-                ModelError::Worker(format!(
-                    "no compatible device can restore {model_id} ({required_memory_mb} MiB)"
-                ))
-            })?;
-            replacement.load_on(
-                &manifest,
-                &self.store.blob_path(&model_id)?,
-                &placement,
-            )?;
+            let placement =
+                hardware::select_device(&hardware::discover(), providers, required_memory_mb)
+                    .ok_or_else(|| {
+                        ModelError::Worker(format!(
+                            "no compatible device can restore {model_id} ({required_memory_mb} MiB)"
+                        ))
+                    })?;
+            replacement.load_on(&manifest, &self.store.blob_path(&model_id)?, &placement)?;
         }
         self.workers
             .lock()

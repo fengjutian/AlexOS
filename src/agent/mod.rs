@@ -786,10 +786,12 @@ impl AgentManager {
                         .mcp
                         .get(application, &call.binding)
                         .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
+                        .and_then(crate::mcp::filter_tool_result)
                         .map_err(|error| AgentError::Tool(error.to_string()))?;
                     serde_json::to_value(result)
                         .map_err(|error| AgentError::Tool(error.to_string()))?
                 };
+                validate_tool_context(&value)?;
                 run.usage.tool_calls = run.usage.tool_calls.saturating_add(1);
                 let qualified = format!("{}/{}", call.binding, call.name);
                 let tool_cost = run
@@ -887,6 +889,8 @@ impl AgentManager {
                     .enumerate()
                     .map(|(index, (qualified, arguments))| {
                         let spec = resolve_tool(&run.spec.tools, &qualified)?;
+                        let contains_sensitive_data =
+                            crate::security::sensitive_json(&arguments).is_some();
                         Ok(PendingToolCall {
                             binding: spec.binding.clone(),
                             name: spec.name.clone(),
@@ -896,7 +900,9 @@ impl AgentManager {
                                 run.id, run.generation, run.step, index
                             ),
                             idempotent: spec.idempotent,
-                            approved: !spec.require_approval && spec.idempotent,
+                            approved: !spec.require_approval
+                                && spec.idempotent
+                                && !contains_sensitive_data,
                             attempted: false,
                         })
                     })
@@ -931,7 +937,7 @@ impl AgentManager {
     }
 
     fn invoke_tool(&self, application: &str, call: &PendingToolCall) -> Result<Value, AgentError> {
-        if call.binding == "alex" {
+        let value = if call.binding == "alex" {
             self.native_tools
                 .as_ref()
                 .ok_or_else(|| AgentError::Tool("Alex native tools are unavailable".into()))?
@@ -940,15 +946,18 @@ impl AgentManager {
                     &call.name,
                     &call.arguments,
                     &call.idempotency_key,
-                )
+                )?
         } else {
             let result = self
                 .mcp
                 .get(application, &call.binding)
                 .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
+                .and_then(crate::mcp::filter_tool_result)
                 .map_err(|error| AgentError::Tool(error.to_string()))?;
-            serde_json::to_value(result).map_err(|error| AgentError::Tool(error.to_string()))
-        }
+            serde_json::to_value(result).map_err(|error| AgentError::Tool(error.to_string()))?
+        };
+        validate_tool_context(&value)?;
+        Ok(value)
     }
 
     fn execute_parallel_calls(
@@ -1453,6 +1462,17 @@ fn summarize_child(run: AgentRun) -> ChildRunSummary {
         usage: run.usage,
         final_message,
         error: run.last_error,
+    }
+}
+
+fn validate_tool_context(value: &Value) -> Result<(), AgentError> {
+    if let Some(finding) = crate::security::untrusted_json(value) {
+        Err(AgentError::Tool(format!(
+            "tool output blocked before model context: {}",
+            finding.reason
+        )))
+    } else {
+        Ok(())
     }
 }
 

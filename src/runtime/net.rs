@@ -52,6 +52,8 @@ pub enum NetError {
     Io(String),
     #[error("network transport: {0}")]
     Transport(String),
+    #[error("outbound request blocked by sensitive-data policy: {0}")]
+    SensitiveData(&'static str),
 }
 
 #[derive(Debug, Clone, Deserialize)]
@@ -109,6 +111,7 @@ pub fn fetch(spec: &FetchSpec, permissions: &[Permission]) -> Result<FetchResult
     if !origin_allowed(permissions, &origin) {
         return Err(NetError::OriginNotAllowed(origin));
     }
+    scan_outbound(spec, &url)?;
     let method = spec
         .method
         .clone()
@@ -116,6 +119,37 @@ pub fn fetch(spec: &FetchSpec, permissions: &[Permission]) -> Result<FetchResult
         .to_uppercase();
     let max_bytes = spec.max_bytes.unwrap_or(MAX_BODY_BYTES);
     run_fetch(&url, &method, spec, max_bytes)
+}
+
+fn scan_outbound(spec: &FetchSpec, url: &Url) -> Result<(), NetError> {
+    if let Some(query) = url.query()
+        && let Some(finding) = crate::security::sensitive_finding(query)
+    {
+        return Err(NetError::SensitiveData(finding.reason));
+    }
+    if let Some(body) = &spec.body
+        && let Some(finding) = crate::security::sensitive_finding(body)
+    {
+        return Err(NetError::SensitiveData(finding.reason));
+    }
+    if let Some(headers) = spec.headers.as_ref().and_then(Value::as_object) {
+        for (name, value) in headers {
+            // Authentication headers are deliberate transport credentials;
+            // they remain constrained by the exact origin allow-list.
+            if matches!(
+                name.to_ascii_lowercase().as_str(),
+                "authorization" | "x-api-key"
+            ) {
+                continue;
+            }
+            if let Some(value) = value.as_str()
+                && let Some(finding) = crate::security::sensitive_finding(value)
+            {
+                return Err(NetError::SensitiveData(finding.reason));
+            }
+        }
+    }
+    Ok(())
 }
 
 fn run_fetch(
@@ -259,5 +293,54 @@ mod tests {
         };
         let err = fetch(&spec, &perms_with_origin("https://example.com")).unwrap_err();
         assert!(matches!(err, NetError::InvalidUrl(_)));
+    }
+
+    #[test]
+    fn blocks_sensitive_query_body_and_custom_headers_before_transport() {
+        for spec in [
+            FetchSpec {
+                url: "https://example.com/?value=ghp_abcdefghijklmnopqrstuvwxyz1234".into(),
+                method: None,
+                headers: None,
+                body: None,
+                timeout_ms: None,
+                max_bytes: None,
+            },
+            FetchSpec {
+                url: "https://example.com/".into(),
+                method: Some("POST".into()),
+                headers: None,
+                body: Some("card=4111-1111-1111-1111".into()),
+                timeout_ms: None,
+                max_bytes: None,
+            },
+            FetchSpec {
+                url: "https://example.com/".into(),
+                method: None,
+                headers: Some(json!({"x-debug":"ghp_abcdefghijklmnopqrstuvwxyz1234"})),
+                body: None,
+                timeout_ms: None,
+                max_bytes: None,
+            },
+        ] {
+            let url = Url::parse(&spec.url).unwrap();
+            assert!(matches!(
+                scan_outbound(&spec, &url),
+                Err(NetError::SensitiveData(_))
+            ));
+        }
+    }
+
+    #[test]
+    fn permits_origin_bound_auth_header_as_explicit_transport_credential() {
+        let spec = FetchSpec {
+            url: "https://example.com/".into(),
+            method: None,
+            headers: Some(json!({"Authorization":"Bearer ghp_abcdefghijklmnopqrstuvwxyz1234"})),
+            body: None,
+            timeout_ms: None,
+            max_bytes: None,
+        };
+        assert!(scan_outbound(&spec, &Url::parse(&spec.url).unwrap()).is_ok());
     }
 }
