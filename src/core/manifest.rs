@@ -30,6 +30,10 @@ pub struct AppManifest {
     pub backend: Option<Backend>,
     #[serde(default)]
     pub permissions: Vec<Permission>,
+    /// Manifest-managed MCP connections. Desktop-oriented v1 packages keep
+    /// their fine-grained IPC permissions while sharing the v2 transport model.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub mcp_servers: BTreeMap<String, crate::manifest_v2::McpServerSpec>,
     /// Plugin 静态声明的扩展点(命令 / 面板 / 菜单)。
     /// 0.1 切片 3:只解析和聚合,host 不主动调用(那是 0.2 的事)。
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -278,6 +282,8 @@ impl AppManifest {
         if let Some(backend) = &self.backend {
             validate_relative_entry(root, &backend.entry, "backend")?;
         }
+        crate::manifest_v2::validate_mcp_servers(root, &self.mcp_servers)
+            .map_err(|error| AlexError::Validation(error.to_string()))?;
         Ok(())
     }
 }

@@ -169,6 +169,7 @@ fn project_v2_for_dev(manifest: ApplicationManifest) -> AppManifest {
         },
         backend,
         permissions,
+        mcp_servers: v2.mcp_servers,
         extension_points: None,
     }
 }

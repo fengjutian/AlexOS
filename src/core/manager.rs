@@ -2067,6 +2067,10 @@ fn v2_fallback_manifest(manifest: &ApplicationManifest) -> AppManifest {
         },
         backend: None,
         permissions,
+        mcp_servers: manifest
+            .as_v2()
+            .map(|value| value.mcp_servers.clone())
+            .unwrap_or_default(),
         extension_points: None,
     }
 }

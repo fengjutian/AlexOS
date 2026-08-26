@@ -19,8 +19,8 @@ export function McpWorkbench({ pending, onRun }: McpWorkbenchProps): React.React
   const [binding, setBinding] = useState("filesystem");
   const [tool, setTool] = useState("list_directory");
   const [argumentsJson, setArgumentsJson] = useState('{"path":"."}');
-  const [resourceUri, setResourceUri] = useState("file:///README.md");
-  const [promptName, setPromptName] = useState("review");
+  const [resourceUri, setResourceUri] = useState("demo://workspace/readme");
+  const [promptName, setPromptName] = useState("summarize");
   const [promptArguments, setPromptArguments] = useState("{}");
   const [completionValue, setCompletionValue] = useState("");
   const [clientId, setClientId] = useState("alex-desktop-api-demo");

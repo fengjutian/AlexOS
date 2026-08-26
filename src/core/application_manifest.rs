@@ -485,10 +485,10 @@ impl ApplicationManifest {
                 .as_v2()
                 .map(|manifest| manifest.native_workers.clone())
                 .unwrap_or_default(),
-            mcp_servers: self
-                .as_v2()
-                .map(|manifest| manifest.mcp_servers.clone())
-                .unwrap_or_default(),
+            mcp_servers: match self {
+                Self::V1(manifest) => manifest.mcp_servers.clone(),
+                Self::V2(manifest) => manifest.mcp_servers.clone(),
+            },
             agent: self.as_v2().and_then(|manifest| manifest.agent.clone()),
             runtime: self
                 .as_v2()
@@ -825,6 +825,54 @@ services:
         assert!(manifest.services().is_empty());
         assert!(!manifest.has_services());
         assert!(manifest.frontend().is_some());
+    }
+
+    #[test]
+    fn v1_projects_validated_manifest_managed_mcp_servers() {
+        let dir = tempfile::tempdir().unwrap();
+        write_index_html(dir.path());
+        write_v1(
+            dir.path(),
+            r#"{
+              "schemaVersion": 1,
+              "id": "com.alex.mcp_demo",
+              "name": "MCP Demo",
+              "version": "0.1.0",
+              "frontend": { "entry": "index.html" },
+              "mcpServers": {
+                "filesystem": {
+                  "transport": "streamable-http",
+                  "endpoint": "http://127.0.0.1:5174/mcp"
+                }
+              }
+            }"#,
+        );
+        let resolved = load_application(dir.path()).unwrap().resolve().unwrap();
+        assert!(resolved.mcp_servers.contains_key("filesystem"));
+    }
+
+    #[test]
+    fn v1_rejects_insecure_non_loopback_mcp_endpoint() {
+        let dir = tempfile::tempdir().unwrap();
+        write_index_html(dir.path());
+        write_v1(
+            dir.path(),
+            r#"{
+              "schemaVersion": 1,
+              "id": "com.alex.mcp_demo",
+              "name": "MCP Demo",
+              "version": "0.1.0",
+              "frontend": { "entry": "index.html" },
+              "mcpServers": {
+                "remote": {
+                  "transport": "streamable-http",
+                  "endpoint": "http://example.com/mcp"
+                }
+              }
+            }"#,
+        );
+        let error = load_application(dir.path()).unwrap_err().to_string();
+        assert!(error.contains("HTTPS"));
     }
 
     #[test]
