@@ -9,6 +9,14 @@ struct AgentCreateParams {
 }
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct AgentSpawnChildParams {
+    parent_run_id: String,
+    spec: crate::agent::AgentSpec,
+    #[serde(default)]
+    messages: Vec<Value>,
+}
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct AgentRunParams {
     run_id: String,
 }
@@ -82,6 +90,36 @@ impl ApiRouter {
                 app_id,
                 run_id: params.run_id,
                 stream_id,
+            },
+        )
+    }
+    pub(crate) fn agent_spawn_child(&self, params: &Value) -> ApiResult {
+        self.agent_permission()?;
+        let params: AgentSpawnChildParams = parse_params(params)?;
+        self.model_use_scope(Some(&params.spec.model))?;
+        for tool in &params.spec.tools {
+            if tool.binding != "alex" {
+                self.mcp_scope(Some(&tool.binding), Some(&tool.name))?;
+            }
+        }
+        self.daemon_agent(
+            "agent-spawn-child",
+            crate::daemon::ControlCommand::AgentSpawnChild {
+                app_id: self.agent_app_id()?,
+                parent_run_id: params.parent_run_id,
+                spec: params.spec,
+                messages: params.messages,
+            },
+        )
+    }
+    pub(crate) fn agent_children(&self, params: &Value) -> ApiResult {
+        self.agent_permission()?;
+        let params: AgentRunParams = parse_params(params)?;
+        self.daemon_agent(
+            "agent-children",
+            crate::daemon::ControlCommand::AgentChildren {
+                app_id: self.agent_app_id()?,
+                parent_run_id: params.run_id,
             },
         )
     }

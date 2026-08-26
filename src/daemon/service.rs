@@ -587,6 +587,12 @@ impl DaemonService {
                 spec,
                 messages,
             } => self.agent_create(&app_id, spec, messages),
+            ControlCommand::AgentSpawnChild { app_id, parent_run_id, spec, messages } => {
+                self.agent_spawn_child(&app_id, &parent_run_id, spec, messages)
+            }
+            ControlCommand::AgentChildren { app_id, parent_run_id } => {
+                self.agent_children(&app_id, &parent_run_id)
+            }
             ControlCommand::AgentStart {
                 app_id,
                 run_id,
@@ -2482,6 +2488,33 @@ impl DaemonService {
                 serde_json::to_value(run)
                     .map_err(|error| crate::agent::AgentError::Invalid(error.to_string()))
             })
+            .map_err(|error| error.to_string())
+    }
+
+    fn agent_spawn_child(
+        &self,
+        app_id: &str,
+        parent_run_id: &str,
+        spec: crate::agent::AgentSpec,
+        messages: Vec<serde_json::Value>,
+    ) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .spawn_child(app_id, parent_run_id, spec, messages)
+            .and_then(|run| {
+                serde_json::to_value(run)
+                    .map_err(|error| crate::agent::AgentError::Invalid(error.to_string()))
+            })
+            .map_err(|error| error.to_string())
+    }
+
+    fn agent_children(
+        &self,
+        app_id: &str,
+        parent_run_id: &str,
+    ) -> Result<serde_json::Value, String> {
+        self.agent_manager()?
+            .children(app_id, parent_run_id)
+            .map(|runs| json!({"runs": runs}))
             .map_err(|error| error.to_string())
     }
 

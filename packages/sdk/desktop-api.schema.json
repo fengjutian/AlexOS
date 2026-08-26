@@ -185,6 +185,8 @@
       "model.secretDelete",
       "model.secretExists",
       "agent.create",
+      "agent.spawnChild",
+      "agent.children",
       "agent.start",
       "agent.pause",
       "agent.resume",
@@ -2728,6 +2730,14 @@
     "agent.create": {
       "params": { "type": "object", "properties": { "spec": { "$ref": "#/$defs/AgentSpec" }, "messages": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["spec"], "additionalProperties": false },
       "result": { "$ref": "#/$defs/JsonValue" }
+    },
+    "agent.spawnChild": {
+      "params": { "type": "object", "properties": { "parentRunId": { "type": "string", "minLength": 1 }, "spec": { "$ref": "#/$defs/AgentSpec" }, "messages": { "type": "array", "maxItems": 256, "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["parentRunId", "spec"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/JsonValue" }
+    },
+    "agent.children": {
+      "params": { "$ref": "#/$defs/AgentRunId" },
+      "result": { "type": "object", "properties": { "runs": { "type": "array", "items": { "$ref": "#/$defs/JsonValue" } } }, "required": ["runs"], "additionalProperties": false }
     },
     "agent.start": {
       "params": { "$ref": "#/$defs/AgentRunId" },

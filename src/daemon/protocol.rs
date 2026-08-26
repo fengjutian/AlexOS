@@ -338,6 +338,17 @@ pub enum ControlCommand {
         #[serde(default)]
         messages: Vec<Value>,
     },
+    AgentSpawnChild {
+        app_id: String,
+        parent_run_id: String,
+        spec: crate::agent::AgentSpec,
+        #[serde(default)]
+        messages: Vec<Value>,
+    },
+    AgentChildren {
+        app_id: String,
+        parent_run_id: String,
+    },
     AgentStart {
         app_id: String,
         run_id: String,

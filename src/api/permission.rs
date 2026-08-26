@@ -170,7 +170,7 @@ impl Permission {
             | "model.secretExists" => Some("model.manage"),
             "agent.create" | "agent.start" | "agent.pause" | "agent.resume" | "agent.cancel"
             | "agent.status" | "agent.list" | "agent.approve" | "agent.deny" | "agent.history"
-            | "agent.timeline" => Some("agent.run"),
+            | "agent.timeline" | "agent.spawnChild" | "agent.children" => Some("agent.run"),
             "media.camera" => Some("media.camera"),
             "media.microphone" => Some("media.microphone"),
             "geolocation" => Some("geolocation"),

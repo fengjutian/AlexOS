@@ -487,7 +487,7 @@ export interface AgentBudget { maxSteps?: number; maxTokens?: number; maxToolCal
 export interface AgentToolSpec { binding: string; name: string; idempotent?: boolean; requireApproval?: boolean; }
 export interface AgentSpec { model: string; systemPrompt?: string; tools?: AgentToolSpec[]; budget?: AgentBudget; }
 export type AgentState = "queued" | "running" | "waiting-approval" | "waiting-tool" | "paused" | "completed" | "failed" | "cancelled";
-export interface AgentRun { id: string; application: string; generation: number; state: AgentState; step: number; spec: AgentSpec; usage: { inputTokens: number; outputTokens: number; toolCalls: number; costMicros: number; contextCompactions: number }; messages: unknown[]; createdAtMs: number; updatedAtMs: number; startedAtMs?: number; lastError?: string; }
+export interface AgentRun { id: string; application: string; generation: number; state: AgentState; step: number; spec: AgentSpec; usage: { inputTokens: number; outputTokens: number; toolCalls: number; costMicros: number; contextCompactions: number }; messages: unknown[]; createdAtMs: number; updatedAtMs: number; startedAtMs?: number; lastError?: string; parentRunId?: string; childRunIds: string[]; }
 export type AgentEvent =
   | { type: "state"; state: AgentState; generation: number }
   | { type: "modelDelta"; text: string }
@@ -495,6 +495,7 @@ export type AgentEvent =
   | { type: "toolResult"; binding: string; name: string; result: unknown }
   | { type: "usage"; usage: AgentRun["usage"] }
   | { type: "contextCompacted"; removedMessages: number; estimatedTokensBefore: number; estimatedTokensAfter: number }
+  | { type: "childSpawned"; childRunId: string }
   | { type: "checkpoint"; step: number }
   | { type: "error"; code: string; message: string };
 export interface AgentTimelineEntry { sequence: number; timestampMs: number; generation: number; step: number; event: AgentEvent; }
@@ -620,6 +621,8 @@ export interface AlexClient {
   };
   readonly agent: {
     create(spec: AgentSpec, messages?: unknown[], options?: InvokeOptions): Promise<AgentRun>;
+    spawnChild(parentRunId: string, spec: AgentSpec, messages?: unknown[], options?: InvokeOptions): Promise<AgentRun>;
+    children(runId: string, options?: InvokeOptions): Promise<AgentRun[]>;
     start(runId: string, options?: StreamOptions): AsyncIterable<AgentEvent>;
     pause(runId: string, options?: InvokeOptions): Promise<AgentRun>;
     resume(runId: string, options?: InvokeOptions): Promise<AgentRun>;

@@ -123,6 +123,8 @@ pub struct AgentToolSpec {
     pub idempotent: bool,
     #[serde(default)]
     pub require_approval: bool,
+    #[serde(default)]
+    pub depends_on: Vec<String>,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
@@ -383,10 +385,17 @@ impl AgentManager {
         initial_messages: Vec<Value>,
     ) -> Result<AgentRun, AgentError> {
         let gate = self.run_gate(parent_run_id)?;
-        let _guard = gate.lock().map_err(|_| AgentError::Conflict("parent run lock poisoned".into()))?;
+        let _guard = gate
+            .lock()
+            .map_err(|_| AgentError::Conflict("parent run lock poisoned".into()))?;
         let mut parent = self.status(application, parent_run_id)?;
-        if matches!(parent.state, AgentState::Completed | AgentState::Failed | AgentState::Cancelled) {
-            return Err(AgentError::Conflict("terminal run cannot spawn a child".into()));
+        if matches!(
+            parent.state,
+            AgentState::Completed | AgentState::Failed | AgentState::Cancelled
+        ) {
+            return Err(AgentError::Conflict(
+                "terminal run cannot spawn a child".into(),
+            ));
         }
         if parent.child_run_ids.len() >= 64 {
             return Err(AgentError::Budget("maximum child runs reached".into()));
@@ -397,13 +406,26 @@ impl AgentManager {
         parent.child_run_ids.push(child.id.clone());
         parent.updated_at_ms = now_ms();
         self.save(&parent)?;
-        self.append_event(&parent, &AgentEvent::ChildSpawned { child_run_id: child.id.clone() })?;
+        self.append_event(
+            &parent,
+            &AgentEvent::ChildSpawned {
+                child_run_id: child.id.clone(),
+            },
+        )?;
         Ok(child)
     }
 
-    pub fn children(&self, application: &str, parent_run_id: &str) -> Result<Vec<AgentRun>, AgentError> {
+    pub fn children(
+        &self,
+        application: &str,
+        parent_run_id: &str,
+    ) -> Result<Vec<AgentRun>, AgentError> {
         let parent = self.status(application, parent_run_id)?;
-        parent.child_run_ids.iter().map(|id| self.status(application, id)).collect()
+        parent
+            .child_run_ids
+            .iter()
+            .map(|id| self.status(application, id))
+            .collect()
     }
 
     pub fn status(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
@@ -652,7 +674,7 @@ impl AgentManager {
                 options: json!({"tools":run.spec.tools}),
             };
             let mut generated = String::new();
-            let mut tool_call: Option<(String, Value)> = None;
+            let mut tool_calls: Vec<(String, Value)> = Vec::new();
             let mut saw_finish = false;
             let input_rate = run.spec.budget.input_cost_micros_per_million;
             let output_rate = run.spec.budget.output_cost_micros_per_million;
@@ -669,11 +691,12 @@ impl AgentManager {
                             })?;
                         }
                         crate::model::GenerateEvent::ToolCall { name, arguments } => {
-                            if tool_call.replace((name, arguments)).is_some() {
+                            if tool_calls.len() >= 32 {
                                 return Err(crate::model::ModelError::Worker(
-                                    "multiple tool calls per agent step are unsupported".into(),
+                                    "too many parallel tool calls in one agent step".into(),
                                 ));
                             }
+                            tool_calls.push((name, arguments));
                         }
                         crate::model::GenerateEvent::Usage {
                             input_tokens,
@@ -703,17 +726,21 @@ impl AgentManager {
             emit(AgentEvent::Usage {
                 usage: run.usage.clone(),
             })?;
-            if let Some((qualified, arguments)) = tool_call {
-                let spec = resolve_tool(&run.spec.tools, &qualified)?;
-                let call = PendingToolCall {
-                    binding: spec.binding.clone(),
-                    name: spec.name.clone(),
-                    arguments,
-                    idempotency_key: format!("{}:{}:{}", run.id, run.generation, run.step),
-                    idempotent: spec.idempotent,
-                    approved: !spec.require_approval && spec.idempotent,
-                    attempted: false,
-                };
+            if !tool_calls.is_empty() {
+                let calls = tool_calls.into_iter().enumerate().map(|(index, (qualified, arguments))| {
+                    let spec = resolve_tool(&run.spec.tools, &qualified)?;
+                    Ok(PendingToolCall {
+                        binding: spec.binding.clone(), name: spec.name.clone(), arguments,
+                        idempotency_key: format!("{}:{}:{}:{}", run.id, run.generation, run.step, index),
+                        idempotent: spec.idempotent, approved: !spec.require_approval && spec.idempotent,
+                        attempted: false,
+                    })
+                }).collect::<Result<Vec<_>, AgentError>>()?;
+                if calls.len() > 1 {
+                    self.execute_parallel_calls(application, &mut run, calls, cancellation, emit)?;
+                    continue;
+                }
+                let call = calls.into_iter().next().expect("non-empty tool calls");
                 let requires_approval = !call.approved;
                 run.pending_tool = Some(call.clone());
                 if requires_approval {
@@ -736,6 +763,50 @@ impl AgentManager {
                 emit,
             );
         }
+    }
+
+    fn invoke_tool(&self, application: &str, call: &PendingToolCall) -> Result<Value, AgentError> {
+        if call.binding == "alex" {
+            self.native_tools.as_ref().ok_or_else(|| AgentError::Tool("Alex native tools are unavailable".into()))?
+                .call(application, &call.name, &call.arguments, &call.idempotency_key)
+        } else {
+            let result = self.mcp.get(application, &call.binding)
+                .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
+                .map_err(|error| AgentError::Tool(error.to_string()))?;
+            serde_json::to_value(result).map_err(|error| AgentError::Tool(error.to_string()))
+        }
+    }
+
+    fn execute_parallel_calls(
+        &self,
+        application: &str,
+        run: &mut AgentRun,
+        calls: Vec<PendingToolCall>,
+        cancellation: &AtomicBool,
+        emit: &mut dyn FnMut(AgentEvent) -> Result<(), AgentError>,
+    ) -> Result<(), AgentError> {
+        if calls.iter().any(|call| !call.approved || !call.idempotent) {
+            return Err(AgentError::Conflict("parallel tool batches must be idempotent and pre-approved".into()));
+        }
+        let waves = parallel_tool_waves(&run.spec.tools, calls)?;
+        for wave in waves {
+            if cancellation.load(Ordering::Acquire) { return Err(AgentError::Conflict("agent cancelled before parallel tool wave".into())); }
+            let results = std::thread::scope(|scope| {
+                let handles = wave.iter().map(|call| scope.spawn(|| self.invoke_tool(application, call))).collect::<Vec<_>>();
+                handles.into_iter().map(|handle| handle.join().map_err(|_| AgentError::Tool("parallel tool worker panicked".into()))?).collect::<Result<Vec<_>, AgentError>>()
+            })?;
+            for (call, value) in wave.into_iter().zip(results) {
+                run.usage.tool_calls = run.usage.tool_calls.saturating_add(1);
+                let qualified = format!("{}/{}", call.binding, call.name);
+                let cost = run.spec.budget.tool_cost_micros.get(&qualified).or_else(|| run.spec.budget.tool_cost_micros.get(&call.name)).copied().unwrap_or(0);
+                run.usage.cost_micros = run.usage.cost_micros.saturating_add(cost);
+                run.messages.push(json!({"role":"tool","name":call.name,"content":value,"idempotencyKey":call.idempotency_key}));
+                emit(AgentEvent::ToolResult { binding: call.binding, name: call.name, result: value })?;
+            }
+            self.check_budget(run)?;
+            self.checkpoint(run, emit)?;
+        }
+        Ok(())
     }
 
     pub fn approve(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
@@ -1525,6 +1596,50 @@ mod tests {
         assert!(
             matches!(manager.check_budget(&run), Err(AgentError::Budget(message)) if message.contains("cost"))
         );
+    }
+
+    #[test]
+    fn child_runs_are_bidirectionally_persisted_and_isolated() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = runtime(&temp);
+        let spec = AgentSpec {
+            model: "local/test@1".into(),
+            system_prompt: None,
+            tools: vec![],
+            budget: AgentBudget::default(),
+        };
+        let parent = manager
+            .create("com.example.app", spec.clone(), vec![])
+            .unwrap();
+        let child = manager
+            .spawn_child(
+                "com.example.app",
+                &parent.id,
+                spec.clone(),
+                vec![json!({"role":"user","content":"subtask"})],
+            )
+            .unwrap();
+        assert_eq!(child.parent_run_id.as_deref(), Some(parent.id.as_str()));
+        assert_eq!(
+            manager
+                .status("com.example.app", &parent.id)
+                .unwrap()
+                .child_run_ids,
+            vec![child.id.clone()]
+        );
+        assert_eq!(
+            manager.children("com.example.app", &parent.id).unwrap()[0].id,
+            child.id
+        );
+        assert!(matches!(
+            manager.children("com.other.app", &parent.id),
+            Err(AgentError::NotFound(_))
+        ));
+        manager.cancel("com.example.app", &parent.id).unwrap();
+        assert!(matches!(
+            manager.spawn_child("com.example.app", &parent.id, spec, vec![]),
+            Err(AgentError::Conflict(_))
+        ));
     }
 
     #[test]

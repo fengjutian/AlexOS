@@ -135,6 +135,8 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "model.secretDelete" => router.model_secret_delete(p),
         "model.secretExists" => router.model_secret_exists(p),
         "agent.create" => router.agent_create(p),
+        "agent.spawnChild" => router.agent_spawn_child(p),
+        "agent.children" => router.agent_children(p),
         "agent.start" => router.agent_start(&request.id, p),
         "agent.pause" => router.agent_action(p, "pause"),
         "agent.resume" => router.agent_action(p, "resume"),

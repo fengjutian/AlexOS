@@ -121,6 +121,8 @@ export type AlexCapability =
   | "model.secretDelete"
   | "model.secretExists"
   | "agent.create"
+  | "agent.spawnChild"
+  | "agent.children"
   | "agent.start"
   | "agent.pause"
   | "agent.resume"
@@ -263,6 +265,8 @@ export interface AlexMethodMap {
   "model.secretDelete": { params: SecretRef; result: { "deleted": boolean } };
   "model.secretExists": { params: SecretRef; result: { "exists": boolean } };
   "agent.create": { params: { "spec": AgentSpec; "messages"?: Array<JsonValue> }; result: JsonValue };
+  "agent.spawnChild": { params: { "parentRunId": string; "spec": AgentSpec; "messages"?: Array<JsonValue> }; result: JsonValue };
+  "agent.children": { params: AgentRunId; result: { "runs": Array<JsonValue> } };
   "agent.start": { params: AgentRunId; result: { "runId": string; "streamId": string } };
   "agent.pause": { params: AgentRunId; result: JsonValue };
   "agent.resume": { params: AgentRunId; result: JsonValue };

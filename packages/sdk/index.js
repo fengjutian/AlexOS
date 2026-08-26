@@ -359,6 +359,8 @@ export function createAlexClient(transport = browserTransport()) {
     }),
     agent: Object.freeze({
       create(spec, messages = [], options) { return invoke("agent.create", { spec, messages }, options); },
+      spawnChild(parentRunId, spec, messages = [], options) { return invoke("agent.spawnChild", { parentRunId, spec, messages }, options); },
+      async children(runId, options) { const result = await invoke("agent.children", { runId }, options); return result.runs ?? []; },
       async *start(runId, options) {
         const decoder = new TextDecoder();
         for await (const chunk of stream("agent.start", { runId }, options)) yield JSON.parse(decoder.decode(chunk));
