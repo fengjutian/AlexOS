@@ -456,34 +456,7 @@ impl ApplicationManifestV2 {
                 )));
             }
             if let Some(resources) = &service.resources {
-                if let Some(mem) = resources.memory_mb
-                    && mem == 0
-                {
-                    return Err(validation(format!(
-                        "service {name} resources.memoryMb must be > 0"
-                    )));
-                }
-                if let Some(cpu) = resources.cpu_percent
-                    && !(1..=100).contains(&cpu)
-                {
-                    return Err(validation(format!(
-                        "service {name} resources.cpuPercent must be in 0..=100, got {cpu}"
-                    )));
-                }
-                if let Some(processes) = resources.processes
-                    && processes == 0
-                {
-                    return Err(validation(format!(
-                        "service {name} resources.processes must be > 0"
-                    )));
-                }
-                if let Some(quota) = resources.data_quota_mb
-                    && quota == 0
-                {
-                    return Err(validation(format!(
-                        "service {name} resources.dataQuotaMb must be > 0"
-                    )));
-                }
+                validate_resources(resources, &format!("service {name}"))?;
             }
             for dependency in &service.depends_on {
                 if !self.services.contains_key(dependency) {
@@ -590,8 +563,9 @@ fn validate_resources(resources: &ServiceResources, label: &str) -> Result<(), M
     if resources
         .cpu_percent
         .is_some_and(|cpu| !(1..=100).contains(&cpu))
+    {
         return Err(validation(format!(
-            "{label} resources.cpuPercent must be in 0..=100"
+            "{label} resources.cpuPercent must be in 1..=100"
         )));
     }
     if resources.processes == Some(0) {
@@ -867,6 +841,26 @@ services:
     command: server/index.js
     resources:
       cpuPercent: 120
+"#,
+        )
+        .unwrap();
+        let error = load(temp.path()).unwrap_err().to_string();
+        assert!(error.contains("cpuPercent"), "unexpected error: {error}");
+
+        std::fs::write(
+            temp.path().join("app.yaml"),
+            r#"
+schemaVersion: 2
+id: com.example.badquota
+name: badquota
+version: 1.0.0
+runtime: { node: "22" }
+services:
+  api:
+    runtime: node
+    command: server/index.js
+    resources:
+      cpuPercent: 0
 "#,
         )
         .unwrap();

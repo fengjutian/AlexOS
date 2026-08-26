@@ -240,7 +240,8 @@ capabilities 明确报告，不能静默降级。
   [`native-worker-protocol.md`](./native-worker-protocol.md)；Manifest v2 的 `nativeWorkers`
   绑定、描述符及包内入口校验已经接线；Daemon 已持有应用隔离的 Worker Manager 和生命周期
   清理，并开放 start/invoke/status/stop Named Pipe 命令；Windows Job Object 已强制进程树回收、
-  `memoryMb` 与 `processes`，待完成 CPU rate、数据配额及更强的 Restricted Token/AppContainer；
+  `memoryMb`、`processes` 与 `cpuPercent` HARD_CAP，待完成数据配额及更强的 Restricted
+  Token/AppContainer；
 - 稳定 ABI 或独立进程协议；
 - 内存和资源所有权；
 - 崩溃隔离；

@@ -172,12 +172,12 @@ struct JobHandle {
 impl JobHandle {
     fn new(limits: &ResourceLimits) -> Result<Self, IsolationError> {
         use windows::Win32::System::JobObjects::{
-            CreateJobObjectW, JOB_OBJECT_LIMIT_ACTIVE_PROCESS, JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE,
-            JOB_OBJECT_LIMIT_PROCESS_MEMORY, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
-            JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION,
-            JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0, JOBOBJECT_EXTENDED_LIMIT_INFORMATION,
-            JobObjectCpuRateControlInformation, JobObjectExtendedLimitInformation,
-            SetInformationJobObject,
+            CreateJobObjectW, JOB_OBJECT_CPU_RATE_CONTROL_ENABLE,
+            JOB_OBJECT_CPU_RATE_CONTROL_HARD_CAP, JOB_OBJECT_LIMIT_ACTIVE_PROCESS,
+            JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE, JOB_OBJECT_LIMIT_PROCESS_MEMORY,
+            JOBOBJECT_CPU_RATE_CONTROL_INFORMATION, JOBOBJECT_CPU_RATE_CONTROL_INFORMATION_0,
+            JOBOBJECT_EXTENDED_LIMIT_INFORMATION, JobObjectCpuRateControlInformation,
+            JobObjectExtendedLimitInformation, SetInformationJobObject,
         };
         use windows::core::PCWSTR;
 
@@ -1010,6 +1010,23 @@ mod tests {
     fn job_provider_reports_its_level() {
         let p = WindowsJobProvider;
         assert_eq!(p.level(), IsolationLevel::Job);
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn job_object_accepts_cpu_hard_cap_and_rejects_zero() {
+        let limits = ResourceLimits {
+            cpu_percent: Some(25),
+            ..Default::default()
+        };
+        let handle = JobHandle::new(&limits).expect("25% CPU hard cap should be accepted");
+        drop(handle);
+
+        let invalid = ResourceLimits {
+            cpu_percent: Some(0),
+            ..Default::default()
+        };
+        assert!(JobHandle::new(&invalid).is_err());
     }
 
     #[test]
