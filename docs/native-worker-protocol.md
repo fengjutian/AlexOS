@@ -62,6 +62,7 @@ nativeWorkers:
 
 ## 尚未接线
 
-Daemon 生命周期控制、签名安装、能力授权、流式事件、主动取消，以及 Windows Job Object
-的 CPU/内存/进程树强制仍属于后续切片。模型推理 Worker 继续使用其专用协议，不由本通用
-协议替换。
+Daemon 已持有按 `(application, binding)` 隔离的 Worker Manager，支持启动、调用、状态、
+停止、按应用清理和 shutdown 全量清理；调用方法必须精确匹配描述符声明的 capability。
+Named Pipe 控制命令、签名安装、流式事件、主动取消，以及 Windows Job Object 的
+CPU/内存/进程树强制仍属于后续切片。模型推理 Worker 继续使用其专用协议，不由本通用协议替换。

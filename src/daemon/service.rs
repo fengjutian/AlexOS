@@ -188,6 +188,7 @@ pub struct DaemonService {
     models: Option<crate::model::ModelManager>,
     model_downloads: Option<crate::model::download_tasks::ModelDownloadManager>,
     worker_packages: Option<crate::model::worker_packages::WorkerPackageStore>,
+    native_workers: crate::native_worker::NativeWorkerManager,
     agents: Option<crate::agent::AgentManager>,
     agent_scheduler: Option<Arc<crate::agent::AgentScheduler>>,
 }
@@ -212,9 +213,53 @@ impl DaemonService {
             models: None,
             model_downloads: None,
             worker_packages: None,
+            native_workers: crate::native_worker::NativeWorkerManager::default(),
             agents: None,
             agent_scheduler: None,
         }
+    }
+
+    pub fn native_worker_start(
+        &self,
+        application: &crate::core::application_manifest::ResolvedApplication,
+        package_root: &std::path::Path,
+        binding: &str,
+    ) -> Result<crate::native_worker::NativeWorkerStatus, String> {
+        let spec = application
+            .native_workers
+            .get(binding)
+            .ok_or_else(|| format!("unknown native worker binding {binding:?}"))?;
+        self.native_workers
+            .start(&application.id, binding, package_root, spec)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn native_worker_invoke(
+        &self,
+        application: &str,
+        binding: &str,
+        method: &str,
+        params: serde_json::Value,
+        timeout: std::time::Duration,
+    ) -> Result<serde_json::Value, String> {
+        self.native_workers
+            .invoke(application, binding, method, params, timeout)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn native_worker_status(
+        &self,
+        application: &str,
+    ) -> Result<Vec<crate::native_worker::NativeWorkerStatus>, String> {
+        self.native_workers
+            .list(application)
+            .map_err(|error| error.to_string())
+    }
+
+    pub fn native_worker_stop(&self, application: &str, binding: &str) -> Result<(), String> {
+        self.native_workers
+            .stop(application, binding)
+            .map_err(|error| error.to_string())
     }
 
     pub fn with_ai_root(mut self, root: &std::path::Path) -> Result<Self, String> {
@@ -842,8 +887,12 @@ impl DaemonService {
     }
 
     fn shutdown(&self) -> Result<serde_json::Value, String> {
+        let native_workers = self
+            .native_workers
+            .stop_all()
+            .map_err(|error| error.to_string())?;
         let Some(manager) = &self.manager else {
-            return Ok(json!({ "stopped": [], "errors": [] }));
+            return Ok(json!({ "stopped": [], "nativeWorkers": native_workers, "errors": [] }));
         };
         let applications = manager.list_apps().map_err(|error| error.to_string())?;
         let mut stopped = Vec::new();
@@ -857,7 +906,7 @@ impl DaemonService {
                 })),
             }
         }
-        Ok(json!({ "stopped": stopped, "errors": errors }))
+        Ok(json!({ "stopped": stopped, "nativeWorkers": native_workers, "errors": errors }))
     }
 
     fn start(&self, app_id: &str) -> Result<serde_json::Value, String> {
@@ -873,6 +922,9 @@ impl DaemonService {
     }
 
     fn stop(&self, app_id: &str) -> Result<serde_json::Value, String> {
+        self.native_workers
+            .stop_application(app_id)
+            .map_err(|error| error.to_string())?;
         if let Some(manager) = &self.manager {
             manager.get_app(app_id).map_err(|error| error.to_string())?;
             let status = manager.stop(app_id).map_err(|error| error.to_string())?;

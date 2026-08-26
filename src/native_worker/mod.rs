@@ -7,11 +7,13 @@
 //! the runtime/container supervisor.
 
 use std::{
+    collections::BTreeMap,
     fs,
     io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
     sync::mpsc::{self, Receiver, RecvTimeoutError},
+    sync::{Arc, Mutex},
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -76,6 +78,236 @@ pub enum NativeWorkerError {
     Timeout(Duration),
     #[error("native worker returned {code}: {message}")]
     Remote { code: String, message: String },
+    #[error("native worker {application}/{binding} is already running")]
+    AlreadyRunning {
+        application: String,
+        binding: String,
+    },
+    #[error("native worker {application}/{binding} is not running")]
+    NotRunning {
+        application: String,
+        binding: String,
+    },
+    #[error("native worker capability {method:?} is not declared by {application}/{binding}")]
+    CapabilityDenied {
+        application: String,
+        binding: String,
+        method: String,
+    },
+    #[error("native worker manager lock poisoned")]
+    LockPoisoned,
+}
+
+#[derive(Debug, Clone, Serialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct NativeWorkerStatus {
+    pub application: String,
+    pub binding: String,
+    pub worker_id: String,
+    pub pid: u32,
+    pub running: bool,
+    pub capabilities: Vec<String>,
+    pub resources: Option<crate::manifest_v2::ServiceResources>,
+}
+
+struct ManagedWorker {
+    descriptor: NativeWorkerDescriptor,
+    resources: Option<crate::manifest_v2::ServiceResources>,
+    process: NativeWorkerProcess,
+}
+
+type WorkerKey = (String, String);
+type WorkerSlot = Arc<Mutex<ManagedWorker>>;
+
+/// Daemon-owned registry of generic native workers. Registry lookup is scoped
+/// by `(application, binding)` and each process has its own lock, so a slow
+/// worker does not block calls to unrelated applications.
+#[derive(Clone, Default)]
+pub struct NativeWorkerManager {
+    workers: Arc<Mutex<BTreeMap<WorkerKey, WorkerSlot>>>,
+}
+
+impl NativeWorkerManager {
+    pub fn start(
+        &self,
+        application: &str,
+        binding: &str,
+        package_root: &Path,
+        spec: &crate::manifest_v2::NativeWorkerSpec,
+    ) -> Result<NativeWorkerStatus, NativeWorkerError> {
+        validate_identifier("application", application)?;
+        validate_identifier("binding", binding)?;
+        let key = (application.to_owned(), binding.to_owned());
+        let mut workers = self
+            .workers
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?;
+        if workers.contains_key(&key) {
+            return Err(NativeWorkerError::AlreadyRunning {
+                application: application.into(),
+                binding: binding.into(),
+            });
+        }
+        let descriptor = load_descriptor(&package_root.join(&spec.descriptor))?;
+        let process = NativeWorkerProcess::spawn(package_root, &descriptor)?;
+        let slot = Arc::new(Mutex::new(ManagedWorker {
+            descriptor,
+            resources: spec.resources.clone(),
+            process,
+        }));
+        let status = {
+            let mut worker = slot.lock().map_err(|_| NativeWorkerError::LockPoisoned)?;
+            status_for(application, binding, &mut worker)?
+        };
+        workers.insert(key, slot);
+        Ok(status)
+    }
+
+    pub fn invoke(
+        &self,
+        application: &str,
+        binding: &str,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, NativeWorkerError> {
+        let slot = self.slot(application, binding)?;
+        let mut worker = slot.lock().map_err(|_| NativeWorkerError::LockPoisoned)?;
+        if !worker
+            .descriptor
+            .capabilities
+            .iter()
+            .any(|value| value == method)
+        {
+            return Err(NativeWorkerError::CapabilityDenied {
+                application: application.into(),
+                binding: binding.into(),
+                method: method.into(),
+            });
+        }
+        worker.process.invoke_timeout(method, params, timeout)
+    }
+
+    pub fn status(
+        &self,
+        application: &str,
+        binding: &str,
+    ) -> Result<NativeWorkerStatus, NativeWorkerError> {
+        let slot = self.slot(application, binding)?;
+        let mut worker = slot.lock().map_err(|_| NativeWorkerError::LockPoisoned)?;
+        status_for(application, binding, &mut worker)
+    }
+
+    pub fn list(&self, application: &str) -> Result<Vec<NativeWorkerStatus>, NativeWorkerError> {
+        let slots: Vec<(String, WorkerSlot)> = self
+            .workers
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .iter()
+            .filter(|((owner, _), _)| owner == application)
+            .map(|((_, binding), slot)| (binding.clone(), Arc::clone(slot)))
+            .collect();
+        slots
+            .into_iter()
+            .map(|(binding, slot)| {
+                let mut worker = slot.lock().map_err(|_| NativeWorkerError::LockPoisoned)?;
+                status_for(application, &binding, &mut worker)
+            })
+            .collect()
+    }
+
+    pub fn stop(&self, application: &str, binding: &str) -> Result<(), NativeWorkerError> {
+        let key = (application.to_owned(), binding.to_owned());
+        let removed = self
+            .workers
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .remove(&key);
+        if removed.is_none() {
+            return Err(NativeWorkerError::NotRunning {
+                application: application.into(),
+                binding: binding.into(),
+            });
+        }
+        if let Some(slot) = removed {
+            slot.lock()
+                .map_err(|_| NativeWorkerError::LockPoisoned)?
+                .process
+                .terminate();
+        }
+        Ok(())
+    }
+
+    pub fn stop_application(&self, application: &str) -> Result<usize, NativeWorkerError> {
+        let removed = {
+            let mut workers = self
+                .workers
+                .lock()
+                .map_err(|_| NativeWorkerError::LockPoisoned)?;
+            let keys: Vec<_> = workers
+                .keys()
+                .filter(|(owner, _)| owner == application)
+                .cloned()
+                .collect();
+            keys.into_iter()
+                .filter_map(|key| workers.remove(&key))
+                .collect::<Vec<_>>()
+        };
+        let count = removed.len();
+        terminate_slots(removed)?;
+        Ok(count)
+    }
+
+    pub fn stop_all(&self) -> Result<usize, NativeWorkerError> {
+        let removed = {
+            let mut workers = self
+                .workers
+                .lock()
+                .map_err(|_| NativeWorkerError::LockPoisoned)?;
+            std::mem::take(&mut *workers)
+        };
+        let count = removed.len();
+        terminate_slots(removed.into_values().collect())?;
+        Ok(count)
+    }
+
+    fn slot(&self, application: &str, binding: &str) -> Result<WorkerSlot, NativeWorkerError> {
+        self.workers
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .get(&(application.to_owned(), binding.to_owned()))
+            .cloned()
+            .ok_or_else(|| NativeWorkerError::NotRunning {
+                application: application.into(),
+                binding: binding.into(),
+            })
+    }
+}
+
+fn terminate_slots(slots: Vec<WorkerSlot>) -> Result<(), NativeWorkerError> {
+    for slot in slots {
+        slot.lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .process
+            .terminate();
+    }
+    Ok(())
+}
+
+fn status_for(
+    application: &str,
+    binding: &str,
+    worker: &mut ManagedWorker,
+) -> Result<NativeWorkerStatus, NativeWorkerError> {
+    Ok(NativeWorkerStatus {
+        application: application.into(),
+        binding: binding.into(),
+        worker_id: worker.descriptor.id.clone(),
+        pid: worker.process.pid(),
+        running: worker.process.is_running()?,
+        capabilities: worker.descriptor.capabilities.clone(),
+        resources: worker.resources.clone(),
+    })
 }
 
 impl NativeWorkerDescriptor {
@@ -377,5 +609,18 @@ mod tests {
             }),
         };
         assert!(validate_response(ambiguous, "native-1").is_err());
+    }
+
+    #[test]
+    fn manager_scopes_missing_bindings_by_application() {
+        let manager = NativeWorkerManager::default();
+        let error = manager.status("com.example.one", "image").unwrap_err();
+        assert!(matches!(
+            error,
+            NativeWorkerError::NotRunning { application, binding }
+                if application == "com.example.one" && binding == "image"
+        ));
+        assert_eq!(manager.stop_application("com.example.one").unwrap(), 0);
+        assert!(manager.list("com.example.two").unwrap().is_empty());
     }
 }
