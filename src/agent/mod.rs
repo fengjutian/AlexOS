@@ -1,7 +1,7 @@
 //! Daemon-owned persistent Agent Runtime.
 
 use std::{
-    collections::BTreeMap,
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::Write,
     path::{Path, PathBuf},
@@ -727,15 +727,25 @@ impl AgentManager {
                 usage: run.usage.clone(),
             })?;
             if !tool_calls.is_empty() {
-                let calls = tool_calls.into_iter().enumerate().map(|(index, (qualified, arguments))| {
-                    let spec = resolve_tool(&run.spec.tools, &qualified)?;
-                    Ok(PendingToolCall {
-                        binding: spec.binding.clone(), name: spec.name.clone(), arguments,
-                        idempotency_key: format!("{}:{}:{}:{}", run.id, run.generation, run.step, index),
-                        idempotent: spec.idempotent, approved: !spec.require_approval && spec.idempotent,
-                        attempted: false,
+                let calls = tool_calls
+                    .into_iter()
+                    .enumerate()
+                    .map(|(index, (qualified, arguments))| {
+                        let spec = resolve_tool(&run.spec.tools, &qualified)?;
+                        Ok(PendingToolCall {
+                            binding: spec.binding.clone(),
+                            name: spec.name.clone(),
+                            arguments,
+                            idempotency_key: format!(
+                                "{}:{}:{}:{}",
+                                run.id, run.generation, run.step, index
+                            ),
+                            idempotent: spec.idempotent,
+                            approved: !spec.require_approval && spec.idempotent,
+                            attempted: false,
+                        })
                     })
-                }).collect::<Result<Vec<_>, AgentError>>()?;
+                    .collect::<Result<Vec<_>, AgentError>>()?;
                 if calls.len() > 1 {
                     self.execute_parallel_calls(application, &mut run, calls, cancellation, emit)?;
                     continue;
@@ -767,10 +777,19 @@ impl AgentManager {
 
     fn invoke_tool(&self, application: &str, call: &PendingToolCall) -> Result<Value, AgentError> {
         if call.binding == "alex" {
-            self.native_tools.as_ref().ok_or_else(|| AgentError::Tool("Alex native tools are unavailable".into()))?
-                .call(application, &call.name, &call.arguments, &call.idempotency_key)
+            self.native_tools
+                .as_ref()
+                .ok_or_else(|| AgentError::Tool("Alex native tools are unavailable".into()))?
+                .call(
+                    application,
+                    &call.name,
+                    &call.arguments,
+                    &call.idempotency_key,
+                )
         } else {
-            let result = self.mcp.get(application, &call.binding)
+            let result = self
+                .mcp
+                .get(application, &call.binding)
                 .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
                 .map_err(|error| AgentError::Tool(error.to_string()))?;
             serde_json::to_value(result).map_err(|error| AgentError::Tool(error.to_string()))
@@ -786,22 +805,73 @@ impl AgentManager {
         emit: &mut dyn FnMut(AgentEvent) -> Result<(), AgentError>,
     ) -> Result<(), AgentError> {
         if calls.iter().any(|call| !call.approved || !call.idempotent) {
-            return Err(AgentError::Conflict("parallel tool batches must be idempotent and pre-approved".into()));
+            return Err(AgentError::Conflict(
+                "parallel tool batches must be idempotent and pre-approved".into(),
+            ));
+        }
+        if run.usage.tool_calls.saturating_add(calls.len() as u32) > run.spec.budget.max_tool_calls
+        {
+            return Err(AgentError::Budget(
+                "parallel tool batch exceeds remaining tool-call budget".into(),
+            ));
+        }
+        let batch_cost = calls
+            .iter()
+            .map(|call| {
+                let qualified = format!("{}/{}", call.binding, call.name);
+                run.spec
+                    .budget
+                    .tool_cost_micros
+                    .get(&qualified)
+                    .or_else(|| run.spec.budget.tool_cost_micros.get(&call.name))
+                    .copied()
+                    .unwrap_or(0)
+            })
+            .fold(0u64, u64::saturating_add);
+        if run.usage.cost_micros.saturating_add(batch_cost) > run.spec.budget.max_cost_micros {
+            return Err(AgentError::Budget(
+                "parallel tool batch exceeds remaining cost budget".into(),
+            ));
         }
         let waves = parallel_tool_waves(&run.spec.tools, calls)?;
         for wave in waves {
-            if cancellation.load(Ordering::Acquire) { return Err(AgentError::Conflict("agent cancelled before parallel tool wave".into())); }
+            if cancellation.load(Ordering::Acquire) {
+                return Err(AgentError::Conflict(
+                    "agent cancelled before parallel tool wave".into(),
+                ));
+            }
             let results = std::thread::scope(|scope| {
-                let handles = wave.iter().map(|call| scope.spawn(|| self.invoke_tool(application, call))).collect::<Vec<_>>();
-                handles.into_iter().map(|handle| handle.join().map_err(|_| AgentError::Tool("parallel tool worker panicked".into()))?).collect::<Result<Vec<_>, AgentError>>()
+                let handles = wave
+                    .iter()
+                    .map(|call| scope.spawn(|| self.invoke_tool(application, call)))
+                    .collect::<Vec<_>>();
+                handles
+                    .into_iter()
+                    .map(|handle| {
+                        handle
+                            .join()
+                            .map_err(|_| AgentError::Tool("parallel tool worker panicked".into()))?
+                    })
+                    .collect::<Result<Vec<_>, AgentError>>()
             })?;
             for (call, value) in wave.into_iter().zip(results) {
                 run.usage.tool_calls = run.usage.tool_calls.saturating_add(1);
                 let qualified = format!("{}/{}", call.binding, call.name);
-                let cost = run.spec.budget.tool_cost_micros.get(&qualified).or_else(|| run.spec.budget.tool_cost_micros.get(&call.name)).copied().unwrap_or(0);
+                let cost = run
+                    .spec
+                    .budget
+                    .tool_cost_micros
+                    .get(&qualified)
+                    .or_else(|| run.spec.budget.tool_cost_micros.get(&call.name))
+                    .copied()
+                    .unwrap_or(0);
                 run.usage.cost_micros = run.usage.cost_micros.saturating_add(cost);
                 run.messages.push(json!({"role":"tool","name":call.name,"content":value,"idempotencyKey":call.idempotency_key}));
-                emit(AgentEvent::ToolResult { binding: call.binding, name: call.name, result: value })?;
+                emit(AgentEvent::ToolResult {
+                    binding: call.binding,
+                    name: call.name,
+                    result: value,
+                })?;
             }
             self.check_budget(run)?;
             self.checkpoint(run, emit)?;
@@ -1165,6 +1235,65 @@ fn resolve_tool<'a>(
             AgentError::Invalid(format!("model requested undeclared tool {qualified:?}"))
         })
 }
+
+fn parallel_tool_waves(
+    specs: &[AgentToolSpec],
+    calls: Vec<PendingToolCall>,
+) -> Result<Vec<Vec<PendingToolCall>>, AgentError> {
+    let call_count = calls.len();
+    let mut remaining = calls
+        .into_iter()
+        .map(|call| (call.name.clone(), call))
+        .collect::<BTreeMap<_, _>>();
+    if remaining.len() != call_count {
+        return Err(AgentError::Invalid(
+            "parallel tool batch contains duplicate tool names".into(),
+        ));
+    }
+    if remaining.len() == 1 {
+        return Ok(vec![remaining.into_values().collect()]);
+    }
+    let called = remaining.keys().cloned().collect::<BTreeSet<_>>();
+    let dependencies = specs
+        .iter()
+        .map(|spec| {
+            (
+                spec.name.clone(),
+                spec.depends_on.iter().cloned().collect::<BTreeSet<_>>(),
+            )
+        })
+        .collect::<BTreeMap<_, _>>();
+    let mut completed = BTreeSet::new();
+    let mut waves = Vec::new();
+    while !remaining.is_empty() {
+        let ready = remaining
+            .keys()
+            .filter(|name| {
+                dependencies.get(*name).is_some_and(|deps| {
+                    deps.iter().all(|dependency| {
+                        called.contains(dependency) && completed.contains(dependency)
+                    })
+                }) || dependencies.get(*name).is_some_and(BTreeSet::is_empty)
+            })
+            .cloned()
+            .collect::<Vec<_>>();
+        if ready.is_empty() {
+            return Err(AgentError::Invalid(
+                "parallel tool dependencies are missing or cyclic".into(),
+            ));
+        }
+        let mut wave = Vec::new();
+        for name in ready {
+            if let Some(call) = remaining.remove(&name) {
+                completed.insert(name);
+                wave.push(call);
+            }
+        }
+        waves.push(wave);
+    }
+    Ok(waves)
+}
+
 pub fn validate_spec(spec: &AgentSpec) -> Result<(), AgentError> {
     if spec.model.is_empty() || spec.model.len() > 256 {
         return Err(AgentError::Invalid("invalid model id".into()));
@@ -1209,6 +1338,36 @@ pub fn validate_spec(spec: &AgentSpec) -> Result<(), AgentError> {
                 tool.name
             )));
         }
+    }
+    for tool in &spec.tools {
+        if tool.depends_on.len() > 32
+            || tool
+                .depends_on
+                .iter()
+                .any(|dependency| dependency == &tool.name || !names.contains(dependency))
+        {
+            return Err(AgentError::Invalid(format!(
+                "invalid dependencies for agent tool {:?}",
+                tool.name
+            )));
+        }
+    }
+    // Validate the complete graph even before a model requests a subset.
+    let synthetic = spec
+        .tools
+        .iter()
+        .map(|tool| PendingToolCall {
+            binding: tool.binding.clone(),
+            name: tool.name.clone(),
+            arguments: Value::Null,
+            idempotency_key: String::new(),
+            idempotent: true,
+            approved: true,
+            attempted: false,
+        })
+        .collect();
+    if !spec.tools.is_empty() {
+        parallel_tool_waves(&spec.tools, synthetic)?;
     }
     Ok(())
 }
@@ -1294,6 +1453,7 @@ fn agent_error_code(error: &AgentError) -> &'static str {
 mod tests {
     use super::*;
     use sha2::{Digest, Sha256};
+    use std::sync::atomic::{AtomicU32, Ordering as AtomicOrdering};
 
     struct Worker;
     impl crate::model::InferenceWorker for Worker {
@@ -1431,6 +1591,7 @@ mod tests {
                 name: "write".into(),
                 idempotent: false,
                 require_approval: true,
+                depends_on: vec![],
             }],
             budget: AgentBudget::default(),
         };
@@ -1599,6 +1760,153 @@ mod tests {
     }
 
     #[test]
+    fn parallel_tools_are_grouped_into_dependency_waves() {
+        let specs = vec![
+            AgentToolSpec {
+                binding: "tools".into(),
+                name: "a".into(),
+                idempotent: true,
+                require_approval: false,
+                depends_on: vec![],
+            },
+            AgentToolSpec {
+                binding: "tools".into(),
+                name: "b".into(),
+                idempotent: true,
+                require_approval: false,
+                depends_on: vec![],
+            },
+            AgentToolSpec {
+                binding: "tools".into(),
+                name: "c".into(),
+                idempotent: true,
+                require_approval: false,
+                depends_on: vec!["a".into(), "b".into()],
+            },
+        ];
+        let calls = specs
+            .iter()
+            .map(|spec| PendingToolCall {
+                binding: spec.binding.clone(),
+                name: spec.name.clone(),
+                arguments: json!({}),
+                idempotency_key: spec.name.clone(),
+                idempotent: true,
+                approved: true,
+                attempted: false,
+            })
+            .collect();
+        let waves = parallel_tool_waves(&specs, calls).unwrap();
+        assert_eq!(waves.len(), 2);
+        assert_eq!(
+            waves[0]
+                .iter()
+                .map(|call| call.name.as_str())
+                .collect::<Vec<_>>(),
+            vec!["a", "b"]
+        );
+        assert_eq!(waves[1][0].name, "c");
+    }
+
+    struct ParallelProbe {
+        active: AtomicU32,
+        maximum: AtomicU32,
+    }
+    impl AgentNativeTools for ParallelProbe {
+        fn call(&self, _: &str, _: &str, _: &Value, _: &str) -> Result<Value, AgentError> {
+            let active = self.active.fetch_add(1, AtomicOrdering::SeqCst) + 1;
+            self.maximum.fetch_max(active, AtomicOrdering::SeqCst);
+            std::thread::sleep(std::time::Duration::from_millis(30));
+            self.active.fetch_sub(1, AtomicOrdering::SeqCst);
+            Ok(json!({"ok":true}))
+        }
+    }
+
+    #[test]
+    fn independent_tool_wave_executes_concurrently() {
+        let temp = tempfile::tempdir().unwrap();
+        let probe = Arc::new(ParallelProbe {
+            active: AtomicU32::new(0),
+            maximum: AtomicU32::new(0),
+        });
+        let manager = runtime(&temp).with_native_tools(probe.clone());
+        let tools = ["system.info", "runtime.status"]
+            .into_iter()
+            .map(|name| AgentToolSpec {
+                binding: "alex".into(),
+                name: name.into(),
+                idempotent: true,
+                require_approval: false,
+                depends_on: vec![],
+            })
+            .collect::<Vec<_>>();
+        let mut run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: tools.clone(),
+                    budget: AgentBudget::default(),
+                },
+                vec![],
+            )
+            .unwrap();
+        let calls = tools
+            .into_iter()
+            .enumerate()
+            .map(|(index, tool)| PendingToolCall {
+                binding: tool.binding,
+                name: tool.name,
+                arguments: json!({}),
+                idempotency_key: format!("parallel-{index}"),
+                idempotent: true,
+                approved: true,
+                attempted: false,
+            })
+            .collect();
+        manager
+            .execute_parallel_calls(
+                "com.example.app",
+                &mut run,
+                calls,
+                &AtomicBool::new(false),
+                &mut |_| Ok(()),
+            )
+            .unwrap();
+        assert_eq!(probe.maximum.load(AtomicOrdering::SeqCst), 2);
+        assert_eq!(run.usage.tool_calls, 2);
+    }
+
+    #[test]
+    fn cyclic_tool_dependencies_are_rejected_before_execution() {
+        let spec = AgentSpec {
+            model: "local/test@1".into(),
+            system_prompt: None,
+            tools: vec![
+                AgentToolSpec {
+                    binding: "tools".into(),
+                    name: "a".into(),
+                    idempotent: true,
+                    require_approval: false,
+                    depends_on: vec!["b".into()],
+                },
+                AgentToolSpec {
+                    binding: "tools".into(),
+                    name: "b".into(),
+                    idempotent: true,
+                    require_approval: false,
+                    depends_on: vec!["a".into()],
+                },
+            ],
+            budget: AgentBudget::default(),
+        };
+        assert!(
+            matches!(validate_spec(&spec), Err(AgentError::Invalid(message)) if message.contains("cyclic"))
+        );
+    }
+
+    #[test]
     fn child_runs_are_bidirectionally_persisted_and_isolated() {
         let temp = tempfile::tempdir().unwrap();
         let manager = runtime(&temp);
@@ -1657,6 +1965,7 @@ mod tests {
                         name: "write".into(),
                         idempotent: false,
                         require_approval: true,
+                        depends_on: vec![],
                     }],
                     budget: AgentBudget::default(),
                 },
@@ -1703,6 +2012,7 @@ mod tests {
                         name: "system.info".into(),
                         idempotent: true,
                         require_approval: false,
+                        depends_on: vec![],
                     }],
                     budget: AgentBudget::default(),
                 },
