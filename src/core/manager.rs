@@ -1680,9 +1680,7 @@ impl ManagerRouter {
                 Ok((id, permission, decision)) => {
                     match self.manager.set_permission(&id, &permission, decision) {
                         Ok(()) => {
-                            if permission == "mcp.use"
-                                && decision == PermissionDecision::Denied
-                            {
+                            if permission == "mcp.use" && decision == PermissionDecision::Denied {
                                 let _ = self.daemon_command(
                                     "mcp-permission-revoked",
                                     crate::daemon::ControlCommand::McpRevokeApplication {

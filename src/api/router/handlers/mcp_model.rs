@@ -132,6 +132,12 @@ struct ModelImportParams {
 
 #[derive(Deserialize)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
+struct ModelDownloadTaskParams {
+    task_id: String,
+}
+
+#[derive(Deserialize)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
 struct ModelGenerateParams {
     model: String,
     messages: Vec<Value>,
@@ -198,20 +204,42 @@ impl ApiRouter {
             return Ok(None);
         }
         let prompt = format!("MCP {binding}: {name}");
-        let approved = self.native_host.as_ref()
+        let approved = self
+            .native_host
+            .as_ref()
             .and_then(|host| host.confirm_permission(&self.manifest.name, &prompt).ok())
-            .or_else(|| self.desktop_services.confirm_permission(&self.manifest.name, &prompt).ok())
+            .or_else(|| {
+                self.desktop_services
+                    .confirm_permission(&self.manifest.name, &prompt)
+                    .ok()
+            })
             .unwrap_or(false);
         if !approved {
-            return Err(("MCP_APPROVAL_DENIED", "the user denied this MCP tool call".into()));
+            return Err((
+                "MCP_APPROVAL_DENIED",
+                "the user denied this MCP tool call".into(),
+            ));
         }
         let argument_hash = crate::mcp::audit_argument_hash(arguments)
             .map_err(|error| ("MCP_APPROVAL_FAILED", error.to_string()))?;
-        let issued = self.daemon_ai("mcp-approval-issue", crate::daemon::ControlCommand::McpApprovalIssue {
-            app_id: app_id.into(), binding: binding.into(), name: name.into(), argument_hash,
-        })?;
-        issued.get("approvalToken").and_then(Value::as_str).map(str::to_owned)
-            .ok_or(("MCP_APPROVAL_FAILED", "daemon returned no approval token".into())).map(Some)
+        let issued = self.daemon_ai(
+            "mcp-approval-issue",
+            crate::daemon::ControlCommand::McpApprovalIssue {
+                app_id: app_id.into(),
+                binding: binding.into(),
+                name: name.into(),
+                argument_hash,
+            },
+        )?;
+        issued
+            .get("approvalToken")
+            .and_then(Value::as_str)
+            .map(str::to_owned)
+            .ok_or((
+                "MCP_APPROVAL_FAILED",
+                "daemon returned no approval token".into(),
+            ))
+            .map(Some)
     }
 
     fn daemon_ai(&self, operation: &str, command: crate::daemon::ControlCommand) -> ApiResult {
@@ -387,9 +415,8 @@ impl ApiRouter {
             .and_then(|runtime| runtime.app_id())
             .ok_or(("DAEMON_UNAVAILABLE", "MCP requires alexd".into()))?
             .to_owned();
-        let approval_token = self.mcp_approval_token(
-            &app_id, &params.binding, &params.name, &params.arguments,
-        )?;
+        let approval_token =
+            self.mcp_approval_token(&app_id, &params.binding, &params.name, &params.arguments)?;
         self.daemon_ai(
             "mcp-call-tool",
             crate::daemon::ControlCommand::McpCallTool {
@@ -426,9 +453,8 @@ impl ApiRouter {
             allowed_input_methods.push("roots/list".into());
         }
         let stream_id = format!("mcp-mrtr:{app_id}:{}:{request_id}", params.binding);
-        let approval_token = self.mcp_approval_token(
-            &app_id, &params.binding, &params.name, &params.arguments,
-        )?;
+        let approval_token =
+            self.mcp_approval_token(&app_id, &params.binding, &params.name, &params.arguments)?;
         self.daemon_ai(
             "mcp-call-tool-interactive",
             crate::daemon::ControlCommand::McpCallToolInteractive {
@@ -739,6 +765,45 @@ impl ApiRouter {
                 source: p.source,
                 manifest: p.manifest,
             },
+        )
+    }
+    pub(crate) fn model_download_start(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let request: crate::model::ModelDownloadRequest = parse_params(params)?;
+        self.daemon_ai(
+            "model-download-start",
+            crate::daemon::ControlCommand::ModelDownloadStart { request },
+        )
+    }
+    pub(crate) fn model_download_list(&self) -> ApiResult {
+        self.require_model_manage()?;
+        self.daemon_ai(
+            "model-download-list",
+            crate::daemon::ControlCommand::ModelDownloadList,
+        )
+    }
+    pub(crate) fn model_download_status(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelDownloadTaskParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-download-status",
+            crate::daemon::ControlCommand::ModelDownloadStatus { task_id: p.task_id },
+        )
+    }
+    pub(crate) fn model_download_pause(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelDownloadTaskParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-download-pause",
+            crate::daemon::ControlCommand::ModelDownloadPause { task_id: p.task_id },
+        )
+    }
+    pub(crate) fn model_download_resume(&self, params: &Value) -> ApiResult {
+        self.require_model_manage()?;
+        let p: ModelDownloadTaskParams = parse_params(params)?;
+        self.daemon_ai(
+            "model-download-resume",
+            crate::daemon::ControlCommand::ModelDownloadResume { task_id: p.task_id },
         )
     }
     pub(crate) fn model_remove(&self, params: &Value) -> ApiResult {

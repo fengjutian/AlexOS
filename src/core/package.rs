@@ -563,7 +563,10 @@ pub fn build_frontend(destination: &Path) -> Result<(), PackageError> {
         .map(|dev| destination.join(&dev.cwd))
         .or_else(|| {
             let conventional = destination.join("frontend");
-            conventional.join("package.json").is_file().then_some(conventional)
+            conventional
+                .join("package.json")
+                .is_file()
+                .then_some(conventional)
         })
         .unwrap_or_else(|| {
             destination.join(

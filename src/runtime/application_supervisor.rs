@@ -806,8 +806,9 @@ impl ApplicationSupervisor {
         // so a host can cap untrusted backends without per-app opt-in.
         let limits = match spec.resources.as_ref() {
             Some(resources) => Some(resources_to_limits(resources)),
-            None => default_host_limits()
-                .map_err(ApplicationSupervisorError::V2LaunchNotSupported)?,
+            None => {
+                default_host_limits().map_err(ApplicationSupervisorError::V2LaunchNotSupported)?
+            }
         };
         let spec_for_launch = RuntimeSpec {
             app_id: app_id.to_owned(),
@@ -1998,7 +1999,9 @@ mod tests {
 
     #[test]
     fn default_host_limits_parse_and_reject() {
-        let limits = parse_default_limits("memory=1024,processes=16,cpu=50").unwrap().unwrap();
+        let limits = parse_default_limits("memory=1024,processes=16,cpu=50")
+            .unwrap()
+            .unwrap();
         assert_eq!(limits.memory_mb, Some(1024));
         assert_eq!(limits.processes, Some(16));
         assert_eq!(limits.cpu_percent, Some(50));
@@ -2280,8 +2283,14 @@ mod tests {
         let result = supervisor.start_application("com.example.policy", Path::new("."), &resolved);
         match result {
             Err(ApplicationSupervisorError::V2LaunchNotSupported(message)) => {
-                assert!(message.contains("permission policies"), "unexpected: {message}");
-                assert!(message.contains("net:allow:https://example.com"), "unexpected: {message}");
+                assert!(
+                    message.contains("permission policies"),
+                    "unexpected: {message}"
+                );
+                assert!(
+                    message.contains("net:allow:https://example.com"),
+                    "unexpected: {message}"
+                );
             }
             other => panic!("expected V2LaunchNotSupported, got {other:?}"),
         }

@@ -311,7 +311,10 @@ impl RuntimeProvider {
             if !version_path.is_dir() {
                 continue;
             }
-            let version_name = version_path.file_name().unwrap_or_default().to_string_lossy();
+            let version_name = version_path
+                .file_name()
+                .unwrap_or_default()
+                .to_string_lossy();
             let Ok(triples) = fs::read_dir(&version_path) else {
                 continue;
             };
@@ -458,11 +461,17 @@ impl RuntimeProvider {
         package: &RuntimePackage,
         triple: &TargetTriple,
     ) -> Result<PathBuf, RuntimeProviderError> {
-        let temp_dir = self
-            .cache_root
-            .join(format!(".download-{}-{}", std::process::id(), package.version));
+        let temp_dir = self.cache_root.join(format!(
+            ".download-{}-{}",
+            std::process::id(),
+            package.version
+        ));
         fs::create_dir_all(&temp_dir)?;
-        let archive = temp_dir.join(format!("{}-{}.zip", kind_dir_name_file(package), triple.dir_name()));
+        let archive = temp_dir.join(format!(
+            "{}-{}.zip",
+            kind_dir_name_file(package),
+            triple.dir_name()
+        ));
         self.downloader
             .fetch(&package.url, &archive)
             .map_err(RuntimeProviderError::Download)?;
@@ -513,9 +522,9 @@ impl RuntimeProvider {
             let mut entry = zip
                 .by_index(index)
                 .map_err(|error| RuntimeProviderError::UnsafeArchive(error.to_string()))?;
-            let relative = entry.enclosed_name().ok_or_else(|| {
-                RuntimeProviderError::UnsafeArchive(entry.name().to_owned())
-            })?;
+            let relative = entry
+                .enclosed_name()
+                .ok_or_else(|| RuntimeProviderError::UnsafeArchive(entry.name().to_owned()))?;
             if entry.size() > MAX_SINGLE_FILE_BYTES {
                 return Err(RuntimeProviderError::UnsafeArchive(format!(
                     "{} exceeds {MAX_SINGLE_FILE_BYTES} bytes",
@@ -591,7 +600,10 @@ impl RuntimeProvider {
             .join(triple.dir_name())
     }
 
-    fn find_matching(&self, request: &RuntimeRequest) -> Result<Option<String>, RuntimeProviderError> {
+    fn find_matching(
+        &self,
+        request: &RuntimeRequest,
+    ) -> Result<Option<String>, RuntimeProviderError> {
         let kind_dir = self.cache_root.join(kind_dir_name(request.kind));
         let Ok(entries) = fs::read_dir(&kind_dir) else {
             return Ok(None);
@@ -659,7 +671,10 @@ fn executable_for(kind: ServiceRuntime, root: &Path) -> Option<PathBuf> {
         }
         ServiceRuntime::Native => &[],
     };
-    names.iter().map(|name| root.join(name)).find(|path| path.is_file())
+    names
+        .iter()
+        .map(|name| root.join(name))
+        .find(|path| path.is_file())
 }
 
 fn version_matches(version: &Version, req: Option<&str>) -> Result<bool, RuntimeProviderError> {
@@ -801,7 +816,11 @@ mod tests {
                 .join(version)
                 .join(TargetTriple::host().dir_name());
             fs::create_dir_all(&dir).unwrap();
-            let exe_name = if cfg!(windows) { "node.exe" } else { "bin/node" };
+            let exe_name = if cfg!(windows) {
+                "node.exe"
+            } else {
+                "bin/node"
+            };
             let exe = dir.join(exe_name);
             if let Some(parent) = exe.parent() {
                 fs::create_dir_all(parent).unwrap();
@@ -986,11 +1005,17 @@ mod tests {
     fn installed_lists_only_manifested_entries() {
         let (temp, provider) = provider();
         let root = temp.path().join("runtimes");
-        let dir = root.join("node").join("22.14.0").join(TargetTriple::host().dir_name());
+        let dir = root
+            .join("node")
+            .join("22.14.0")
+            .join(TargetTriple::host().dir_name());
         fs::create_dir_all(&dir).unwrap();
         fs::write(dir.join(MANIFEST_FILE), "{}").unwrap();
         // A sibling without a manifest must be ignored.
-        let stray = root.join("node").join("9.9.9").join(TargetTriple::host().dir_name());
+        let stray = root
+            .join("node")
+            .join("9.9.9")
+            .join(TargetTriple::host().dir_name());
         fs::create_dir_all(&stray).unwrap();
 
         let installed = provider.installed(ServiceRuntime::Node);

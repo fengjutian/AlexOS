@@ -271,6 +271,19 @@ pub enum ControlCommand {
         source: String,
         manifest: crate::model::ModelManifest,
     },
+    ModelDownloadStart {
+        request: crate::model::ModelDownloadRequest,
+    },
+    ModelDownloadList,
+    ModelDownloadStatus {
+        task_id: String,
+    },
+    ModelDownloadPause {
+        task_id: String,
+    },
+    ModelDownloadResume {
+        task_id: String,
+    },
     ModelRemove {
         model_id: String,
     },

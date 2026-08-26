@@ -186,6 +186,7 @@ pub struct DaemonService {
     mcp_input_pending: Arc<Mutex<BTreeMap<String, PendingMcpInput>>>,
     mcp_approvals: crate::mcp::ApprovalStore,
     models: Option<crate::model::ModelManager>,
+    model_downloads: Option<crate::model::download_tasks::ModelDownloadManager>,
     agents: Option<crate::agent::AgentManager>,
 }
 
@@ -207,6 +208,7 @@ impl DaemonService {
             mcp_input_pending: Arc::new(Mutex::new(BTreeMap::new())),
             mcp_approvals: crate::mcp::ApprovalStore::default(),
             models: None,
+            model_downloads: None,
             agents: None,
         }
     }
@@ -214,6 +216,10 @@ impl DaemonService {
     pub fn with_ai_root(mut self, root: &std::path::Path) -> Result<Self, String> {
         let store = crate::model::ModelStore::open(root.join("models"))
             .map_err(|error| error.to_string())?;
+        let model_downloads = crate::model::download_tasks::ModelDownloadManager::open(
+            store.clone(),
+            root.join("models").join("download-tasks.json"),
+        )?;
         let models = crate::model::ModelManager::new(store);
         models
             .register_process_workers(&root.join("runtimes"))
@@ -231,6 +237,7 @@ impl DaemonService {
                 })),
         );
         self.models = Some(models);
+        self.model_downloads = Some(model_downloads);
         self.mcp_audit = Some(
             crate::mcp::AuditLog::open(root.join("audit").join("mcp.jsonl"))
                 .map_err(|error| error.to_string())?,
@@ -536,6 +543,11 @@ impl DaemonService {
             ControlCommand::ModelImport { source, manifest } => {
                 self.model_import(&source, manifest)
             }
+            ControlCommand::ModelDownloadStart { request } => self.model_download_start(request),
+            ControlCommand::ModelDownloadList => self.model_download_list(),
+            ControlCommand::ModelDownloadStatus { task_id } => self.model_download_status(&task_id),
+            ControlCommand::ModelDownloadPause { task_id } => self.model_download_pause(&task_id),
+            ControlCommand::ModelDownloadResume { task_id } => self.model_download_resume(&task_id),
             ControlCommand::ModelRemove { model_id } => self.model_remove(&model_id),
             ControlCommand::ModelLoad { model_id, worker } => self.model_load(&model_id, &worker),
             ControlCommand::ModelUnload { model_id } => self.model_unload(&model_id),
@@ -1568,18 +1580,33 @@ impl DaemonService {
             self.mcp_approvals.revoke_application(app_id);
             return Err("mcp.use is not granted or was revoked".into());
         }
-        let policy = details.manifest.permissions.iter().find_map(|permission| {
-            if let crate::permission::Permission::McpUse {
-                servers, tools, always_ask, ..
-            } = permission
-                && servers.iter().any(|server| server == binding)
-                && tools.get(binding).is_some_and(|allowed| allowed.iter().any(|name| name == tool))
-            {
-                return Some(always_ask.get(binding)
-                    .is_some_and(|names| names.iter().any(|name| name == tool)));
-            }
-            None
-        }).ok_or_else(|| "MCP binding or tool is not declared by the installed manifest".to_owned())?;
+        let policy = details
+            .manifest
+            .permissions
+            .iter()
+            .find_map(|permission| {
+                if let crate::permission::Permission::McpUse {
+                    servers,
+                    tools,
+                    always_ask,
+                    ..
+                } = permission
+                    && servers.iter().any(|server| server == binding)
+                    && tools
+                        .get(binding)
+                        .is_some_and(|allowed| allowed.iter().any(|name| name == tool))
+                {
+                    return Some(
+                        always_ask
+                            .get(binding)
+                            .is_some_and(|names| names.iter().any(|name| name == tool)),
+                    );
+                }
+                None
+            })
+            .ok_or_else(|| {
+                "MCP binding or tool is not declared by the installed manifest".to_owned()
+            })?;
         if issuing_approval && !policy {
             return Err("MCP tool does not use the always-ask policy".into());
         }
@@ -1597,17 +1624,26 @@ impl DaemonService {
     ) -> Result<serde_json::Value, String> {
         let always_ask = self.require_mcp_tool_policy(app_id, binding, name, false)?;
         let mut started = crate::mcp::AuditLog::entry(call_id, app_id, binding, name, "started");
-        started.argument_hash = Some(
-            crate::mcp::audit_argument_hash(&arguments).map_err(|error| error.to_string())?,
-        );
+        started.argument_hash =
+            Some(crate::mcp::audit_argument_hash(&arguments).map_err(|error| error.to_string())?);
         if always_ask && approval_token.is_none() {
             return Err("MCP approval token is required by the installed manifest".into());
         }
         if let Some(token) = approval_token {
-            self.mcp_approvals.consume(token, &crate::mcp::ApprovalBinding {
-                application: app_id.into(), connection: binding.into(), tool: name.into(),
-                argument_hash: started.argument_hash.clone().expect("argument hash assigned"),
-            }).map_err(|error| error.to_string())?;
+            self.mcp_approvals
+                .consume(
+                    token,
+                    &crate::mcp::ApprovalBinding {
+                        application: app_id.into(),
+                        connection: binding.into(),
+                        tool: name.into(),
+                        argument_hash: started
+                            .argument_hash
+                            .clone()
+                            .expect("argument hash assigned"),
+                    },
+                )
+                .map_err(|error| error.to_string())?;
         }
         if let Some(audit) = &self.mcp_audit {
             audit
@@ -1667,11 +1703,13 @@ impl DaemonService {
     }
 
     fn mcp_audit(&self, app_id: &str, limit: usize) -> Result<serde_json::Value, String> {
-        let audit = self.mcp_audit
+        let audit = self
+            .mcp_audit
             .as_ref()
             .ok_or_else(|| "MCP audit is unavailable".to_owned())?;
         let integrity = audit.verify().map_err(|error| error.to_string())?;
-        let entries = audit.recent(app_id, limit)
+        let entries = audit
+            .recent(app_id, limit)
             .map_err(|error| error.to_string())?;
         Ok(json!({ "entries": entries, "integrity": integrity }))
     }
@@ -1709,17 +1747,26 @@ impl DaemonService {
             .map_err(|error| error.to_string())?;
         let mut audit_entry =
             crate::mcp::AuditLog::entry(stream_id, app_id, binding, name, "started");
-        audit_entry.argument_hash = Some(
-            crate::mcp::audit_argument_hash(&arguments).map_err(|error| error.to_string())?,
-        );
+        audit_entry.argument_hash =
+            Some(crate::mcp::audit_argument_hash(&arguments).map_err(|error| error.to_string())?);
         if always_ask && approval_token.is_none() {
             return Err("MCP approval token is required by the installed manifest".into());
         }
         if let Some(token) = approval_token {
-            self.mcp_approvals.consume(token, &crate::mcp::ApprovalBinding {
-                application: app_id.into(), connection: binding.into(), tool: name.into(),
-                argument_hash: audit_entry.argument_hash.clone().expect("argument hash assigned"),
-            }).map_err(|error| error.to_string())?;
+            self.mcp_approvals
+                .consume(
+                    token,
+                    &crate::mcp::ApprovalBinding {
+                        application: app_id.into(),
+                        connection: binding.into(),
+                        tool: name.into(),
+                        argument_hash: audit_entry
+                            .argument_hash
+                            .clone()
+                            .expect("argument hash assigned"),
+                    },
+                )
+                .map_err(|error| error.to_string())?;
         }
         if let Some(audit) = &self.mcp_audit {
             audit.append(&audit_entry).map_err(|error| {
@@ -1734,7 +1781,8 @@ impl DaemonService {
             .name("alex-mcp-mrtr".into())
             .spawn(move || {
                 let started_at = std::time::Instant::now();
-                let result = client.call_tool(&tool, arguments)
+                let result = client
+                    .call_tool(&tool, arguments)
                     .and_then(crate::mcp::filter_tool_result);
                 audit_entry.timestamp_ms = now_ms().unwrap_or_default();
                 audit_entry.phase = "finished".into();
@@ -2179,6 +2227,47 @@ impl DaemonService {
             .import(std::path::Path::new(source), manifest)
             .map_err(|error| error.to_string())?;
         serde_json::to_value(model).map_err(|error| error.to_string())
+    }
+
+    fn model_download_manager(
+        &self,
+    ) -> Result<&crate::model::download_tasks::ModelDownloadManager, String> {
+        self.model_downloads
+            .as_ref()
+            .ok_or_else(|| "model download runtime is not configured".into())
+    }
+
+    fn model_download_start(
+        &self,
+        request: crate::model::ModelDownloadRequest,
+    ) -> Result<serde_json::Value, String> {
+        serde_json::to_value(self.model_download_manager()?.start(request)?)
+            .map_err(|error| error.to_string())
+    }
+
+    fn model_download_list(&self) -> Result<serde_json::Value, String> {
+        Ok(json!({ "tasks": self.model_download_manager()?.list() }))
+    }
+
+    fn model_download_status(&self, task_id: &str) -> Result<serde_json::Value, String> {
+        let task = self
+            .model_download_manager()?
+            .get(task_id)
+            .ok_or_else(|| format!("model download task {task_id:?} was not found"))?;
+        serde_json::to_value(task).map_err(|error| error.to_string())
+    }
+
+    fn model_download_pause(&self, task_id: &str) -> Result<serde_json::Value, String> {
+        let paused = self.model_download_manager()?.pause(task_id)?;
+        Ok(json!({ "taskId": task_id, "paused": paused }))
+    }
+
+    fn model_download_resume(&self, task_id: &str) -> Result<serde_json::Value, String> {
+        let task = self
+            .model_download_manager()?
+            .resume(task_id)?
+            .ok_or_else(|| format!("model download task {task_id:?} cannot be resumed"))?;
+        serde_json::to_value(task).map_err(|error| error.to_string())
     }
 
     fn model_remove(&self, model_id: &str) -> Result<serde_json::Value, String> {
@@ -2935,7 +3024,10 @@ mod tests {
             argument_hash: crate::mcp::audit_argument_hash(&arguments).unwrap(),
         }));
         assert!(issued.ok, "{:?}", issued.error);
-        let approval_token = issued.result.unwrap()["approvalToken"].as_str().unwrap().to_owned();
+        let approval_token = issued.result.unwrap()["approvalToken"]
+            .as_str()
+            .unwrap()
+            .to_owned();
         let called = service.handle(request(ControlCommand::McpCallTool {
             app_id: "com.example.app".into(),
             binding: "tools".into(),
@@ -2945,10 +3037,16 @@ mod tests {
         }));
         assert!(called.ok);
         let replay = service.handle(request(ControlCommand::McpCallTool {
-            app_id: "com.example.app".into(), binding: "tools".into(), name: "echo".into(),
-            arguments, approval_token: Some(approval_token),
+            app_id: "com.example.app".into(),
+            binding: "tools".into(),
+            name: "echo".into(),
+            arguments,
+            approval_token: Some(approval_token),
         }));
-        assert!(!replay.ok, "an approval token must be consumed exactly once");
+        assert!(
+            !replay.ok,
+            "an approval token must be consumed exactly once"
+        );
         let audit = std::fs::read_to_string(temp.path().join("audit").join("mcp.jsonl")).unwrap();
         let entries = audit
             .lines()

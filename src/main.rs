@@ -589,10 +589,7 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
             println!("agent model: {}", run.agent.model);
             wait_for_shutdown_signal();
             let stopped = run.stop()?;
-            println!(
-                "headless agent app {} stopped ({:?})",
-                run.app_id, stopped
-            );
+            println!("headless agent app {} stopped ({:?})", run.app_id, stopped);
         }
         Commands::Start { id, pipe } => {
             daemon_command(&pipe, alex::daemon::ControlCommand::Start { app_id: id })?
@@ -1035,9 +1032,8 @@ fn runtime_import(
     version: String,
     sha256: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let provider = alex::runtime_provider::RuntimeProvider::system(Arc::new(
-        alex::runtime::discover_node,
-    ));
+    let provider =
+        alex::runtime_provider::RuntimeProvider::system(Arc::new(alex::runtime::discover_node));
     let package = alex::runtime_provider::RuntimePackage {
         version,
         url: String::new(),
@@ -1064,9 +1060,8 @@ fn runtime_install(
     version: String,
     sha256: String,
 ) -> Result<(), Box<dyn std::error::Error>> {
-    let provider = alex::runtime_provider::RuntimeProvider::system(Arc::new(
-        alex::runtime::discover_node,
-    ));
+    let provider =
+        alex::runtime_provider::RuntimeProvider::system(Arc::new(alex::runtime::discover_node));
     let package = alex::runtime_provider::RuntimePackage {
         version,
         url,
@@ -1087,9 +1082,8 @@ fn runtime_install(
 }
 
 fn runtime_list() -> Result<(), Box<dyn std::error::Error>> {
-    let provider = alex::runtime_provider::RuntimeProvider::system(Arc::new(
-        alex::runtime::discover_node,
-    ));
+    let provider =
+        alex::runtime_provider::RuntimeProvider::system(Arc::new(alex::runtime::discover_node));
     for kind in [
         alex::core::manifest_v2::ServiceRuntime::Node,
         alex::core::manifest_v2::ServiceRuntime::Python,

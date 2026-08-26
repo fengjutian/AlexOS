@@ -9,15 +9,16 @@ use std::{
     sync::{Arc, Mutex},
 };
 
+use base64::Engine as _;
+use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use sha2::{Digest, Sha256};
 use thiserror::Error;
-use base64::Engine as _;
-use ed25519_dalek::{Signature, Verifier, VerifyingKey};
 
 use crate::platform::PlatformServices;
 
+pub mod download_tasks;
 pub mod remote;
 
 const INDEX_SCHEMA_VERSION: u32 = 1;
@@ -194,7 +195,7 @@ impl ModelStore {
     }
 }
 
-#[derive(Debug, Clone, Serialize, Deserialize)]
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct ModelDownloadRequest {
     pub url: String,
@@ -213,17 +214,30 @@ impl ModelStore {
         progress: &mut impl FnMut(u64, u64) -> bool,
     ) -> Result<ModelManifest, ModelError> {
         validate_download_request(request)?;
-        let partial = self.root.join("partial").join(format!("{}.download.part", safe_filename(&request.manifest.id)));
-        let expected = request.manifest.digest.strip_prefix("sha256:")
+        let partial = self.root.join("partial").join(format!(
+            "{}.download.part",
+            safe_filename(&request.manifest.id)
+        ));
+        let expected = request
+            .manifest
+            .digest
+            .strip_prefix("sha256:")
             .ok_or_else(|| ModelError::InvalidMetadata("model digest must use sha256:".into()))?;
         let agent = ureq::Agent::config_builder()
             .timeout_global(Some(std::time::Duration::from_secs(60 * 60)))
             .https_only(true)
-            .build().into();
+            .build()
+            .into();
         crate::core::update::resumable_download(
-            &agent, &request.url, &partial, request.manifest.size_bytes, expected,
-            64 * 1024 * 1024 * 1024, progress,
-        ).map_err(|error| ModelError::Worker(error.to_string()))?;
+            &agent,
+            &request.url,
+            &partial,
+            request.manifest.size_bytes,
+            expected,
+            64 * 1024 * 1024 * 1024,
+            progress,
+        )
+        .map_err(|error| ModelError::Worker(error.to_string()))?;
         scan_model_blob(&partial, &request.manifest)?;
         let imported = self.import(&partial, request.manifest.clone())?;
         let _ = fs::remove_file(&partial);
@@ -233,23 +247,36 @@ impl ModelStore {
 
 fn validate_download_request(request: &ModelDownloadRequest) -> Result<(), ModelError> {
     validate_model_id(&request.manifest.id)?;
-    if request.manifest.license.as_deref().is_some_and(|license| !license.trim().is_empty())
+    if request
+        .manifest
+        .license
+        .as_deref()
+        .is_some_and(|license| !license.trim().is_empty())
         && !request.accept_license
     {
-        return Err(ModelError::InvalidMetadata("model license has not been accepted".into()));
+        return Err(ModelError::InvalidMetadata(
+            "model license has not been accepted".into(),
+        ));
     }
     if request.manifest.source.as_deref() != Some(request.url.as_str()) {
-        return Err(ModelError::InvalidMetadata("signed model source does not match download URL".into()));
+        return Err(ModelError::InvalidMetadata(
+            "signed model source does not match download URL".into(),
+        ));
     }
-    let key: [u8; 32] = base64::engine::general_purpose::STANDARD.decode(&request.publisher_key)
+    let key: [u8; 32] = base64::engine::general_purpose::STANDARD
+        .decode(&request.publisher_key)
         .map_err(|_| ModelError::InvalidMetadata("invalid publisher key".into()))?
-        .try_into().map_err(|_| ModelError::InvalidMetadata("invalid publisher key length".into()))?;
-    let signature: [u8; 64] = base64::engine::general_purpose::STANDARD.decode(&request.signature)
+        .try_into()
+        .map_err(|_| ModelError::InvalidMetadata("invalid publisher key length".into()))?;
+    let signature: [u8; 64] = base64::engine::general_purpose::STANDARD
+        .decode(&request.signature)
         .map_err(|_| ModelError::InvalidMetadata("invalid model signature".into()))?
-        .try_into().map_err(|_| ModelError::InvalidMetadata("invalid model signature length".into()))?;
+        .try_into()
+        .map_err(|_| ModelError::InvalidMetadata("invalid model signature length".into()))?;
     let payload = serde_json::to_vec(&request.manifest)
         .map_err(|error| ModelError::InvalidMetadata(error.to_string()))?;
-    VerifyingKey::from_bytes(&key).map_err(|error| ModelError::InvalidMetadata(error.to_string()))?
+    VerifyingKey::from_bytes(&key)
+        .map_err(|error| ModelError::InvalidMetadata(error.to_string()))?
         .verify(&payload, &Signature::from_bytes(&signature))
         .map_err(|_| ModelError::InvalidMetadata("model signature verification failed".into()))
 }
@@ -259,13 +286,20 @@ fn scan_model_blob(path: &Path, manifest: &ModelManifest) -> Result<(), ModelErr
     let mut magic = [0u8; 8];
     let read = file.read(&mut magic)?;
     let magic = &magic[..read];
-    if magic.starts_with(b"MZ") || magic.starts_with(b"\x7fELF") || magic.starts_with(b"#!")
-        || magic.starts_with(&[0xcf, 0xfa, 0xed, 0xfe]) || magic.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
+    if magic.starts_with(b"MZ")
+        || magic.starts_with(b"\x7fELF")
+        || magic.starts_with(b"#!")
+        || magic.starts_with(&[0xcf, 0xfa, 0xed, 0xfe])
+        || magic.starts_with(&[0xfe, 0xed, 0xfa, 0xcf])
     {
-        return Err(ModelError::InvalidMetadata("model blob looks like executable content".into()));
+        return Err(ModelError::InvalidMetadata(
+            "model blob looks like executable content".into(),
+        ));
     }
     if manifest.format.eq_ignore_ascii_case("gguf") && !magic.starts_with(b"GGUF") {
-        return Err(ModelError::InvalidMetadata("GGUF model has invalid magic bytes".into()));
+        return Err(ModelError::InvalidMetadata(
+            "GGUF model has invalid magic bytes".into(),
+        ));
     }
     Ok(())
 }
@@ -878,10 +912,16 @@ fn file_hex_digest(path: &Path) -> Result<String, ModelError> {
     let mut buffer = [0u8; 1024 * 1024];
     loop {
         let count = file.read(&mut buffer)?;
-        if count == 0 { break; }
+        if count == 0 {
+            break;
+        }
         hasher.update(&buffer[..count]);
     }
-    Ok(hasher.finalize().iter().map(|value| format!("{value:02x}")).collect())
+    Ok(hasher
+        .finalize()
+        .iter()
+        .map(|value| format!("{value:02x}"))
+        .collect())
 }
 fn atomic_json(path: &Path, value: &impl Serialize) -> Result<(), ModelError> {
     let parent = path
@@ -959,11 +999,18 @@ mod tests {
         let mut request = ModelDownloadRequest {
             url: model.source.clone().unwrap(),
             manifest: model,
-            publisher_key: base64::engine::general_purpose::STANDARD.encode(signing.verifying_key().to_bytes()),
-            signature: base64::engine::general_purpose::STANDARD.encode(signing.sign(&payload).to_bytes()),
+            publisher_key: base64::engine::general_purpose::STANDARD
+                .encode(signing.verifying_key().to_bytes()),
+            signature: base64::engine::general_purpose::STANDARD
+                .encode(signing.sign(&payload).to_bytes()),
             accept_license: false,
         };
-        assert!(validate_download_request(&request).unwrap_err().to_string().contains("license"));
+        assert!(
+            validate_download_request(&request)
+                .unwrap_err()
+                .to_string()
+                .contains("license")
+        );
         request.accept_license = true;
         validate_download_request(&request).unwrap();
         request.url = "https://attacker.example/model.gguf".into();

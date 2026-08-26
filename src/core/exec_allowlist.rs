@@ -56,7 +56,8 @@ impl ExecAllowlist {
             return Ok(Self::default());
         }
         let data = std::fs::read(&file)?;
-        serde_json::from_slice(&data).map_err(|error| ExecAllowlistError::Invalid(error.to_string()))
+        serde_json::from_slice(&data)
+            .map_err(|error| ExecAllowlistError::Invalid(error.to_string()))
     }
 
     /// Check a Native service executable. `entry` is the manifest's
@@ -69,9 +70,10 @@ impl ExecAllowlist {
             });
         }
         let digest = sha256_file(&executable)?;
-        let allowed = self.entries.iter().any(|allowed| {
-            allowed.path == entry && allowed.sha256.eq_ignore_ascii_case(&digest)
-        });
+        let allowed = self
+            .entries
+            .iter()
+            .any(|allowed| allowed.path == entry && allowed.sha256.eq_ignore_ascii_case(&digest));
         if allowed {
             Ok(())
         } else {

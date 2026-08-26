@@ -400,9 +400,7 @@ impl ApplicationManifestV2 {
             validate_package_path(root, &service.command, &format!("service {name} command"))?;
             if let Some(dev) = &service.dev {
                 if dev.command.trim().is_empty() || dev.command.contains(['\r', '\n', '\0']) {
-                    return Err(validation(format!(
-                        "service {name} dev command is invalid"
-                    )));
+                    return Err(validation(format!("service {name} dev command is invalid")));
                 }
                 validate_relative_path(&dev.cwd, &format!("service {name} dev cwd"))?;
                 if !root.join(&dev.cwd).is_dir() {

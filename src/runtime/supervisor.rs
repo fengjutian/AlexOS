@@ -18,10 +18,10 @@ use serde::{Deserialize, Serialize};
 use serde_json::Value;
 use thiserror::Error;
 
-use crate::core::manifest::{Backend, BackendMode, RuntimeKind};
-use crate::core::manifest_v2::RuntimeRequirements;
 use crate::container::isolation::IsolationHandle;
 use crate::container::model::ResourceLimits;
+use crate::core::manifest::{Backend, BackendMode, RuntimeKind};
+use crate::core::manifest_v2::RuntimeRequirements;
 
 const MAX_LOG_LINES: usize = 200;
 /// Private TCP range the host allocates service-mode backends from.
@@ -1781,7 +1781,10 @@ fn data_usage_mb(path: &Path) -> u64 {
 fn check_data_quota(data_dir: &Path, quota_mb: u32) -> Result<(), RuntimeError> {
     let used = data_usage_mb(data_dir);
     if used > u64::from(quota_mb) {
-        return Err(RuntimeError::QuotaExceeded { used_mb: used, quota_mb });
+        return Err(RuntimeError::QuotaExceeded {
+            used_mb: used,
+            quota_mb,
+        });
     }
     Ok(())
 }

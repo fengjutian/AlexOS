@@ -283,9 +283,9 @@ pub(crate) fn resumable_download(
     let mut offset = std::fs::metadata(&partial).map(|m| m.len()).unwrap_or(0);
     if (offset > 0 && metadata.is_none())
         || offset > expected_size
-        || metadata.as_ref().is_some_and(|m| {
-            m.url != url || m.expected_size != expected_size || m.sha256 != sha256
-        })
+        || metadata
+            .as_ref()
+            .is_some_and(|m| m.url != url || m.expected_size != expected_size || m.sha256 != sha256)
     {
         let _ = std::fs::remove_file(&partial);
         let _ = std::fs::remove_file(&metadata_path);
@@ -371,7 +371,9 @@ pub(crate) fn resumable_download(
         }
         size += count as u64;
         if size > max_bytes {
-            return Err(UpdateError::Transport(format!("download exceeds {max_bytes} bytes")));
+            return Err(UpdateError::Transport(format!(
+                "download exceeds {max_bytes} bytes"
+            )));
         }
         output.write_all(&buffer[..count])?;
         hasher.update(&buffer[..count]);

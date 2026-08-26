@@ -741,8 +741,13 @@ fn create_restricted_token() -> Result<windows::Win32::Foundation::HANDLE, Isola
 #[cfg(windows)]
 fn create_stdio_pipe(
     child_end_is_read: bool,
-) -> Result<(windows::Win32::Foundation::HANDLE, windows::Win32::Foundation::HANDLE), IsolationError>
-{
+) -> Result<
+    (
+        windows::Win32::Foundation::HANDLE,
+        windows::Win32::Foundation::HANDLE,
+    ),
+    IsolationError,
+> {
     use windows::Win32::{
         Foundation::{HANDLE, HANDLE_FLAG_INHERIT, HANDLE_FLAGS, SetHandleInformation},
         System::Pipes::CreatePipe,

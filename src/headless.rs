@@ -16,9 +16,7 @@ use thiserror::Error;
 
 use crate::{
     agent::AgentSpec,
-    core::application_manifest::{
-        ApplicationManifest, ManifestError, load_application,
-    },
+    core::application_manifest::{ApplicationManifest, ManifestError, load_application},
     runtime::application_supervisor::{
         ApplicationObservedState, ApplicationSupervisor, ApplicationSupervisorError,
     },
