@@ -21,6 +21,7 @@ dependencies = [
 name = "alex"
 version = "0.1.0"
 dependencies = [
+ "alex-logging",
  "arboard",
  "base64 0.22.1",
  "clap",
@@ -50,6 +51,15 @@ dependencies = [
  "windows",
  "wry",
  "zip",
+]
+
+[[package]]
+name = "alex-logging"
+version = "0.1.0"
+dependencies = [
+ "serde",
+ "serde_json",
+ "tempfile",
 ]
 
 [[package]]

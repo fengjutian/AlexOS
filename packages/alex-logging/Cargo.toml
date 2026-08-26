@@ -1,0 +1,13 @@
+[package]
+name = "alex-logging"
+version = "0.1.0"
+edition = "2024"
+description = "Local-first logging primitives for Alex OS"
+license = "MIT"
+
+[dependencies]
+serde = { version = "1.0.229", features = ["derive"] }
+serde_json = "1.0.151"
+
+[dev-dependencies]
+tempfile = "3.27.0"
