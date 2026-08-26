@@ -22,9 +22,13 @@ Runtime 在不同平台负责安装、服务编排、进程、运行时、权限
 | 查看后续开发 | [`roadmap.md`](roadmap.md) | 按优先级维护的未完成项 |
 | 开发桌面应用 | [`developer-experience.md`](developer-experience.md) | Manifest、开发循环和项目结构 |
 | 查询 Desktop API | [`DESKTOP_API_REFERENCE.md`](DESKTOP_API_REFERENCE.md) | 从 schema 自动生成的方法签名 |
+| 配置 Manifest | [`MANIFEST_REFERENCE.md`](MANIFEST_REFERENCE.md) | v1/v2 字段、校验规则与示例 |
+| 运行 Desktop API 示例 | [`desktop-api-example.md`](desktop-api-example.md) | 页面、权限、MCP 与常见问题 |
 | 使用 MCP | [`mcp-runtime.md`](mcp-runtime.md) | 配置、权限、工具、OAuth、审计和示例 |
 | 使用 Model Worker | [`model-worker-protocol.md`](model-worker-protocol.md) | 本地模型进程协议 |
+| 编写 Native Worker | [`native-worker-guide.md`](native-worker-guide.md) | Descriptor、生命周期、安全和调试 |
 | 使用 Agent Runtime | [`agent-runtime.md`](agent-runtime.md) | Agent 生命周期、预算和审批 |
+| 排查错误 | [`troubleshooting.md`](troubleshooting.md) | 错误码、Manifest、MCP 与 Worker |
 | 理解系统结构 | [`architecture.md`](architecture.md) | Daemon、Shell、Runtime 与数据流 |
 | 查看产品边界 | [`product-requirements.md`](product-requirements.md) | 产品目标与非目标 |
 
@@ -71,7 +75,8 @@ Alex Runtime 给应用开发者提供:
 
 ## 快速开始
 
-**环境**:Windows 10/11、Rust 1.96+(`Cargo.lock` 锁定的工具链)、Microsoft Edge WebView2
+**环境**:Windows 10/11、Rust 1.96+（当前验证版本；`Cargo.lock` 只锁依赖，不锁 Rust
+工具链）、Microsoft Edge WebView2
 Runtime、Node.js(可放 `PATH` 或用 `ALEX_NODE` 指定)。
 
 ```powershell

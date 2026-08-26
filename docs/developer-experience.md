@@ -6,9 +6,13 @@ nav_order: 9
 
 # Alex Runtime Developer Experience (DX)
 
-> 2026-08-25 草案。本文档定义 Alex Runtime 的开发者体验目标与命令面;实现状态以
+> 目标设计文档。本文包含尚未实现的命令，不能直接作为当前 CLI 教程。实现状态以
 > [`status.md`](./status.md) 为准,实施步骤以 [`ai-runtime-implementation.md`](./ai-runtime-implementation.md)
 > 和 [`roadmap.md`](./roadmap.md) 为准。
+
+当前可用命令请运行 `cargo run --offline -- --help`。其中 `create`、`dev`、`build`、`pack`、
+`install` 已存在；`test`、`package`、`publish`、`login`、`dashboard` 和 `mcp add` 是目标命令，
+尚未实现。
 
 ## 0. 设计原则
 
@@ -18,14 +22,14 @@ nav_order: 9
 和命令完成应用开发。Runtime 负责:Node / Python / Model Worker / MCP server 进程的生命周期、
 权限强制、模型路由、沙箱边界、跨平台打包。
 
-## 1. 开发者命令面(6 个核心命令)
+## 1. 目标命令面（未全部实现）
 
 ```text
 alex create      ← 选择应用类型,生成项目骨架
 alex dev         ← 启动 Runtime 全栈,热重载,打开 WebView 或 localhost
 alex test        ← 跑 smoke / unit / 真实后端 / Sandbox
-alex build       ← 跑前端构建 + pack,出 .alx
-alex package     ← 单独 pack(等价 alex pack,保留以便兼容 .alex 用户)
+alex build       ← 目标：跑前端构建 + pack；当前只执行 frontend.build
+alex package     ← 目标别名；当前使用 alex pack，产物扩展名为 .alex
 alex publish     ← 推签名包到 Registry
 ```
 
@@ -38,7 +42,7 @@ Developer
 alex create my-coding-agent
    │
    ▼
-AI Application (alex.yaml + app/ + frontend/ + mcp/ + models/ + tests/)
+AI Application (app.yaml + app/ + frontend/ + mcp/ + models/ + tests/)
    │
    ▼
 alex dev  → Runtime 自动拉起 Node / Python / MCP / Model / WebView
@@ -47,7 +51,7 @@ alex dev  → Runtime 自动拉起 Node / Python / MCP / Model / WebView
 alex test → smoke + sandbox
    │
    ▼
-alex build → dist/coding-agent.alx
+alex build + alex pack → dist/coding-agent.alex
    │
    ▼
 alex publish → Alex Registry
@@ -93,7 +97,7 @@ alex create my-coding-agent
 
 ```text
 my-coding-agent/
-├── alex.yaml                ← 声明式应用配置 (类似 package.json + Dockerfile + compose + Manifest)
+├── app.yaml                 ← Manifest v2 声明式应用配置
 ├── app/
 │   ├── agent.ts             ← alex.agent.create({ model, tools })
 │   ├── tools.ts
@@ -107,9 +111,9 @@ my-coding-agent/
 └── package.json
 ```
 
-## 3. 核心文件:alex.yaml
+## 3. 核心文件：app.yaml
 
-`alex.yaml` 是 AI Application 的"声明式配置文件",等价于 `package.json + Dockerfile +
+`app.yaml` 是 Manifest v2 的声明式配置文件，等价于 `package.json + Dockerfile +
 docker-compose.yml + 应用 Manifest`。开发者只描述"应用需要什么",不描述"Windows 怎么
 启动 Python"。
 
@@ -147,12 +151,12 @@ permissions:
     allow: [git]
 ```
 
-`alex.yaml` 在 Runtime 侧被解析为 `ResolvedApplication`(参见
+`app.yaml` 在 Runtime 侧被解析为 `ResolvedApplication`(参见
 [`ai-runtime-implementation.md` §3.1](./ai-runtime-implementation.md)),落到:
 
 - `services` 字段描述 Node / Python / Model Worker 进程
 - `models` 字段描述模型绑定(provider + capability)
-- `mcp_servers` 字段描述 MCP server 连接(stdio / HTTP / 持久化)
+- `mcpServers` 字段描述 MCP server 连接（stdio / Streamable HTTP / 持久化）
 - `agent` 字段描述 Agent Runtime 的工具集与预算
 - `permissions` 字段描述声明的能力上限,经用户/管理员决策后落到 PermissionStore
 
@@ -172,7 +176,7 @@ export async function run(input: string) {
 ```
 
 **关键约束**:开发者**不**直接 import OpenAI / Anthropic / Ollama SDK。所有模型访问走
-`alex.models.get("chat")` 或 `alex.agent.create({ model: "chat" })`,由 Runtime 解析
+`alex.model.*` 或 `alex.agent.create({ model: "chat" })`,由 Runtime 解析
 provider 路由、API Key、配额、流式协议。
 
 支持的 provider:
@@ -181,7 +185,7 @@ provider 路由、API Key、配额、流式协议。
 - 本地:Ollama / llama.cpp / vLLM / MLX(经 `model-worker-protocol.md`)
 - 企业:自建网关
 
-切换 provider 改 `alex.yaml` 或 Runtime 配置,**不改业务代码**。
+切换 provider 改 `app.yaml` 或 Runtime 配置,**不改业务代码**。
 
 ## 5. 第三步:添加 MCP
 
@@ -190,7 +194,7 @@ alex mcp add filesystem
 alex mcp add github
 ```
 
-`alex mcp add` 自动修改 `alex.yaml`:
+目标命令 `alex mcp add` 将修改 `app.yaml`；当前需要手工编辑 `mcpServers`：
 
 ```yaml
 mcp:
@@ -314,7 +318,7 @@ Alex Runtime 自带 `runtimes/<kind>/<version>/<arch>/`(类似 VS Code 自带 El
 好处:
 
 - 跟 OS 升级 / 用户全局 npm 包解耦
-- 锁定版本(`alex.yaml` 写 `runtime: node "22"`,Alex 解到 22.5.0)
+- 锁定版本（`app.yaml` 写 `runtime.node: "22"`，Alex 解析兼容版本）
 - 签名 + 哈希校验,防止恶意 node.exe
 - 卸载 Alex 一并回收,不留垃圾
 
@@ -429,15 +433,16 @@ Building...
 Build complete.
 
 dist/
-└── coding-agent.alx
+└── coding-agent.alex
 ```
 
-`.alx` 是 **AI Application Package**,不是 Docker Image。
+当前 `.alex` 是 **AI Application Package**，不是 Docker Image。`.alx` 是规划中的规范扩展名，
+CLI 双轨兼容尚未完成。
 
-## 13. `.alx` 包结构
+## 13. 当前 `.alex` 包结构
 
 ```text
-coding-agent.alx
+coding-agent.alex
 ├── manifest.yaml
 ├── frontend/
 ├── agent/
@@ -542,7 +547,7 @@ alex test
 alex build
 
 # 6. 本地验证
-alex install ./dist/my-agent.alx
+alex install ./dist/my-agent.alex
 
 # 7. 登录
 alex login
@@ -586,7 +591,7 @@ alex dev
    ↓
 alex build
    ↓
-.alx
+.alex（当前）→ .alx（目标）
 ```
 
 也就是:

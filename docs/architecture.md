@@ -12,7 +12,7 @@ nav_order: 2
 > 产品目标架构以 [`product-requirements.md`](./product-requirements.md) 为准。下文主要记录
 > 当前 `0.1.0` Windows + WebView2 + Node.js 桌面 AI 应用 Runtime。Runtime MVP 关键件（`alex
 > daemon`、Manifest v2 多服务编排、Job Object 进程树清理、Agent / MCP / Model 协议层）已在
-> `src/` 落地（2026-08-25 基线：`cargo test -p alex --lib` 335/335 passed），但 v0.2 之后的
+> `src/` 落地（当前基线以 `cargo test --offline --lib` 的实时结果为准），但 v0.2 之后的
 > 受管 Runtime、跨平台、移动端、Registry 仍属 P1/P2。
 
 ## 0. 目标架构与迁移方向
@@ -141,7 +141,7 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
 | **Alex IPC** | WebView → Rust | 前端调 `alex.system.*` / `alex.dialog.*` / ... | `src/api/router.rs` 的 `dispatch` | [`status.md` §2.3](./status.md#23-ipc) |
 | **Reverse IPC** *(复用变体)* | Node → Rust | Plugin backend 主动问 host（如 `system.listApps`） | 同上 `ApiRouter::dispatch`；入口 `src/plugin.rs::run_unified_dispatch` 把 `Request.source` 设为 plugin manifest.id | [`reverse-ipc.md`](./reverse-ipc.md) |
 | **Service HTTP 代理** | WebView → Node | `fetch('http://alex.app/api/...')` 同源转发 | `src/proxy.rs::proxy_to_service` | [`status.md` §2.9](./status.md#29-service-反向代理alexappapi) |
-| **包/更新下载** | Rust → HTTPS | `.alex` 下载 + Ed25519 验证 | `src/package.rs` / `src/update.rs` | [`status.md` §2.7 §2.8](./status.md#27-应用包签名和信任) |
+| **包/更新下载** | Rust → HTTPS | `.alex` 下载 + Ed25519 验证 | `src/core/package.rs` / `src/core/manager.rs` | [`status.md` §2.7 §2.8](./status.md#27-应用包签名和信任) |
 
 权限边界：
 

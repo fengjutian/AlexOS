@@ -43,6 +43,8 @@ jobs:
         run: node --test packages/sdk/test/sdk.test.mjs
       - name: SDK schema is generated
         run: node packages/sdk/generate-schema.mjs --check
+      - name: Documentation links and facts
+        run: node scripts/check-docs.mjs
 
   windows-build:
     name: Windows · build + test
@@ -72,6 +74,8 @@ jobs:
         run: node --test packages/sdk/test/sdk.test.mjs
       - name: SDK schema is generated
         run: node packages/sdk/generate-schema.mjs --check
+      - name: Documentation links and facts
+        run: node scripts/check-docs.mjs
       - name: Smoke · manager subcommand help
         # Validates that the CLI surface builds and prints help on Windows;
         # the actual WebView is not started (it would block the runner).

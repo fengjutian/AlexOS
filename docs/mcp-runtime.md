@@ -152,6 +152,27 @@ callback 时，改用 `oauthBegin` → 打开 `authorizationUrl` → `oauthCompl
 - OAuth Bearer 401 最多执行一次受控刷新重试；
 - 工具输出经过深度、节点数和敏感字段过滤。
 
+## 生产部署
+
+开发示例的 Vite middleware 不会进入静态生产包。生产应用应选择以下方式之一：
+
+### 包内 stdio Server
+
+- 将目标平台可执行文件放入应用包；不要依赖 shell script、PATH 或包外解释器；
+- `command` 使用包内相对路径，按 Windows/macOS/Linux 分别构建切片；
+- stdout 只发送 MCP JSON-RPC，日志写 stderr；
+- 安装前完成签名、哈希与可执行文件扫描；升级时随应用包原子替换。
+
+### 远程 Streamable HTTP Server
+
+- 使用 HTTPS endpoint，禁止依赖重定向；
+- OAuth 场景通过 `tokenAccount` 关联 Secret Store，不在 Manifest 中写 token；
+- Server 应实现 initialize、ping、声明的 capabilities 和必要通知；
+- 将超时、消息上限、健康恢复和非幂等调用重试语义写入运维手册。
+
+Manifest 托管连接适合随应用版本演进；Daemon 持久化连接适合管理员配置。生产环境不应把开发端口
+或用户本机绝对路径写入发布 Manifest。
+
 ## 当前限制
 
 - Desktop API 不负责创建任意连接；连接由 Manifest 或 Daemon 控制面管理；

@@ -26,8 +26,8 @@ nav_order: 3
 > `src/mcp/`、`src/model/`、`src/api/router/handlers/agent.rs` 等位置并行落地，协议与
 > 安全边界见 [`ai-runtime-implementation.md`](./ai-runtime-implementation.md)。
 >
-> 实际代码基线（2026-08-25）：`src/` 96 个 `.rs` 文件，`cargo test -p alex --lib`
-> 335/335 passed。
+> 验证基线不再手写测试数量；运行 `cargo test --offline --lib` 获取当前结果，避免源码和测试增长后
+> 文档数字失真。
 >
 > 最初愿景中的 Python、Rust 插件、跨平台和 Store 仍属于路线图，不应出现在当前版本能力承诺中。
 
@@ -267,7 +267,8 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - 没有中央发布者身份；
 - Trust Store 没有 UI 和管理员策略；
 - 归档使用 Stored ZIP，没有压缩；
-- 没有 `.alexignore`；
+- `.alexignore` 已使用 gitignore 语法接入 `alex dev` 文件监听；文件缺失或语法错误时安全回退为
+  不过滤，并有对应回归测试；
 - 没有可复现构建证明或 SBOM；
 - 没有恶意软件扫描。
 
