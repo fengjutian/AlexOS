@@ -51,4 +51,4 @@ node packages/sdk/generate-schema.mjs --check
 node scripts/check-docs.mjs
 ```
 
-许可证标识：MIT（见 `Cargo.toml`；仓库尚未单独提供 LICENSE 文件）。
+许可证：[MIT](LICENSE)。
