@@ -175,6 +175,9 @@ impl WorkerPackageStore {
     }
 
     pub fn activate(&self, kind: &str, version: &str, triple: &str) -> Result<(), ModelError> {
+        validate_path_component("worker kind", kind)?;
+        validate_path_component("worker version", version)?;
+        validate_path_component("worker triple", triple)?;
         let target = self
             .root
             .join(kind)
@@ -208,16 +211,23 @@ impl WorkerPackageStore {
         }
         let active: ActiveVersion = serde_json::from_slice(&fs::read(path)?)
             .map_err(|error| ModelError::InvalidMetadata(error.to_string()))?;
-        let root = kind_root
-            .join("versions")
-            .join(active.version)
-            .join(active.triple);
+        validate_path_component("worker version", &active.version)?;
+        validate_path_component("worker triple", &active.triple)?;
+        let versions = kind_root.join("versions");
+        let root = versions.join(active.version).join(active.triple);
         if !root.join("worker.json").is_file() {
             return Err(ModelError::InvalidMetadata(
                 "active worker version is missing".into(),
             ));
         }
-        Ok(Some(root))
+        let canonical = root.canonicalize()?;
+        let canonical_versions = versions.canonicalize()?;
+        if !canonical.starts_with(canonical_versions) {
+            return Err(ModelError::InvalidMetadata(
+                "active worker version escapes its versions directory".into(),
+            ));
+        }
+        Ok(Some(canonical))
     }
 
     pub fn runtimes_root(&self) -> PathBuf {
@@ -276,6 +286,21 @@ impl WorkerPackageStore {
         });
         Ok(packages)
     }
+}
+
+fn validate_path_component(label: &str, value: &str) -> Result<(), ModelError> {
+    if value.is_empty()
+        || value.len() > 128
+        || matches!(value, "." | "..")
+        || !value.chars().all(|character| {
+            character.is_ascii_alphanumeric() || matches!(character, '.' | '-' | '_')
+        })
+    {
+        return Err(ModelError::InvalidMetadata(format!(
+            "{label} is not a safe path component"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_request(request: &WorkerPackageRequest) -> Result<(), ModelError> {
@@ -449,13 +474,12 @@ mod tests {
         let listed = store.list().unwrap();
         assert_eq!(listed.len(), 1);
         assert!(listed[0].active);
-        assert_eq!(
-            store
-                .active_root(&temp.path().join("runtimes/model-workers/llama-cpp"))
-                .unwrap()
-                .unwrap(),
-            installed.root
-        );
+        let active = store
+            .active_root(&temp.path().join("runtimes/model-workers/llama-cpp"))
+            .unwrap()
+            .unwrap();
+        assert!(active.join("worker.json").is_file());
+        assert!(active.ends_with(Path::new("1.2.3/windows-x86_64")));
     }
 
     #[test]
@@ -470,5 +494,21 @@ mod tests {
                 .to_string()
                 .contains("signature")
         );
+    }
+
+    #[test]
+    fn corrupted_active_pointer_cannot_escape_version_directory() {
+        let temp = tempfile::tempdir().unwrap();
+        let store = WorkerPackageStore::open(&temp.path().join("runtimes")).unwrap();
+        let kind = temp.path().join("runtimes/model-workers/llama-cpp");
+        fs::create_dir_all(kind.join("versions")).unwrap();
+        fs::write(
+            kind.join("active.json"),
+            br#"{"version":"..","triple":"outside"}"#,
+        )
+        .unwrap();
+        let error = store.active_root(&kind).unwrap_err();
+        assert!(error.to_string().contains("safe path component"));
+        assert!(store.activate("llama-cpp", "..", "outside").is_err());
     }
 }
