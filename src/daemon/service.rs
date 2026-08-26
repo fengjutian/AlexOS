@@ -446,6 +446,11 @@ impl DaemonService {
             ControlCommand::NativeWorkerStop { app_id, binding } => self
                 .native_worker_stop(&app_id, &binding)
                 .map(|()| json!({ "stopped": true })),
+            ControlCommand::NativeWorkerCancel { app_id, binding } => self
+                .native_workers
+                .cancel(&app_id, &binding)
+                .map(|()| json!({ "cancelRequested": true }))
+                .map_err(|error| error.to_string()),
             ControlCommand::OpenServiceWebSocket { app_id, service } => {
                 self.open_service_websocket(&app_id, &service)
             }

@@ -11,9 +11,12 @@ use std::{
     fs,
     io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    process::Child,
     sync::mpsc::{self, Receiver, RecvTimeoutError},
-    sync::{Arc, Mutex},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+    },
     thread::{self, JoinHandle},
     time::Duration,
 };
@@ -59,6 +62,15 @@ pub struct WorkerResponse {
     pub error: Option<WorkerErrorBody>,
 }
 
+#[derive(Debug, Serialize)]
+#[serde(rename_all = "camelCase")]
+struct WorkerCancel<'a> {
+    protocol: u32,
+    #[serde(rename = "type")]
+    kind: &'static str,
+    request_id: &'a str,
+}
+
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
 pub struct WorkerErrorBody {
@@ -76,6 +88,8 @@ pub enum NativeWorkerError {
     Protocol(String),
     #[error("native worker request timed out after {0:?}")]
     Timeout(Duration),
+    #[error("native worker request was cancelled")]
+    Cancelled,
     #[error("native worker returned {code}: {message}")]
     Remote { code: String, message: String },
     #[error("native worker {application}/{binding} is already running")]
@@ -126,6 +140,7 @@ type WorkerSlot = Arc<Mutex<ManagedWorker>>;
 #[derive(Clone, Default)]
 pub struct NativeWorkerManager {
     workers: Arc<Mutex<BTreeMap<WorkerKey, WorkerSlot>>>,
+    cancellations: Arc<Mutex<BTreeMap<WorkerKey, Arc<AtomicBool>>>>,
 }
 
 impl NativeWorkerManager {
@@ -151,7 +166,13 @@ impl NativeWorkerManager {
         }
         let descriptor = load_descriptor(&package_root.join(&spec.descriptor))?;
         let limits = resource_limits(spec.resources.as_ref());
-        let process = NativeWorkerProcess::spawn_confined(package_root, &descriptor, &limits)?;
+        let process = NativeWorkerProcess::spawn_managed(
+            package_root,
+            &descriptor,
+            &limits,
+            application,
+            binding,
+        )?;
         let slot = Arc::new(Mutex::new(ManagedWorker {
             descriptor,
             resources: spec.resources.clone(),
@@ -162,6 +183,13 @@ impl NativeWorkerManager {
             status_for(application, binding, &mut worker)?
         };
         workers.insert(key, slot);
+        self.cancellations
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .insert(
+                (application.to_owned(), binding.to_owned()),
+                Arc::new(AtomicBool::new(false)),
+            );
         Ok(status)
     }
 
@@ -174,6 +202,8 @@ impl NativeWorkerManager {
         timeout: Duration,
     ) -> Result<Value, NativeWorkerError> {
         let slot = self.slot(application, binding)?;
+        let cancellation = self.cancellation(application, binding)?;
+        cancellation.store(false, Ordering::Release);
         let mut worker = slot.lock().map_err(|_| NativeWorkerError::LockPoisoned)?;
         if !worker
             .descriptor
@@ -187,7 +217,15 @@ impl NativeWorkerManager {
                 method: method.into(),
             });
         }
-        worker.process.invoke_timeout(method, params, timeout)
+        worker
+            .process
+            .invoke_cancellable(method, params, timeout, &cancellation)
+    }
+
+    pub fn cancel(&self, application: &str, binding: &str) -> Result<(), NativeWorkerError> {
+        self.cancellation(application, binding)?
+            .store(true, Ordering::Release);
+        Ok(())
     }
 
     pub fn status(
@@ -219,6 +257,9 @@ impl NativeWorkerManager {
     }
 
     pub fn stop(&self, application: &str, binding: &str) -> Result<(), NativeWorkerError> {
+        if let Ok(cancellation) = self.cancellation(application, binding) {
+            cancellation.store(true, Ordering::Release);
+        }
         let key = (application.to_owned(), binding.to_owned());
         let removed = self
             .workers
@@ -237,6 +278,10 @@ impl NativeWorkerManager {
                 .process
                 .terminate();
         }
+        self.cancellations
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .remove(&(application.to_owned(), binding.to_owned()));
         Ok(())
     }
 
@@ -256,6 +301,17 @@ impl NativeWorkerManager {
                 .collect::<Vec<_>>()
         };
         let count = removed.len();
+        self.cancellations
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .retain(|(owner, _), signal| {
+                if owner == application {
+                    signal.store(true, Ordering::Release);
+                    false
+                } else {
+                    true
+                }
+            });
         terminate_slots(removed)?;
         Ok(count)
     }
@@ -269,12 +325,40 @@ impl NativeWorkerManager {
             std::mem::take(&mut *workers)
         };
         let count = removed.len();
+        for signal in self
+            .cancellations
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .values()
+        {
+            signal.store(true, Ordering::Release);
+        }
+        self.cancellations
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .clear();
         terminate_slots(removed.into_values().collect())?;
         Ok(count)
     }
 
     fn slot(&self, application: &str, binding: &str) -> Result<WorkerSlot, NativeWorkerError> {
         self.workers
+            .lock()
+            .map_err(|_| NativeWorkerError::LockPoisoned)?
+            .get(&(application.to_owned(), binding.to_owned()))
+            .cloned()
+            .ok_or_else(|| NativeWorkerError::NotRunning {
+                application: application.into(),
+                binding: binding.into(),
+            })
+    }
+
+    fn cancellation(
+        &self,
+        application: &str,
+        binding: &str,
+    ) -> Result<Arc<AtomicBool>, NativeWorkerError> {
+        self.cancellations
             .lock()
             .map_err(|_| NativeWorkerError::LockPoisoned)?
             .get(&(application.to_owned(), binding.to_owned()))
@@ -373,9 +457,10 @@ fn validate_identifier(label: &str, value: &str) -> Result<(), NativeWorkerError
 /// A single serial request/response connection to a native worker process.
 /// Dropping it kills and reaps the worker so it cannot outlive the host.
 pub struct NativeWorkerProcess {
-    child: Child,
-    isolation: crate::container::isolation::IsolationHandle,
-    input: BufWriter<ChildStdin>,
+    child: Option<Child>,
+    pid: u32,
+    isolation: Option<crate::container::isolation::IsolationHandle>,
+    input: BufWriter<Box<dyn Write + Send>>,
     responses: Receiver<Result<WorkerResponse, NativeWorkerError>>,
     output_thread: Option<JoinHandle<()>>,
     next_request_id: u64,
@@ -398,14 +483,70 @@ impl NativeWorkerProcess {
         descriptor: &NativeWorkerDescriptor,
         limits: &crate::container::ResourceLimits,
     ) -> Result<Self, NativeWorkerError> {
+        Self::spawn_confined_with_identity(package_root, descriptor, limits, None)
+    }
+
+    pub fn spawn_managed(
+        package_root: &Path,
+        descriptor: &NativeWorkerDescriptor,
+        limits: &crate::container::ResourceLimits,
+        application: &str,
+        binding: &str,
+    ) -> Result<Self, NativeWorkerError> {
+        Self::spawn_confined_with_identity(
+            package_root,
+            descriptor,
+            limits,
+            Some((application, binding)),
+        )
+    }
+
+    fn spawn_confined_with_identity(
+        package_root: &Path,
+        descriptor: &NativeWorkerDescriptor,
+        limits: &crate::container::ResourceLimits,
+        identity: Option<(&str, &str)>,
+    ) -> Result<Self, NativeWorkerError> {
         let executable = descriptor.executable(package_root)?;
-        let mut child = Command::new(executable)
+        #[cfg(windows)]
+        {
+            return Self::spawn_restricted_windows(
+                package_root,
+                descriptor,
+                executable,
+                limits,
+                identity,
+            );
+        }
+        #[cfg(not(windows))]
+        {
+            Self::spawn_portable(package_root, descriptor, executable, limits, identity)
+        }
+    }
+
+    #[cfg(not(windows))]
+    fn spawn_portable(
+        package_root: &Path,
+        descriptor: &NativeWorkerDescriptor,
+        executable: PathBuf,
+        limits: &crate::container::ResourceLimits,
+        identity: Option<(&str, &str)>,
+    ) -> Result<Self, NativeWorkerError> {
+        let mut command = std::process::Command::new(executable);
+        command
             .args(&descriptor.args)
             .current_dir(package_root)
-            .stdin(Stdio::piped())
-            .stdout(Stdio::piped())
-            .stderr(Stdio::inherit())
-            .spawn()?;
+            .env_clear()
+            .env("ALEX_PACKAGE_ROOT", package_root)
+            .stdin(std::process::Stdio::piped())
+            .stdout(std::process::Stdio::piped())
+            .stderr(std::process::Stdio::inherit());
+        if let Some((application, binding)) = identity {
+            command
+                .env("ALEX_APP_ID", application)
+                .env("ALEX_WORKER_BINDING", binding);
+        }
+        let mut child = command.spawn()?;
         let isolation = match crate::container::isolation::confine_process(limits, child.id()) {
             Ok(handle) => handle,
             Err(error) => {
@@ -416,21 +557,89 @@ impl NativeWorkerProcess {
                 )));
             }
         };
-        let input = child
-            .stdin
-            .take()
-            .ok_or_else(|| NativeWorkerError::Protocol("worker stdin unavailable".into()))?;
-        let output = child
-            .stdout
-            .take()
-            .ok_or_else(|| NativeWorkerError::Protocol("worker stdout unavailable".into()))?;
+        let input: Box<dyn Write + Send> = Box::new(
+            child
+                .stdin
+                .take()
+                .ok_or_else(|| NativeWorkerError::Protocol("worker stdin unavailable".into()))?,
+        );
+        let output: Box<dyn Read + Send> = Box::new(
+            child
+                .stdout
+                .take()
+                .ok_or_else(|| NativeWorkerError::Protocol("worker stdout unavailable".into()))?,
+        );
+        let pid = child.id();
+        Self::finish_spawn(Some(child), pid, isolation, input, output)
+    }
+
+    #[cfg(windows)]
+    fn spawn_restricted_windows(
+        package_root: &Path,
+        descriptor: &NativeWorkerDescriptor,
+        executable: PathBuf,
+        limits: &crate::container::ResourceLimits,
+        identity: Option<(&str, &str)>,
+    ) -> Result<Self, NativeWorkerError> {
+        use std::os::windows::io::FromRawHandle;
+
+        let mut env = Vec::new();
+        for name in ["SystemRoot", "WINDIR", "TEMP", "TMP"] {
+            if let Some(value) = std::env::var_os(name) {
+                env.push((name.into(), value.to_string_lossy().into_owned()));
+            }
+        }
+        env.push((
+            "ALEX_PACKAGE_ROOT".into(),
+            package_root.to_string_lossy().into_owned(),
+        ));
+        if let Some((application, binding)) = identity {
+            env.push(("ALEX_APP_ID".into(), application.into()));
+            env.push(("ALEX_WORKER_BINDING".into(), binding.into()));
+        }
+        let request = crate::container::isolation::SpawnRequest {
+            executable,
+            args: descriptor.args.clone(),
+            env,
+            cwd: package_root.to_path_buf(),
+            limits,
+            level: crate::container::IsolationLevel::AppContainer,
+        };
+        let (spawned, stdio) =
+            crate::container::isolation::spawn_restricted_with_stdio(&request, true, true, false)
+                .map_err(|error| {
+                NativeWorkerError::Protocol(format!(
+                    "cannot start restricted native worker: {error}"
+                ))
+            })?;
+        let input = stdio.stdin.ok_or_else(|| {
+            NativeWorkerError::Protocol("restricted worker stdin unavailable".into())
+        })?;
+        let output = stdio.stdout.ok_or_else(|| {
+            NativeWorkerError::Protocol("restricted worker stdout unavailable".into())
+        })?;
+        let input: Box<dyn Write + Send> =
+            Box::new(unsafe { std::fs::File::from_raw_handle(input.0) });
+        let output: Box<dyn Read + Send> =
+            Box::new(unsafe { std::fs::File::from_raw_handle(output.0) });
+        Self::finish_spawn(None, spawned.pid, spawned.isolation, input, output)
+    }
+
+    fn finish_spawn(
+        child: Option<Child>,
+        pid: u32,
+        isolation: crate::container::isolation::IsolationHandle,
+        input: Box<dyn Write + Send>,
+        output: Box<dyn Read + Send>,
+    ) -> Result<Self, NativeWorkerError> {
         let (response_tx, responses) = mpsc::sync_channel(1);
         let output_thread = thread::Builder::new()
-            .name(format!("alex-native-worker-{}-stdout", child.id()))
+            .name(format!("alex-native-worker-{pid}-stdout"))
             .spawn(move || pump_responses(output, response_tx))?;
         Ok(Self {
             child,
-            isolation,
+            pid,
+            isolation: Some(isolation),
             input: BufWriter::new(input),
             responses,
             output_thread: Some(output_thread),
@@ -439,15 +648,20 @@ impl NativeWorkerProcess {
     }
 
     pub fn pid(&self) -> u32 {
-        self.child.id()
+        self.pid
     }
 
     pub fn is_isolated(&self) -> bool {
-        self.isolation.is_real_boundary()
+        self.isolation
+            .as_ref()
+            .is_some_and(|isolation| isolation.is_real_boundary())
     }
 
     pub fn is_running(&mut self) -> Result<bool, NativeWorkerError> {
-        Ok(self.child.try_wait()?.is_none())
+        if let Some(child) = &mut self.child {
+            return Ok(child.try_wait()?.is_none());
+        }
+        Ok(platform_process_running(self.pid))
     }
 
     pub fn invoke(&mut self, method: &str, params: Value) -> Result<Value, NativeWorkerError> {
@@ -459,6 +673,16 @@ impl NativeWorkerProcess {
         method: &str,
         params: Value,
         timeout: Duration,
+    ) -> Result<Value, NativeWorkerError> {
+        self.invoke_cancellable(method, params, timeout, &AtomicBool::new(false))
+    }
+
+    pub fn invoke_cancellable(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+        cancellation: &AtomicBool,
     ) -> Result<Value, NativeWorkerError> {
         validate_identifier("method", method)?;
         if timeout.is_zero() {
@@ -480,19 +704,47 @@ impl NativeWorkerProcess {
             params,
         };
         write_frame(&mut self.input, &request)?;
-        let response = match self.responses.recv_timeout(timeout) {
-            Ok(response) => response?,
-            Err(RecvTimeoutError::Timeout) => {
-                self.terminate();
-                return Err(NativeWorkerError::Timeout(timeout));
+        let deadline = std::time::Instant::now() + timeout;
+        let mut cancel_sent = false;
+        let mut cancel_deadline = None;
+        let response = loop {
+            if cancellation.load(Ordering::Acquire) && !cancel_sent {
+                write_frame(
+                    &mut self.input,
+                    &WorkerCancel {
+                        protocol: NATIVE_WORKER_PROTOCOL,
+                        kind: "cancel",
+                        request_id: &request_id,
+                    },
+                )?;
+                cancel_sent = true;
+                cancel_deadline = Some(std::time::Instant::now() + Duration::from_secs(5));
             }
-            Err(RecvTimeoutError::Disconnected) => {
+            let active_deadline = cancel_deadline.unwrap_or(deadline);
+            let now = std::time::Instant::now();
+            if now >= active_deadline {
                 self.terminate();
-                return Err(NativeWorkerError::Protocol(
-                    "native worker closed its response stream".into(),
-                ));
+                return Err(if cancel_sent {
+                    NativeWorkerError::Cancelled
+                } else {
+                    NativeWorkerError::Timeout(timeout)
+                });
+            }
+            let wait = (active_deadline - now).min(Duration::from_millis(50));
+            match self.responses.recv_timeout(wait) {
+                Ok(response) => break response?,
+                Err(RecvTimeoutError::Timeout) => continue,
+                Err(RecvTimeoutError::Disconnected) => {
+                    self.terminate();
+                    return Err(NativeWorkerError::Protocol(
+                        "native worker closed its response stream".into(),
+                    ));
+                }
             }
         };
+        if cancel_sent {
+            return Err(NativeWorkerError::Cancelled);
+        }
         let result = validate_response(response, &request_id);
         if matches!(result, Err(NativeWorkerError::Protocol(_))) {
             self.terminate();
@@ -501,8 +753,13 @@ impl NativeWorkerProcess {
     }
 
     fn terminate(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        if let Some(mut child) = self.child.take() {
+            let _ = child.kill();
+            let _ = child.wait();
+        }
+        // Restricted-token children have no std::process::Child handle. The
+        // Job owns their tree, so closing its last handle terminates them.
+        self.isolation.take();
         if let Some(thread) = self.output_thread.take() {
             let _ = thread.join();
         }
@@ -516,7 +773,7 @@ impl Drop for NativeWorkerProcess {
 }
 
 fn pump_responses(
-    output: ChildStdout,
+    output: Box<dyn Read + Send>,
     responses: mpsc::SyncSender<Result<WorkerResponse, NativeWorkerError>>,
 ) {
     let mut output = BufReader::new(output);
@@ -527,6 +784,29 @@ fn pump_responses(
             break;
         }
     }
+}
+
+#[cfg(windows)]
+fn platform_process_running(pid: u32) -> bool {
+    use windows::Win32::{
+        Foundation::{CloseHandle, STILL_ACTIVE},
+        System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+    };
+    let Ok(process) = (unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) })
+    else {
+        return false;
+    };
+    let mut exit_code = 0u32;
+    let result = unsafe { GetExitCodeProcess(process, &mut exit_code) }.is_ok();
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+    result && exit_code == STILL_ACTIVE.0 as u32
+}
+
+#[cfg(not(windows))]
+fn platform_process_running(_pid: u32) -> bool {
+    false
 }
 
 fn validate_response(
@@ -656,6 +936,29 @@ mod tests {
     }
 
     #[test]
+    fn cancel_frame_has_stable_wire_shape() {
+        let mut bytes = Vec::new();
+        write_frame(
+            &mut bytes,
+            &WorkerCancel {
+                protocol: 1,
+                kind: "cancel",
+                request_id: "native-7",
+            },
+        )
+        .unwrap();
+        let value: Value = serde_json::from_slice(&bytes).unwrap();
+        assert_eq!(
+            value,
+            serde_json::json!({
+                "protocol": 1,
+                "type": "cancel",
+                "requestId": "native-7"
+            })
+        );
+    }
+
+    #[test]
     fn manager_scopes_missing_bindings_by_application() {
         let manager = NativeWorkerManager::default();
         let error = manager.status("com.example.one", "image").unwrap_err();
@@ -681,5 +984,46 @@ mod tests {
         assert_eq!(limits.cpu_percent, Some(25));
         assert_eq!(limits.processes, Some(2));
         assert_eq!(limits.data_quota_mb, Some(128));
+    }
+
+    #[cfg(windows)]
+    #[test]
+    fn manager_starts_native_worker_inside_restricted_job() {
+        use crate::container::isolation::IsolationProvider;
+        if !crate::container::isolation::RestrictedTokenProvider.is_available() {
+            eprintln!("restricted-token creation is blocked by host policy; skipping");
+            return;
+        }
+        let temp = tempfile::tempdir().unwrap();
+        let system_root = std::env::var("SystemRoot").unwrap_or_else(|_| r"C:\Windows".into());
+        let source = Path::new(&system_root).join("System32/ping.exe");
+        let executable = temp.path().join("worker.exe");
+        std::fs::copy(source, &executable).unwrap();
+        std::fs::write(
+            temp.path().join("native-worker.json"),
+            r#"{"schemaVersion":1,"id":"com.example.restricted","command":"worker.exe","args":["-t","127.0.0.1","-w","1000"],"capabilities":[]}"#,
+        )
+        .unwrap();
+        let spec = crate::manifest_v2::NativeWorkerSpec {
+            descriptor: "native-worker.json".into(),
+            resources: Some(crate::manifest_v2::ServiceResources {
+                memory_mb: Some(64),
+                cpu_percent: Some(20),
+                processes: Some(1),
+                data_quota_mb: None,
+            }),
+        };
+        let manager = NativeWorkerManager::default();
+        let status = manager
+            .start("com.example.app", "worker", temp.path(), &spec)
+            .unwrap();
+        assert!(status.running);
+        assert!(status.isolated);
+        assert!(status.pid > 0);
+        manager.stop("com.example.app", "worker").unwrap();
+        assert!(matches!(
+            manager.status("com.example.app", "worker"),
+            Err(NativeWorkerError::NotRunning { .. })
+        ));
     }
 }

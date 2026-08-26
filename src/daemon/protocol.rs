@@ -103,6 +103,10 @@ pub enum ControlCommand {
         app_id: String,
         binding: String,
     },
+    NativeWorkerCancel {
+        app_id: String,
+        binding: String,
+    },
     OpenServiceWebSocket {
         app_id: String,
         #[serde(default = "default_service_name")]
@@ -654,6 +658,10 @@ mod tests {
                 app_id: "com.example.image".into(),
             },
             ControlCommand::NativeWorkerStop {
+                app_id: "com.example.image".into(),
+                binding: "image".into(),
+            },
+            ControlCommand::NativeWorkerCancel {
                 app_id: "com.example.image".into(),
                 binding: "image".into(),
             },

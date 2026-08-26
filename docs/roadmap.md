@@ -239,10 +239,12 @@ capabilities 明确报告，不能静默降级。
   请求关联、描述符/包内入口校验、调用超时以及异常/Drop 时终止并回收子进程；协议见
   [`native-worker-protocol.md`](./native-worker-protocol.md)；Manifest v2 的 `nativeWorkers`
   绑定、描述符及包内入口校验已经接线；Daemon 已持有应用隔离的 Worker Manager 和生命周期
-  清理，并开放 start/invoke/status/stop Named Pipe 命令；Windows Job Object 已强制进程树回收、
+  清理，并开放 start/invoke/cancel/status/stop Named Pipe 命令；Windows Job Object 已强制进程树回收、
   `memoryMb`、`processes` 与 `cpuPercent` HARD_CAP，待完成数据配额及更强的 Restricted
-  Token/AppContainer；Restricted Token + stdio + Job 的组合启动底座已完成，待 Native Worker
-  Manager 切换到该路径；
+  Token/AppContainer；Native Worker Manager 已切换到 Restricted Token + stdio + Job 的
+  fail-closed 路径，并清理继承环境；
+- 主动取消已通过 `nativeWorkerCancel`、进程内原子信号和 worker `cancel` 帧接线，5 秒内未收尾
+  会强制回收 Worker；
 - 稳定 ABI 或独立进程协议；
 - 内存和资源所有权；
 - 崩溃隔离；

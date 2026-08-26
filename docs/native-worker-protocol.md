@@ -60,21 +60,35 @@ nativeWorkers:
 - 超时、EOF、非法 JSON 或协议身份不匹配会使 Worker 失效并被终止；
 - Host 释放 Worker handle 时必须终止并回收子进程。
 
+主动取消使用独立控制帧：
+
+```json
+{"protocol":1,"type":"cancel","requestId":"native-1"}
+```
+
+Named Pipe 的 `nativeWorkerCancel` 设置线程安全取消信号，不需要等待正在执行的 Worker 锁。
+Host 将 cancel 帧写入同一 stdin，并允许 Worker 在 5 秒内返回当前请求的终止响应；逾期会关闭
+Job 并强制回收 Worker。取消只作用于该 `(application, binding)` 当前正在执行的串行请求。
+
 ## 尚未接线
 
 Daemon 已持有按 `(application, binding)` 隔离的 Worker Manager，支持启动、调用、状态、
 停止、按应用清理和 shutdown 全量清理；调用方法必须精确匹配描述符声明的 capability。
-Named Pipe v1 已开放 `nativeWorkerStart`、`nativeWorkerInvoke`、`nativeWorkerStatus` 和
-`nativeWorkerStop`；调用超时限制为 1–120000 ms，默认 30000 ms。Daemon 从已安装应用目录
+Named Pipe v1 已开放 `nativeWorkerStart`、`nativeWorkerInvoke`、`nativeWorkerCancel`、
+`nativeWorkerStatus` 和 `nativeWorkerStop`；调用超时限制为 1–120000 ms，默认 30000 ms。Daemon 从已安装应用目录
 重新加载并验证 Manifest，不接受客户端提供的可执行路径。
 
-签名安装、流式事件和主动取消仍属于后续切片。Worker 启动后已通过统一隔离层绑定 Windows
+签名安装和流式事件仍属于后续切片。Worker 启动后已通过统一隔离层绑定 Windows
 Job Object；`memoryMb`、`processes` 和 `cpuPercent` 分别成为进程内存、进程树数量和 CPU
 硬限制，Job handle 关闭会终止完整进程树。CPU rate 使用 Windows 的 1/100 百分比单位并启用
 `HARD_CAP`；Manifest 只接受 1–100。`dataQuotaMb` 目前会进入隔离配置与状态，但尚未形成硬限制。
 非 Windows 平台当前只提供进程生命周期管理，
 并在状态中的 `isolated` 返回 `false`。模型推理 Worker 继续使用其专用协议，不由本通用协议替换。
 
-Windows 的受限 stdio 启动原语现已组合 Restricted Token 与 Job Object：进程在削减可移除权限的
-主令牌下创建，同时保留 JSONL 管道，并在执行后立即加入资源受限、关闭即回收的 Job。Native
-Worker Manager 切换到该启动原语仍是下一切片；当前 Manager 使用普通令牌启动后再绑定 Job。
+Windows Native Worker Manager 已切换到 Restricted Token + stdio + Job Object 启动原语：
+进程在削减可移除权限的主令牌下创建，同时保留 JSONL 管道，并在执行后立即加入资源受限、
+关闭即回收的 Job。受限令牌或 Job 创建失败时启动会 fail-closed，不会回退到普通令牌。
+
+Worker 环境不再继承 Daemon 的完整环境，只保留 `SystemRoot`、`WINDIR`、`TEMP`、`TMP`，并由
+Host 注入 `ALEX_PACKAGE_ROOT`、`ALEX_APP_ID` 和 `ALEX_WORKER_BINDING`。非 Windows 路径同样
+清空继承环境并注入对应的 `ALEX_*` 身份字段。
