@@ -823,13 +823,18 @@ pub fn spawn_restricted_with_stdio(
     use std::os::windows::ffi::OsStrExt;
     use windows::Win32::{
         Foundation::CloseHandle,
+        System::JobObjects::AssignProcessToJobObject,
         System::Threading::{
             CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
-            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW,
+            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess,
         },
     };
     use windows::core::{PCWSTR, PWSTR};
 
+    // Create the Job before the child so any configuration failure happens
+    // before untrusted code executes. The restricted token removes ambient
+    // privileges; the Job enforces resources and owns the complete tree.
+    let job = Arc::new(JobHandle::new(request.limits)?);
     let restricted = create_restricted_token()?;
 
     let (parent_in, child_in) = if need_stdin {
@@ -916,6 +921,22 @@ pub fn spawn_restricted_with_stdio(
         }
     }
     created.map_err(|e| IsolationError::Bind(format!("CreateProcessAsUserW: {e}")))?;
+    let assigned = unsafe {
+        AssignProcessToJobObject(
+            windows::Win32::Foundation::HANDLE(job.raw),
+            process.hProcess,
+        )
+    };
+    if let Err(error) = assigned {
+        unsafe {
+            let _ = TerminateProcess(process.hProcess, 1);
+            let _ = CloseHandle(process.hThread);
+            let _ = CloseHandle(process.hProcess);
+        }
+        return Err(IsolationError::Bind(format!(
+            "AssignProcessToJobObject(restricted child): {error}"
+        )));
+    }
     unsafe {
         let _ = CloseHandle(process.hThread);
         let _ = CloseHandle(process.hProcess);
@@ -924,7 +945,7 @@ pub fn spawn_restricted_with_stdio(
         Spawned {
             pid: process.dwProcessId,
             isolation: IsolationHandle {
-                boundary: Some(BoundaryKind::AppContainer),
+                boundary: Some(BoundaryKind::RestrictedJob(job)),
                 accounting: None,
             },
         },
@@ -1116,6 +1137,7 @@ mod tests {
         let (spawned, stdio) =
             spawn_restricted_with_stdio(&request, false, true, true).expect("spawn restricted");
         assert!(spawned.pid > 0);
+        assert!(spawned.isolation.is_real_boundary());
         let stdout = stdio.stdout.expect("stdout pipe");
         let stderr = stdio.stderr.expect("stderr pipe");
 

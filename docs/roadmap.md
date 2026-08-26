@@ -241,7 +241,8 @@ capabilities 明确报告，不能静默降级。
   绑定、描述符及包内入口校验已经接线；Daemon 已持有应用隔离的 Worker Manager 和生命周期
   清理，并开放 start/invoke/status/stop Named Pipe 命令；Windows Job Object 已强制进程树回收、
   `memoryMb`、`processes` 与 `cpuPercent` HARD_CAP，待完成数据配额及更强的 Restricted
-  Token/AppContainer；
+  Token/AppContainer；Restricted Token + stdio + Job 的组合启动底座已完成，待 Native Worker
+  Manager 切换到该路径；
 - 稳定 ABI 或独立进程协议；
 - 内存和资源所有权；
 - 崩溃隔离；

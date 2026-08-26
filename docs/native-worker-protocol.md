@@ -74,3 +74,7 @@ Job Object；`memoryMb`、`processes` 和 `cpuPercent` 分别成为进程内存�
 `HARD_CAP`；Manifest 只接受 1–100。`dataQuotaMb` 目前会进入隔离配置与状态，但尚未形成硬限制。
 非 Windows 平台当前只提供进程生命周期管理，
 并在状态中的 `isolated` 返回 `false`。模型推理 Worker 继续使用其专用协议，不由本通用协议替换。
+
+Windows 的受限 stdio 启动原语现已组合 Restricted Token 与 Job Object：进程在削减可移除权限的
+主令牌下创建，同时保留 JSONL 管道，并在执行后立即加入资源受限、关闭即回收的 Job。Native
+Worker Manager 切换到该启动原语仍是下一切片；当前 Manager 使用普通令牌启动后再绑定 Job。
