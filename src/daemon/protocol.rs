@@ -307,6 +307,7 @@ pub enum ControlCommand {
         request: crate::model::EmbedRequest,
     },
     ModelProviders,
+    ModelHardware,
     ModelProviderUpsert {
         config: crate::model::remote::RemoteProviderConfig,
     },

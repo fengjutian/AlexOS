@@ -19,6 +19,7 @@ use thiserror::Error;
 use crate::platform::PlatformServices;
 
 pub mod download_tasks;
+pub mod hardware;
 pub mod remote;
 
 const INDEX_SCHEMA_VERSION: u32 = 1;
@@ -402,6 +403,16 @@ pub struct WorkerDescriptor {
     pub command: PathBuf,
     #[serde(default)]
     pub args: Vec<String>,
+    #[serde(default)]
+    pub providers: Vec<hardware::ComputeProvider>,
+    #[serde(default = "default_worker_concurrency")]
+    pub max_concurrency: u32,
+    #[serde(default)]
+    pub memory_overhead_mb: u64,
+}
+
+fn default_worker_concurrency() -> u32 {
+    1
 }
 
 impl ProcessInferenceWorker {
@@ -1091,6 +1102,9 @@ mod tests {
                 kind: "mock".into(),
                 command: local_command,
                 args,
+                providers: vec![hardware::ComputeProvider::Cpu],
+                max_concurrency: 1,
+                memory_overhead_mb: 0,
             },
         )
         .unwrap();
@@ -1106,6 +1120,9 @@ mod tests {
             kind: "other".into(),
             command: "worker".into(),
             args: Vec::new(),
+            providers: Vec::new(),
+            max_concurrency: 1,
+            memory_overhead_mb: 0,
         };
         let error = validate_worker_descriptor(&descriptor, Path::new("mock")).unwrap_err();
         assert!(error.to_string().contains("directory name"));

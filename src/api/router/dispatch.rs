@@ -126,6 +126,7 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "model.generate" => router.model_generate(&request.id, p),
         "model.embed" => router.model_embed(&request.id, p),
         "model.providers" => router.model_providers(),
+        "model.hardware" => router.model_hardware(),
         "model.providerUpsert" => router.model_provider_upsert(p),
         "model.providerRemove" => router.model_provider_remove(p),
         "model.providerHealth" => router.model_provider_health(p),

@@ -113,6 +113,18 @@
           <h2 id="model-providers-heading">Remote model providers</h2>
           <div id="ai-providers" class="services-list"></div>
         </section>
+        <section class="panel" aria-labelledby="model-downloads-heading">
+          <h2 id="model-downloads-heading">Local model downloads</h2>
+          <form id="model-download-form" class="form-grid">
+            <label>HTTPS model URL<input id="model-download-url" type="url" required placeholder="https://…/model.gguf"></label>
+            <label>Publisher key (base64)<input id="model-publisher-key" required></label>
+            <label>Signature (base64)<input id="model-signature" required></label>
+            <label class="wide">Signed manifest JSON<textarea id="model-manifest" rows="5" required placeholder='{"id":"publisher/model","digest":"sha256:…","sizeBytes":123,"format":"gguf","architecture":"llama","source":"https://…/model.gguf","compatibleWorkers":["llama.cpp"]}'></textarea></label>
+            <label><input id="model-license-accepted" type="checkbox"> I accept the model license</label>
+            <button type="submit">Download model</button>
+          </form>
+          <div id="ai-model-downloads" class="services-list"></div>
+        </section>
         <section class="panel" aria-labelledby="mcp-connections-heading">
           <h2 id="mcp-connections-heading">MCP connections</h2>
           <div id="ai-mcp" class="services-list"></div>

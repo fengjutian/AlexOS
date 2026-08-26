@@ -290,6 +290,22 @@ export function createAlexClient(transport = browserTransport()) {
       import(source, manifest, options) {
         return invoke("model.import", { source, manifest }, options);
       },
+      downloadStart(request, options) {
+        return invoke("model.downloadStart", request, options);
+      },
+      async downloadList(options) {
+        const result = await invoke("model.downloadList", {}, options);
+        return result.tasks ?? [];
+      },
+      downloadStatus(taskId, options) {
+        return invoke("model.downloadStatus", { taskId }, options);
+      },
+      downloadPause(taskId, options) {
+        return invoke("model.downloadPause", { taskId }, options);
+      },
+      downloadResume(taskId, options) {
+        return invoke("model.downloadResume", { taskId }, options);
+      },
       remove(modelId, options) {
         return invoke("model.remove", { modelId }, options);
       },

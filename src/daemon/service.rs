@@ -562,6 +562,7 @@ impl DaemonService {
             } => self.model_generate(&app_id, &stream_id, request),
             ControlCommand::ModelEmbed { request } => self.model_embed(request),
             ControlCommand::ModelProviders => self.model_providers(),
+            ControlCommand::ModelHardware => Ok(json!(crate::model::hardware::discover())),
             ControlCommand::ModelProviderUpsert { config } => self.model_provider_upsert(config),
             ControlCommand::ModelProviderRemove { provider_id } => {
                 self.model_provider_remove(&provider_id)

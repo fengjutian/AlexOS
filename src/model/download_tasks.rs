@@ -164,11 +164,13 @@ impl ModelDownloadManager {
 
     fn schedule(&self, id: &str) -> Result<(), String> {
         let manager = self.clone();
-        let id = id.to_owned();
+        let run_id = id.to_owned();
+        let failure_id = run_id.clone();
+        let failure_manager = manager.clone();
         crate::runtime::task_executor::update_executor()
-            .submit(move || manager.run(&id))
+            .submit(move || manager.run(&run_id))
             .map_err(|error| {
-                manager.mutate(&id, |task| {
+                failure_manager.mutate(&failure_id, |task| {
                     task.state = "failed".into();
                     task.error = Some(error.to_string());
                 });

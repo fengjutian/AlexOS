@@ -411,6 +411,26 @@ export interface ModelManifest {
   compatibleWorkers?: string[];
 }
 
+export interface ModelDownloadRequest {
+  url: string;
+  manifest: ModelManifest;
+  publisherKey: string;
+  signature: string;
+  acceptLicense?: boolean;
+}
+
+export interface ModelDownloadTask {
+  id: string;
+  request: ModelDownloadRequest;
+  state: "queued" | "running" | "paused" | "completed" | "failed";
+  downloadedBytes: number;
+  totalBytes: number;
+  createdAtMs: number;
+  updatedAtMs: number;
+  error?: string | null;
+  result?: ModelManifest | null;
+}
+
 export type ModelGenerateEvent =
   | { type: "delta"; text: string }
   | { type: "toolCall"; name: string; arguments: unknown }
@@ -560,6 +580,11 @@ export interface AlexClient {
   readonly model: {
     list(options?: InvokeOptions): Promise<ModelManifest[]>;
     import(source: string, manifest: ModelManifest, options?: InvokeOptions): Promise<ModelManifest>;
+    downloadStart(request: ModelDownloadRequest, options?: InvokeOptions): Promise<ModelDownloadTask>;
+    downloadList(options?: InvokeOptions): Promise<ModelDownloadTask[]>;
+    downloadStatus(taskId: string, options?: InvokeOptions): Promise<ModelDownloadTask>;
+    downloadPause(taskId: string, options?: InvokeOptions): Promise<{ taskId: string; paused: boolean }>;
+    downloadResume(taskId: string, options?: InvokeOptions): Promise<ModelDownloadTask>;
     remove(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; removed: boolean }>;
     load(modelId: string, worker: string, options?: InvokeOptions): Promise<{ modelId: string; worker: string; loaded: boolean }>;
     unload(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; unloaded: boolean }>;

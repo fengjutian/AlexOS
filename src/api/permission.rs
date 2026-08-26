@@ -146,7 +146,9 @@ impl Permission {
             | "mcp.oauthLoopback" | "mcp.oauthComplete" => Some("mcp.use"),
             "mcp.listen" => Some("mcp.use"),
             "mcp.callToolInteractive" | "mcp.respondInput" | "mcp.presentInput" => Some("mcp.use"),
-            "model.list" | "model.generate" | "model.cancel" | "model.embed" => Some("model.use"),
+            "model.list" | "model.hardware" | "model.generate" | "model.cancel" | "model.embed" => {
+                Some("model.use")
+            }
             "model.import"
             | "model.load"
             | "model.unload"

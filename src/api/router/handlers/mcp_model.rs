@@ -903,6 +903,14 @@ impl ApiRouter {
         )
     }
 
+    pub(crate) fn model_hardware(&self) -> ApiResult {
+        self.model_use_scope(None)?;
+        self.daemon_ai(
+            "model-hardware",
+            crate::daemon::ControlCommand::ModelHardware,
+        )
+    }
+
     pub(crate) fn model_provider_upsert(&self, params: &Value) -> ApiResult {
         self.require_model_manage()?;
         let p: ModelProviderUpsertParams = parse_params(params)?;

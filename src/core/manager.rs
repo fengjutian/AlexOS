@@ -1760,6 +1760,14 @@ impl ManagerRouter {
             "model-provider-health",
             crate::daemon::ControlCommand::ModelProviderHealth { provider_id: None },
         )?;
+        let downloads = self.daemon_command(
+            "model-download-list",
+            crate::daemon::ControlCommand::ModelDownloadList,
+        )?;
+        let hardware = self.daemon_command(
+            "model-hardware",
+            crate::daemon::ControlCommand::ModelHardware,
+        )?;
         let mut applications = Vec::new();
         for app in self
             .manager
@@ -1792,6 +1800,8 @@ impl ManagerRouter {
         Ok(serde_json::json!({
             "providers": providers.get("providers").cloned().unwrap_or_default(),
             "providerHealth": provider_health.get("providers").cloned().unwrap_or_default(),
+            "modelDownloads": downloads.get("tasks").cloned().unwrap_or_default(),
+            "hardware": hardware,
             "applications": applications
         }))
     }
@@ -1809,6 +1819,21 @@ impl ManagerRouter {
         let command = match operation.as_str() {
             "provider.remove" => crate::daemon::ControlCommand::ModelProviderRemove {
                 provider_id: required("providerId")?,
+            },
+            "model.downloadStart" => crate::daemon::ControlCommand::ModelDownloadStart {
+                request: serde_json::from_value(
+                    params
+                        .get("request")
+                        .cloned()
+                        .ok_or_else(|| "missing `request` parameter".to_owned())?,
+                )
+                .map_err(|error| format!("invalid model download request: {error}"))?,
+            },
+            "model.downloadPause" => crate::daemon::ControlCommand::ModelDownloadPause {
+                task_id: required("taskId")?,
+            },
+            "model.downloadResume" => crate::daemon::ControlCommand::ModelDownloadResume {
+                task_id: required("taskId")?,
             },
             "mcp.disconnect" => crate::daemon::ControlCommand::McpDisconnect {
                 app_id: required("appId")?,

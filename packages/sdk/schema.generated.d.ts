@@ -4,6 +4,8 @@ export type InstanceId = { "instanceId": string };
 export type ModelId = { "modelId": string };
 export type AgentRunId = { "runId": string };
 export type ModelManifest = { "id": string; "digest": string; "sizeBytes": number; "format": string; "architecture": string; "quantization"?: string | null; "license"?: string | null; "source"?: string | null; "compatibleWorkers": Array<string> };
+export type ModelDownloadRequest = { "url": string; "manifest": ModelManifest; "publisherKey": string; "signature": string; "acceptLicense"?: boolean };
+export type ModelDownloadTask = { "id": string; "request": ModelDownloadRequest; "state": "queued" | "running" | "paused" | "completed" | "failed"; "downloadedBytes": number; "totalBytes": number; "createdAtMs": number; "updatedAtMs": number; "error"?: string | null; "result"?: ModelManifest | null };
 export type AgentSpec = { "model": string; "systemPrompt"?: string; "tools"?: Array<{ "binding": string; "name": string; "idempotent"?: boolean; "requireApproval"?: boolean }>; "budget"?: { "maxSteps"?: number; "maxTokens"?: number; "maxToolCalls"?: number; "maxWallTimeMs"?: number } };
 export type UpdateTask = { "id": string; "appId": string; "manifestUrl": string; "channel": "stable" | "beta" | "dev"; "state": string; "stage": string; "progress": number; "error": string | null };
 export type JsonValue = unknown;
@@ -95,6 +97,11 @@ export type AlexCapability =
   | "mcp.listen"
   | "model.list"
   | "model.import"
+  | "model.downloadStart"
+  | "model.downloadList"
+  | "model.downloadStatus"
+  | "model.downloadPause"
+  | "model.downloadResume"
   | "model.remove"
   | "model.load"
   | "model.unload"
@@ -230,6 +237,11 @@ export interface AlexMethodMap {
   "mcp.listen": { params: { "binding": string; "filter": { "toolsListChanged"?: boolean; "promptsListChanged"?: boolean; "resourcesListChanged"?: boolean; "resourceSubscriptions"?: Array<string> } }; result: { "streamId": string; "binding": string } };
   "model.list": { params: Empty; result: { "models": Array<ModelManifest> } };
   "model.import": { params: { "source": string; "manifest": ModelManifest }; result: ModelManifest };
+  "model.downloadStart": { params: ModelDownloadRequest; result: ModelDownloadTask };
+  "model.downloadList": { params: Empty; result: { "tasks": Array<ModelDownloadTask> } };
+  "model.downloadStatus": { params: { "taskId": string }; result: ModelDownloadTask };
+  "model.downloadPause": { params: { "taskId": string }; result: { "taskId": string; "paused": boolean } };
+  "model.downloadResume": { params: { "taskId": string }; result: ModelDownloadTask };
   "model.remove": { params: ModelId; result: { "modelId": string; "removed": boolean } };
   "model.load": { params: { "modelId": string; "worker": string }; result: { "modelId": string; "worker": string; "loaded": boolean } };
   "model.unload": { params: ModelId; result: { "modelId": string; "unloaded": boolean } };

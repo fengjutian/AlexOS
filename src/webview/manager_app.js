@@ -66,6 +66,7 @@
       error.textContent = `AI Runtime is unavailable: ${cause?.message ?? cause}`;
       error.hidden = false;
       $("ai-providers").textContent = "";
+      $("ai-model-downloads").textContent = "";
       $("ai-mcp").textContent = "";
       $("ai-agents").textContent = "";
     }
@@ -80,6 +81,20 @@
           return `<div class="service-row"><div><div class="name">${escapeText(provider.id)}</div><div class="meta">${escapeText(provider.kind)} · ${escapeText(provider.endpoint)}</div></div><div class="meta">secret: ${health.get(provider.id)?.secretConfigured ? "configured" : "missing"}</div><span class="badge ${stateClass(state)}">${escapeText(formatState(state))}</span><button type="button" data-ai-action="provider.remove" data-provider-id="${escapeText(provider.id)}">Remove</button></div>`;
         }).join("")
       : '<p class="muted">No remote model providers configured.</p>';
+
+    const downloads = overview.modelDownloads ?? [];
+    $("ai-model-downloads").innerHTML = downloads.length
+      ? downloads.map((task) => {
+          const total = Number(task.totalBytes ?? 0);
+          const downloaded = Number(task.downloadedBytes ?? 0);
+          const percent = total > 0 ? Math.min(100, Math.floor(downloaded * 100 / total)) : 0;
+          const action = task.state === "running" || task.state === "queued"
+            ? `<button type="button" data-ai-action="model.downloadPause" data-task-id="${escapeText(task.id)}">Pause</button>`
+            : task.state === "paused" || task.state === "failed"
+              ? `<button type="button" data-ai-action="model.downloadResume" data-task-id="${escapeText(task.id)}">Resume</button>` : "";
+          return `<div class="service-row"><div><div class="name">${escapeText(task.request?.manifest?.id ?? task.id)}</div><div class="meta">${percent}% · ${downloaded} / ${total} bytes${task.error ? ` · ${escapeText(task.error)}` : ""}</div><progress max="100" value="${percent}"></progress></div><span class="badge ${stateClass(task.state)}">${escapeText(formatState(task.state))}</span>${action}</div>`;
+        }).join("")
+      : '<p class="muted">No local model downloads.</p>';
 
     const applications = overview.applications ?? [];
     const connections = applications.flatMap((app) => {
@@ -699,6 +714,7 @@
       appId: button.dataset.appId,
       binding: button.dataset.binding,
       runId: button.dataset.runId,
+      taskId: button.dataset.taskId,
     };
     if ((operation === "provider.remove" || operation === "mcp.disconnect" || operation === "agent.cancel")
         && !await confirmModal(`Confirm ${operation}?`, "Confirm", true)) return;
@@ -711,6 +727,28 @@
       showError(operation, error);
     } finally {
       button.disabled = false;
+    }
+  });
+
+  $("model-download-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const submit = event.submitter;
+    if (submit) submit.disabled = true;
+    try {
+      const request = {
+        url: $("model-download-url").value.trim(),
+        manifest: JSON.parse($("model-manifest").value),
+        publisherKey: $("model-publisher-key").value.trim(),
+        signature: $("model-signature").value.trim(),
+        acceptLicense: $("model-license-accepted").checked,
+      };
+      await call("manager.ai_action", { operation: "model.downloadStart", request });
+      toast("Model download started", "success");
+      await loadAiOverview();
+    } catch (error) {
+      showError("Model download", error);
+    } finally {
+      if (submit) submit.disabled = false;
     }
   });
 

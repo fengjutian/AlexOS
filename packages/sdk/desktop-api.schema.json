@@ -164,6 +164,11 @@
       "mcp.listen",
       "model.list",
       "model.import",
+      "model.downloadStart",
+      "model.downloadList",
+      "model.downloadStatus",
+      "model.downloadPause",
+      "model.downloadResume",
       "model.remove",
       "model.load",
       "model.unload",
@@ -264,6 +269,34 @@
         "compatibleWorkers": { "type": "array", "items": { "type": "string" } }
       },
       "required": ["id", "digest", "sizeBytes", "format", "architecture", "compatibleWorkers"],
+      "additionalProperties": false
+    },
+    "ModelDownloadRequest": {
+      "type": "object",
+      "properties": {
+        "url": { "type": "string", "format": "uri", "pattern": "^https://" },
+        "manifest": { "$ref": "#/$defs/ModelManifest" },
+        "publisherKey": { "type": "string", "minLength": 1 },
+        "signature": { "type": "string", "minLength": 1 },
+        "acceptLicense": { "type": "boolean" }
+      },
+      "required": ["url", "manifest", "publisherKey", "signature"],
+      "additionalProperties": false
+    },
+    "ModelDownloadTask": {
+      "type": "object",
+      "properties": {
+        "id": { "type": "string" },
+        "request": { "$ref": "#/$defs/ModelDownloadRequest" },
+        "state": { "enum": ["queued", "running", "paused", "completed", "failed"] },
+        "downloadedBytes": { "type": "integer", "minimum": 0 },
+        "totalBytes": { "type": "integer", "minimum": 0 },
+        "createdAtMs": { "type": "integer", "minimum": 0 },
+        "updatedAtMs": { "type": "integer", "minimum": 0 },
+        "error": { "type": ["string", "null"] },
+        "result": { "anyOf": [{ "$ref": "#/$defs/ModelManifest" }, { "type": "null" }] }
+      },
+      "required": ["id", "request", "state", "downloadedBytes", "totalBytes", "createdAtMs", "updatedAtMs"],
       "additionalProperties": false
     },
     "AgentSpec": {
@@ -2583,6 +2616,26 @@
     "model.import": {
       "params": { "type": "object", "properties": { "source": { "type": "string", "minLength": 1 }, "manifest": { "$ref": "#/$defs/ModelManifest" } }, "required": ["source", "manifest"], "additionalProperties": false },
       "result": { "$ref": "#/$defs/ModelManifest" }
+    },
+    "model.downloadStart": {
+      "params": { "$ref": "#/$defs/ModelDownloadRequest" },
+      "result": { "$ref": "#/$defs/ModelDownloadTask" }
+    },
+    "model.downloadList": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": { "type": "object", "properties": { "tasks": { "type": "array", "items": { "$ref": "#/$defs/ModelDownloadTask" } } }, "required": ["tasks"], "additionalProperties": false }
+    },
+    "model.downloadStatus": {
+      "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/ModelDownloadTask" }
+    },
+    "model.downloadPause": {
+      "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false },
+      "result": { "type": "object", "properties": { "taskId": { "type": "string" }, "paused": { "type": "boolean" } }, "required": ["taskId", "paused"], "additionalProperties": false }
+    },
+    "model.downloadResume": {
+      "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false },
+      "result": { "$ref": "#/$defs/ModelDownloadTask" }
     },
     "model.remove": {
       "params": { "$ref": "#/$defs/ModelId" },
