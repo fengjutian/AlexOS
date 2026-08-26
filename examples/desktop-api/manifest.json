@@ -30,6 +30,7 @@
     { "name": "menu.manage" },
     { "name": "shortcut.register" },
     { "name": "notification.show" },
+    { "name": "network.fetch", "origins": ["https://example.com"] },
     { "name": "system.openExternal", "origins": ["https://example.com"] }
   ]
 }

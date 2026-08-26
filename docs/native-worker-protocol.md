@@ -107,3 +107,5 @@ Named Pipe 的 `nativeWorkerInvokeStream` 会创建 Daemon `StreamManager` 信�
 通过 `streamCredit` 授予额度并读取数据。消费者执行 `streamCancel` 时，独立监视器会调用
 Native Worker cancel，即使 Worker 当前没有产生事件也能取消。终止结果作为
 `{"type":"result","result":...}` 最后一块写入，随后流进入 completed 或 failed 状态。
+
+`nativeWorkerRestart` 会先取消并回收指定 `(application, binding)` 的现有实例，再从已安装应用目录重新加载和校验 Manifest 后启动。普通 `nativeWorkerStart` 也会识别已经退出或崩溃的陈旧实例并清除其注册槽位，因此崩溃不会永久占用 binding。当前提供显式重启与崩溃后再次启动；自动重启策略、退避和崩溃频率熔断仍未实现。

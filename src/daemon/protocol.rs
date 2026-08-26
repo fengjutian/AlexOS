@@ -103,6 +103,10 @@ pub enum ControlCommand {
         app_id: String,
         binding: String,
     },
+    NativeWorkerRestart {
+        app_id: String,
+        binding: String,
+    },
     NativeWorkerCancel {
         app_id: String,
         binding: String,
@@ -668,6 +672,10 @@ mod tests {
                 app_id: "com.example.image".into(),
             },
             ControlCommand::NativeWorkerStop {
+                app_id: "com.example.image".into(),
+                binding: "image".into(),
+            },
+            ControlCommand::NativeWorkerRestart {
                 app_id: "com.example.image".into(),
                 binding: "image".into(),
             },

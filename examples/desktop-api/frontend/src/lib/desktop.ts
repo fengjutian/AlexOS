@@ -38,6 +38,9 @@ export const system = {
   info: () => call<SystemInfo>("system.info"),
   /** Open an external URL. Permission: `system.openExternal` with origin allow-list. */
   openExternal: (url: string) => call<{ opened: boolean }>("system.openExternal", { url }),
+  /** Ask the host for a WebView device permission before using browser APIs. */
+  requestPermission: (permission: "camera" | "microphone" | "geolocation") =>
+    call<{ permission: string; granted: boolean }>("system.requestPermission", { permission }),
 };
 
 export const paths = {
@@ -76,8 +79,12 @@ export interface FsWatchResult {
 /** Filesystem access. Permission: `filesystem.{read,write,watch,drop}` + path scopes. */
 export const fs = {
   readText: (path: string) => call<FsReadTextResult>("filesystem.readText", { path }),
+  readBinary: (path: string) =>
+    call<{ encoding: "base64"; data: string }>("filesystem.readBinary", { path }),
   writeText: (path: string, content: string) =>
     call<{ written: number }>("filesystem.writeText", { path, content }),
+  writeBinary: (path: string, data: string) =>
+    call<{ written: boolean }>("filesystem.writeBinary", { path, data }),
   exists: (path: string) => call<FsExistsResult>("filesystem.exists", { path }),
   stat: (path: string) => call<FileStat>("filesystem.stat", { path }),
   readDir: (path: string) => call<{ entries: DirectoryEntry[] }>("filesystem.readDir", { path }),
@@ -125,6 +132,11 @@ export const notification = {
 export const windowApi = {
   setTitle: (title: string) => call<{ title: string }>("window.setTitle", { title }),
   list: () => call<{ windows: WindowInfo[] }>("window.list"),
+  getBounds: (windowId: number) =>
+    call<{ windowId: number; x: number | null; y: number | null; width: number; height: number }>(
+      "window.getBounds",
+      { windowId },
+    ),
   create: (spec: {
     url: string;
     title?: string;
@@ -138,6 +150,8 @@ export const windowApi = {
     call<{ bounds: unknown }>("window.setBounds", { windowId, ...bounds }),
   setFullscreen: (windowId: number, fullscreen: boolean) =>
     call<{ fullscreen: boolean }>("window.setFullscreen", { windowId, fullscreen }),
+  isFullscreen: (windowId: number) =>
+    call<{ fullscreen: boolean }>("window.isFullscreen", { windowId }),
   minimize: (windowId: number) => call<{ minimized: boolean }>("window.minimize", { windowId }),
   maximize: (windowId: number) => call<{ maximized: boolean }>("window.maximize", { windowId }),
   close: (windowId: number) => call<{ closed: boolean }>("window.close", { windowId }),
@@ -149,6 +163,25 @@ export const windowApi = {
 export const menu = {
   setApplicationMenu: (template: MenuTemplate) =>
     call<{ applied: boolean }>("menu.setApplicationMenu", template),
+  setContextMenu: (template: MenuTemplate) =>
+    call<{ applied: boolean }>("menu.setContextMenu", template),
+};
+
+// ---------- network ----------
+
+export interface FetchResult {
+  status: number;
+  url: string;
+  headers: Array<{ name: string; value: string }>;
+  bodyEncoding: "base64";
+  body: string;
+  truncated: false;
+}
+
+/** HTTPS-only host fetch. Permission: `network.fetch` + origin allow-list. */
+export const net = {
+  fetch: (url: string, options: { method?: string; timeoutMs?: number; maxBytes?: number } = {}) =>
+    call<FetchResult>("net.fetch", { url, ...options }),
 };
 
 // ---------- tray ----------
@@ -186,6 +219,7 @@ export const desktop = {
   menu,
   tray,
   shortcuts,
+  net,
 };
 
 export type Desktop = typeof desktop;

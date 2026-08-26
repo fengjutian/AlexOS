@@ -160,11 +160,25 @@ impl NativeWorkerManager {
             .workers
             .lock()
             .map_err(|_| NativeWorkerError::LockPoisoned)?;
-        if workers.contains_key(&key) {
-            return Err(NativeWorkerError::AlreadyRunning {
-                application: application.into(),
-                binding: binding.into(),
-            });
+        if let Some(existing) = workers.get(&key).cloned() {
+            let running = existing
+                .lock()
+                .map_err(|_| NativeWorkerError::LockPoisoned)?
+                .process
+                .is_running()?;
+            if running {
+                return Err(NativeWorkerError::AlreadyRunning {
+                    application: application.into(),
+                    binding: binding.into(),
+                });
+            }
+            // A crashed/exited worker must not permanently occupy its binding.
+            // Removing the final slot drops its pipes and isolation handle.
+            workers.remove(&key);
+            self.cancellations
+                .lock()
+                .map_err(|_| NativeWorkerError::LockPoisoned)?
+                .remove(&key);
         }
         let descriptor = load_descriptor(&package_root.join(&spec.descriptor))?;
         let limits = resource_limits(spec.resources.as_ref());
@@ -184,14 +198,11 @@ impl NativeWorkerManager {
             let mut worker = slot.lock().map_err(|_| NativeWorkerError::LockPoisoned)?;
             status_for(application, binding, &mut worker)?
         };
-        workers.insert(key, slot);
         self.cancellations
             .lock()
             .map_err(|_| NativeWorkerError::LockPoisoned)?
-            .insert(
-                (application.to_owned(), binding.to_owned()),
-                Arc::new(AtomicBool::new(false)),
-            );
+            .insert(key.clone(), Arc::new(AtomicBool::new(false)));
+        workers.insert(key, slot);
         Ok(status)
     }
 
@@ -1131,6 +1142,15 @@ mod tests {
         assert!(status.running);
         assert!(status.isolated);
         assert!(status.pid > 0);
+        {
+            let slot = manager.slot("com.example.app", "worker").unwrap();
+            slot.lock().unwrap().process.terminate();
+        }
+        let restarted = manager
+            .start("com.example.app", "worker", temp.path(), &spec)
+            .unwrap();
+        assert!(restarted.running);
+        assert!(restarted.isolated);
         manager.stop("com.example.app", "worker").unwrap();
         assert!(matches!(
             manager.status("com.example.app", "worker"),

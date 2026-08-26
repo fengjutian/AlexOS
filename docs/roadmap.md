@@ -247,6 +247,7 @@ capabilities 明确报告，不能静默降级。
   会强制回收 Worker；
 - Worker 多事件帧、Host 流式回调及 `nativeWorkerInvokeStream` → Daemon `StreamManager`
   信用/背压桥接已完成，消费者取消会转发到 Worker；
+- 已支持 `nativeWorkerRestart`，并在再次启动时清理已退出或崩溃的陈旧实例；自动重启、退避与崩溃熔断仍待实现；
 - 稳定 ABI 或独立进程协议；
 - 内存和资源所有权；
 - 崩溃隔离；

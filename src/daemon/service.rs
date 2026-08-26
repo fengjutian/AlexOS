@@ -281,6 +281,18 @@ impl DaemonService {
         serde_json::to_value(status).map_err(|error| error.to_string())
     }
 
+    fn restart_installed_native_worker(
+        &self,
+        application: &str,
+        binding: &str,
+    ) -> Result<serde_json::Value, String> {
+        match self.native_workers.stop(application, binding) {
+            Ok(()) | Err(crate::native_worker::NativeWorkerError::NotRunning { .. }) => {}
+            Err(error) => return Err(error.to_string()),
+        }
+        self.start_installed_native_worker(application, binding)
+    }
+
     fn invoke_native_worker_command(
         &self,
         application: &str,
@@ -555,6 +567,9 @@ impl DaemonService {
             ControlCommand::NativeWorkerStop { app_id, binding } => self
                 .native_worker_stop(&app_id, &binding)
                 .map(|()| json!({ "stopped": true })),
+            ControlCommand::NativeWorkerRestart { app_id, binding } => {
+                self.restart_installed_native_worker(&app_id, &binding)
+            }
             ControlCommand::NativeWorkerCancel { app_id, binding } => self
                 .native_workers
                 .cancel(&app_id, &binding)
@@ -4616,5 +4631,21 @@ mod tests {
         });
         assert!(!stream.ok);
         assert!(stream.error.unwrap().contains("timeoutMs"));
+
+        let restart = service.handle(ControlRequest {
+            protocol: PROTOCOL_VERSION,
+            id: "native-restart".into(),
+            command: ControlCommand::NativeWorkerRestart {
+                app_id: "com.example.app".into(),
+                binding: "image".into(),
+            },
+        });
+        assert!(!restart.ok);
+        assert!(
+            restart
+                .error
+                .unwrap()
+                .contains("app manager is unavailable")
+        );
     }
 }

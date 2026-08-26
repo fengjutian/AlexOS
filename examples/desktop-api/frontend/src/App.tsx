@@ -45,6 +45,7 @@ export function App(): React.ReactElement {
   const [watchId, setWatchId] = useState<string | null>(null);
   const [childWindowId, setChildWindowId] = useState<number | null>(null);
   const [trayId, setTrayId] = useState<string | null>(null);
+  const [query, setQuery] = useState("");
 
   // Build the menu tree (used by both the in-page bar and the native
   // menu). Re-built when state the menu reads changes (watchId toggles
@@ -101,6 +102,8 @@ export function App(): React.ReactElement {
     setTrayId,
     run,
   });
+  const filteredGroups = useMemo(() => filterGroups(groups, query), [groups, query]);
+  const actionCount = groups.reduce((total, group) => total + group.actions.length, 0);
 
   return (
     <main>
@@ -115,9 +118,23 @@ export function App(): React.ReactElement {
             value={message}
             onChange={setMessage}
           />
-          {groups.map((group) => (
+          <section className="api-explorer" aria-label="API 浏览器">
+            <div>
+              <strong>API Explorer</strong>
+              <span>{groups.length} 个领域 · {actionCount} 个操作</span>
+            </div>
+            <input
+              type="search"
+              value={query}
+              onChange={(event) => setQuery(event.target.value)}
+              placeholder="搜索 API、功能或方法名…"
+              aria-label="搜索 API"
+            />
+          </section>
+          {filteredGroups.map((group) => (
             <ActionGroup key={group.title} group={group} pending={state.pending} onRun={run} />
           ))}
+          {filteredGroups.length === 0 && <p className="no-results">没有匹配的 API 操作。</p>}
         </div>
         <div className="results">
           <ResultPanel state={state} onClear={clear} />
@@ -172,9 +189,20 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
     };
 
     const tray: ActionGroupSpec = {
-      title: "系统托盘",
-      description: "原生应用菜单已经由顶部菜单栏自动注册；这里只演示托盘图标的生命周期。",
+      title: "菜单与系统托盘",
+      description: "应用菜单、右键菜单和托盘图标的原生生命周期。",
       actions: [
+        {
+          label: "注册右键菜单",
+          description: "menu.setContextMenu — 为 WebView 设置由 Host 渲染的上下文菜单。",
+          run: () => desktop.menu.setContextMenu({
+            items: [
+              { type: "normal", id: "context.copy", label: "复制示例文本" },
+              { type: "separator" },
+              { type: "normal", id: "context.inspect", label: "查看事件流" },
+            ],
+          }),
+        },
         {
           label: trayId ? "重建托盘" : "创建托盘",
           description: "tray.create — 创建一个透明托盘图标；id 会保存以便销毁。",
@@ -243,6 +271,8 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
         { label: "创建 data/", description: "filesystem.createDir recursive=true — 等价于 mkdir -p。", run: () => desktop.fs.createDir("data", true) },
         { label: "写文件", description: "filesystem.writeText — 写入共享文本到 data/demo.txt。", run: () => desktop.fs.writeText("data/demo.txt", message) },
         { label: "读文件", description: "filesystem.readText — 取回 data/demo.txt 的内容。", run: () => desktop.fs.readText("data/demo.txt") },
+        { label: "写二进制", description: "filesystem.writeBinary — 把共享文本编码为 Base64 后写入。", run: () => desktop.fs.writeBinary("data/demo.bin", utf8ToBase64(message)) },
+        { label: "读二进制", description: "filesystem.readBinary — 返回 Base64 编码的二进制数据。", run: () => desktop.fs.readBinary("data/demo.bin") },
         { label: "是否存在", description: "filesystem.exists — true/false，不会抛错。", run: () => desktop.fs.exists("data/demo.txt") },
         { label: "文件信息", description: "filesystem.stat — 大小、类型、修改时间。", run: () => desktop.fs.stat("data/demo.txt") },
         { label: "目录列表", description: "filesystem.readDir — 列出 data/ 下所有 entry。", run: () => desktop.fs.readDir("data") },
@@ -286,10 +316,20 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
     };
 
     const notificationAndLinks: ActionGroupSpec = {
-      title: "通知与外部链接",
-      description: "系统通知、openExternal 走 host allow-list，源不在白名单会拒绝。",
+      title: "通知、权限与网络",
+      description: "系统通知、设备权限、外部链接和受来源白名单保护的 HTTPS 请求。",
       actions: [
         { label: "发送通知", description: "notification.show — title/body 都用共享文本。", run: () => desktop.notification.show("Alex Runtime", message) },
+        { label: "请求摄像头权限", description: "system.requestPermission — 授权后才能使用 WebView MediaDevices。", run: () => desktop.system.requestPermission("camera") },
+        { label: "请求麦克风权限", description: "system.requestPermission — 权限决定由 Host 和用户共同控制。", run: () => desktop.system.requestPermission("microphone") },
+        {
+          label: "安全 Fetch",
+          description: "net.fetch — HTTPS-only、禁止重定向且限制响应体大小。",
+          run: async () => {
+            const response = await desktop.net.fetch("https://example.com", { timeoutMs: 10_000, maxBytes: 64_000 });
+            return { ...response, bodyPreview: base64ToUtf8(response.body).slice(0, 240), body: `[base64 ${response.body.length} chars]` };
+          },
+        },
         { label: "打开 example.com", description: "system.openExternal — origin 受 manifest 限制。", run: () => desktop.system.openExternal("https://example.com") },
       ],
     };
@@ -309,6 +349,20 @@ function useActionGroups(input: UseActionGroupsInput): ActionGroupSpec[] {
           },
         },
         { label: "窗口列表", description: "window.list — 含主窗口与所有子窗口。", run: () => desktop.window.list() },
+        {
+          label: "主窗口边界",
+          description: "window.getBounds — 查询主窗口位置和客户区尺寸。",
+          run: async () => desktop.window.getBounds(await firstWindowId()),
+        },
+        {
+          label: "切换主窗口全屏",
+          description: "window.isFullscreen + setFullscreen — 读取当前状态后切换。",
+          run: async () => {
+            const id = await firstWindowId();
+            const current = await desktop.window.isFullscreen(id);
+            return desktop.window.setFullscreen(id, !current.fullscreen);
+          },
+        },
         {
           label: "移动子窗口",
           description: "window.setBounds — 需先有子窗口。",
@@ -371,6 +425,41 @@ function extractRuntimeId(capabilities: unknown): string | null {
   const platform = (capabilities as { platform?: { os?: string } }).platform;
   const os = platform?.os ?? "host";
   return `os: ${os}`;
+}
+
+function filterGroups(groups: ActionGroupSpec[], query: string): ActionGroupSpec[] {
+  const needle = query.trim().toLocaleLowerCase();
+  if (!needle) return groups;
+  return groups
+    .map((group) => ({
+      ...group,
+      actions: group.actions.filter((action) =>
+        `${group.title} ${group.description} ${action.label} ${action.description}`
+          .toLocaleLowerCase()
+          .includes(needle),
+      ),
+    }))
+    .filter((group) => group.actions.length > 0);
+}
+
+async function firstWindowId(): Promise<number> {
+  const { windows } = await desktop.window.list();
+  const first = windows[0];
+  if (!first) throw new Error("Host 没有返回可管理窗口");
+  return first.id;
+}
+
+function utf8ToBase64(value: string): string {
+  const bytes = new TextEncoder().encode(value);
+  let binary = "";
+  bytes.forEach((byte) => { binary += String.fromCharCode(byte); });
+  return btoa(binary);
+}
+
+function base64ToUtf8(value: string): string {
+  const binary = atob(value);
+  const bytes = Uint8Array.from(binary, (character) => character.charCodeAt(0));
+  return new TextDecoder().decode(bytes);
 }
 
 /**

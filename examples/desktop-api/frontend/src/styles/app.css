@@ -276,6 +276,39 @@ header p { margin: 0; color: #8d9ab7; }
 }
 .shared-input input:focus { border-color: #448dde; box-shadow: 0 0 0 3px #1e5b9a33; }
 
+.api-explorer {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 14px;
+  padding: 12px 14px;
+  background: #0f1728e8;
+  border: 1px solid #26324d;
+  border-radius: 12px;
+}
+.api-explorer > div { display: grid; gap: 2px; }
+.api-explorer strong { color: #dbe6f8; }
+.api-explorer span { color: #73809c; font-size: 11px; }
+.api-explorer input {
+  width: min(100%, 330px);
+  padding: 8px 11px;
+  color: #e8edf7;
+  background: #090f1c;
+  border: 1px solid #314261;
+  border-radius: 8px;
+  outline: none;
+}
+.api-explorer input:focus { border-color: #448dde; box-shadow: 0 0 0 3px #1e5b9a33; }
+.no-results {
+  margin: 0;
+  padding: 28px;
+  color: #73809c;
+  text-align: center;
+  background: #0f1728e8;
+  border: 1px dashed #314261;
+  border-radius: 12px;
+}
+
 /* ---------------------------------------------------------------------
  * Action group
  * ------------------------------------------------------------------ */
@@ -480,6 +513,8 @@ button:disabled { opacity: 0.5; cursor: progress; }
   }
   .status-cluster { align-items: flex-start; }
   .status, .meta { text-align: left; }
+  .api-explorer { align-items: stretch; flex-direction: column; }
+  .api-explorer input { width: 100%; }
 
   /* Single button per row on phones — easier to tap and avoids
      truncating long Chinese labels. */
