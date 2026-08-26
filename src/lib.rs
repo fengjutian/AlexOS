@@ -12,6 +12,7 @@ pub mod headless;
 pub mod instance;
 pub mod mcp;
 pub mod model;
+pub mod native_worker;
 pub mod platform;
 pub mod runtime;
 pub mod runtime_provider;
