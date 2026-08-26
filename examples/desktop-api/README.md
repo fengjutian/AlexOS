@@ -6,7 +6,8 @@
 
 MCP 工作台提供 binding、tool、JSON 参数、Resource URI、Prompt、Completion、OAuth 和交互
 Input ID 编辑器，并覆盖连接/健康、能力发现、工具调用、Resources、Prompts、审计、Ping、
-OAuth loopback、交互确认和订阅监听。MCP 操作需要该应用已经配置或持久化相应 binding。
+OAuth loopback、交互确认和订阅监听。开发模式在 Vite 中内置 loopback-only `filesystem`
+MCP Server，启动应用后即可调用三个虚拟文件工具并浏览示例 Resource/Prompt。
 
 A standard React + TypeScript + Vite frontend that exercises every Alex
 desktop API exposed by the runtime. The single-page playground groups

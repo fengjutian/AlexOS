@@ -133,7 +133,7 @@ export function McpWorkbench({ pending, onRun }: McpWorkbenchProps): React.React
           </li>
         ))}
       </ul>
-      <small className="mcp-note">需要应用已经配置或持久化对应 binding；监听操作最多等待 15 秒。</small>
+      <small className="mcp-note">开发模式内置 filesystem binding；监听操作最多等待 15 秒。</small>
     </section>
   );
 }
