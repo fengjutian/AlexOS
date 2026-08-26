@@ -169,6 +169,8 @@
       "model.downloadStatus",
       "model.downloadPause",
       "model.downloadResume",
+      "model.hardware",
+      "model.runtimeStatus",
       "model.remove",
       "model.load",
       "model.unload",
@@ -297,6 +299,26 @@
         "result": { "anyOf": [{ "$ref": "#/$defs/ModelManifest" }, { "type": "null" }] }
       },
       "required": ["id", "request", "state", "downloadedBytes", "totalBytes", "createdAtMs", "updatedAtMs"],
+      "additionalProperties": false
+    },
+    "HardwareProfile": {
+      "type": "object",
+      "properties": {
+        "logicalCpus": { "type": "integer", "minimum": 1 },
+        "providers": { "type": "array", "items": { "enum": ["cpu", "cuda", "directMl", "coreMl", "rocm"] } },
+        "devices": { "type": "array", "items": { "type": "object", "properties": { "id": { "type": "string" }, "name": { "type": "string" }, "kind": { "type": "string" }, "provider": { "enum": ["cpu", "cuda", "directMl", "coreMl", "rocm"] }, "memoryMb": { "type": ["integer", "null"] } }, "required": ["id", "name", "kind", "provider"], "additionalProperties": false } }
+      },
+      "required": ["logicalCpus", "providers", "devices"],
+      "additionalProperties": false
+    },
+    "ModelResourceStatus": {
+      "type": "object",
+      "properties": {
+        "budget": { "type": "object", "properties": { "memoryBytes": { "type": "integer" }, "maxLoadedModels": { "type": "integer" }, "maxConcurrentRequestsPerModel": { "type": "integer" } }, "required": ["memoryBytes", "maxLoadedModels", "maxConcurrentRequestsPerModel"], "additionalProperties": false },
+        "allocatedBytes": { "type": "integer" },
+        "models": { "type": "array", "items": { "type": "object", "properties": { "modelId": { "type": "string" }, "worker": { "type": "string" }, "memoryBytes": { "type": "integer" }, "activeRequests": { "type": "integer" }, "lastUsedMs": { "type": "integer" } }, "required": ["modelId", "worker", "memoryBytes", "activeRequests", "lastUsedMs"], "additionalProperties": false } }
+      },
+      "required": ["budget", "allocatedBytes", "models"],
       "additionalProperties": false
     },
     "AgentSpec": {
@@ -2636,6 +2658,14 @@
     "model.downloadResume": {
       "params": { "type": "object", "properties": { "taskId": { "type": "string", "minLength": 1 } }, "required": ["taskId"], "additionalProperties": false },
       "result": { "$ref": "#/$defs/ModelDownloadTask" }
+    },
+    "model.hardware": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": { "$ref": "#/$defs/HardwareProfile" }
+    },
+    "model.runtimeStatus": {
+      "params": { "$ref": "#/$defs/Empty" },
+      "result": { "type": "object", "properties": { "hardware": { "$ref": "#/$defs/HardwareProfile" }, "resources": { "$ref": "#/$defs/ModelResourceStatus" } }, "required": ["hardware", "resources"], "additionalProperties": false }
     },
     "model.remove": {
       "params": { "$ref": "#/$defs/ModelId" },

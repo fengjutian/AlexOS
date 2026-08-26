@@ -563,6 +563,7 @@ impl DaemonService {
             ControlCommand::ModelEmbed { request } => self.model_embed(request),
             ControlCommand::ModelProviders => self.model_providers(),
             ControlCommand::ModelHardware => Ok(json!(crate::model::hardware::discover())),
+            ControlCommand::ModelRuntimeStatus => self.model_runtime_status(),
             ControlCommand::ModelProviderUpsert { config } => self.model_provider_upsert(config),
             ControlCommand::ModelProviderRemove { provider_id } => {
                 self.model_provider_remove(&provider_id)
@@ -2216,6 +2217,13 @@ impl DaemonService {
             .list()
             .map_err(|error| error.to_string())?;
         Ok(json!({ "models": models }))
+    }
+
+    fn model_runtime_status(&self) -> Result<serde_json::Value, String> {
+        Ok(json!({
+            "hardware": crate::model::hardware::discover(),
+            "resources": self.model_manager()?.resource_status()
+        }))
     }
 
     fn model_import(

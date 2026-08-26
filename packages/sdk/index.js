@@ -306,6 +306,12 @@ export function createAlexClient(transport = browserTransport()) {
       downloadResume(taskId, options) {
         return invoke("model.downloadResume", { taskId }, options);
       },
+      hardware(options) {
+        return invoke("model.hardware", {}, options);
+      },
+      runtimeStatus(options) {
+        return invoke("model.runtimeStatus", {}, options);
+      },
       remove(modelId, options) {
         return invoke("model.remove", { modelId }, options);
       },

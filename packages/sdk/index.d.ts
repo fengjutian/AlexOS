@@ -431,6 +431,18 @@ export interface ModelDownloadTask {
   result?: ModelManifest | null;
 }
 
+export type ComputeProvider = "cpu" | "cuda" | "directMl" | "coreMl" | "rocm";
+export interface HardwareProfile {
+  logicalCpus: number;
+  providers: ComputeProvider[];
+  devices: Array<{ id: string; name: string; kind: string; provider: ComputeProvider; memoryMb?: number | null }>;
+}
+export interface ModelResourceStatus {
+  budget: { memoryBytes: number; maxLoadedModels: number; maxConcurrentRequestsPerModel: number };
+  allocatedBytes: number;
+  models: Array<{ modelId: string; worker: string; memoryBytes: number; activeRequests: number; lastUsedMs: number }>;
+}
+
 export type ModelGenerateEvent =
   | { type: "delta"; text: string }
   | { type: "toolCall"; name: string; arguments: unknown }
@@ -585,6 +597,8 @@ export interface AlexClient {
     downloadStatus(taskId: string, options?: InvokeOptions): Promise<ModelDownloadTask>;
     downloadPause(taskId: string, options?: InvokeOptions): Promise<{ taskId: string; paused: boolean }>;
     downloadResume(taskId: string, options?: InvokeOptions): Promise<ModelDownloadTask>;
+    hardware(options?: InvokeOptions): Promise<HardwareProfile>;
+    runtimeStatus(options?: InvokeOptions): Promise<{ hardware: HardwareProfile; resources: ModelResourceStatus }>;
     remove(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; removed: boolean }>;
     load(modelId: string, worker: string, options?: InvokeOptions): Promise<{ modelId: string; worker: string; loaded: boolean }>;
     unload(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; unloaded: boolean }>;

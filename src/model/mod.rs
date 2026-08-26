@@ -21,6 +21,7 @@ use crate::platform::PlatformServices;
 pub mod download_tasks;
 pub mod hardware;
 pub mod remote;
+pub mod resource;
 
 const INDEX_SCHEMA_VERSION: u32 = 1;
 const WORKER_DESCRIPTOR_SCHEMA_VERSION: u32 = 1;
@@ -619,6 +620,7 @@ pub struct ModelManager {
     workers: Arc<Mutex<BTreeMap<String, Arc<dyn InferenceWorker>>>>,
     loaded: Arc<Mutex<BTreeMap<String, String>>>,
     remote: Arc<Mutex<Option<remote::RemoteProviderRouter>>>,
+    resources: resource::ResourceGovernor,
 }
 
 impl ModelManager {
@@ -628,6 +630,7 @@ impl ModelManager {
             workers: Arc::new(Mutex::new(BTreeMap::new())),
             loaded: Arc::new(Mutex::new(BTreeMap::new())),
             remote: Arc::new(Mutex::new(None)),
+            resources: resource::ResourceGovernor::new(resource::ResourceBudget::default()),
         }
     }
 
@@ -767,7 +770,21 @@ impl ModelManager {
             ));
         }
         let worker = self.worker(worker_kind)?;
-        worker.load(&model, &self.store.blob_path(model_id)?)?;
+        let evicted = self
+            .resources
+            .reserve(model_id, worker_kind, model.size_bytes)?;
+        for allocation in evicted {
+            if let Ok(evicted_worker) = self.worker(&allocation.worker) {
+                let _ = evicted_worker.unload(&allocation.model_id);
+            }
+            if let Ok(mut loaded) = self.loaded.lock() {
+                loaded.remove(&allocation.model_id);
+            }
+        }
+        if let Err(error) = worker.load(&model, &self.store.blob_path(model_id)?) {
+            self.resources.release(model_id);
+            return Err(error);
+        }
         self.loaded
             .lock()
             .map_err(|_| ModelError::Worker("loaded registry lock poisoned".into()))?
@@ -799,6 +816,7 @@ impl ModelManager {
             .get(&request.model)
             .cloned()
             .ok_or_else(|| ModelError::Worker("model is not loaded".into()))?;
+        let _permit = self.resources.acquire(&request.model)?;
         self.worker(&worker_kind)?.generate(request, emit)
     }
     pub fn embed(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError> {
@@ -815,6 +833,7 @@ impl ModelManager {
             .get(&request.model)
             .cloned()
             .ok_or_else(|| ModelError::Worker("model is not loaded".into()))?;
+        let _permit = self.resources.acquire(&request.model)?;
         self.worker(&worker_kind)?.embed(request)
     }
     pub fn cancel(&self, model_id: &str, request_id: &str) -> Result<(), ModelError> {
@@ -841,6 +860,7 @@ impl ModelManager {
             return Ok(false);
         };
         self.worker(&worker_kind)?.unload(model_id)?;
+        self.resources.release(model_id);
         Ok(true)
     }
     pub fn loaded_models(&self) -> BTreeSet<String> {
@@ -848,6 +868,9 @@ impl ModelManager {
             .lock()
             .map(|v| v.keys().cloned().collect())
             .unwrap_or_default()
+    }
+    pub fn resource_status(&self) -> resource::ResourceStatus {
+        self.resources.status()
     }
     fn worker(&self, kind: &str) -> Result<Arc<dyn InferenceWorker>, ModelError> {
         self.workers
@@ -888,6 +911,17 @@ fn validate_worker_descriptor(
     if descriptor.command.as_os_str().is_empty() {
         return Err(ModelError::InvalidMetadata(
             "worker command is empty".into(),
+        ));
+    }
+    if descriptor.max_concurrency == 0 || descriptor.max_concurrency > 256 {
+        return Err(ModelError::InvalidMetadata(
+            "worker maxConcurrency must be between 1 and 256".into(),
+        ));
+    }
+    let unique = descriptor.providers.iter().collect::<BTreeSet<_>>();
+    if unique.len() != descriptor.providers.len() {
+        return Err(ModelError::InvalidMetadata(
+            "worker providers contain duplicates".into(),
         ));
     }
     Ok(())

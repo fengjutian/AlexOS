@@ -110,6 +110,29 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
             });
         }
     }
+    if let Ok(output) = Command::new("wmic")
+        .args(["path", "Win32_PnPEntity", "get", "Name", "/format:list"])
+        .output()
+        && output.status.success()
+    {
+        for (index, name) in String::from_utf8_lossy(&output.stdout)
+            .lines()
+            .filter_map(|line| line.trim().strip_prefix("Name="))
+            .filter(|name| {
+                let lower = name.to_ascii_lowercase();
+                lower.contains("neural") || lower.contains(" npu") || lower.starts_with("npu")
+            })
+            .enumerate()
+        {
+            devices.push(HardwareDevice {
+                id: format!("npu:{index}:directml"),
+                name: name.into(),
+                kind: "npu".into(),
+                provider: ComputeProvider::DirectMl,
+                memory_mb: None,
+            });
+        }
+    }
 }
 
 #[cfg(target_os = "linux")]
@@ -129,6 +152,15 @@ fn discover_accelerators(devices: &mut Vec<HardwareDevice>) {
             name: "AMD GPU".into(),
             kind: "gpu".into(),
             provider: ComputeProvider::Rocm,
+            memory_mb: None,
+        });
+    }
+    if Path::new("/dev/accel").exists() {
+        devices.push(HardwareDevice {
+            id: "npu:0".into(),
+            name: "Linux accelerator".into(),
+            kind: "npu".into(),
+            provider: ComputeProvider::Cpu,
             memory_mb: None,
         });
     }

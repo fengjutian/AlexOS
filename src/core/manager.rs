@@ -1764,9 +1764,9 @@ impl ManagerRouter {
             "model-download-list",
             crate::daemon::ControlCommand::ModelDownloadList,
         )?;
-        let hardware = self.daemon_command(
-            "model-hardware",
-            crate::daemon::ControlCommand::ModelHardware,
+        let model_runtime = self.daemon_command(
+            "model-runtime-status",
+            crate::daemon::ControlCommand::ModelRuntimeStatus,
         )?;
         let mut applications = Vec::new();
         for app in self
@@ -1801,7 +1801,7 @@ impl ManagerRouter {
             "providers": providers.get("providers").cloned().unwrap_or_default(),
             "providerHealth": provider_health.get("providers").cloned().unwrap_or_default(),
             "modelDownloads": downloads.get("tasks").cloned().unwrap_or_default(),
-            "hardware": hardware,
+            "modelRuntime": model_runtime,
             "applications": applications
         }))
     }

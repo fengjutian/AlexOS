@@ -23,7 +23,10 @@ Example `worker.json`:
   "schemaVersion": 1,
   "kind": "llama-cpp",
   "command": "alex-llama-worker.exe",
-  "args": ["--threads", "8"]
+  "args": ["--threads", "8"],
+  "providers": ["cuda", "directMl", "cpu"],
+  "maxConcurrency": 1,
+  "memoryOverheadMb": 256
 }
 ```
 
@@ -92,6 +95,9 @@ EOF, invalid JSON, protocol mismatch, an oversized frame, or a mismatched
 `requestId` fails the active operation. Dropping the adapter terminates and
 reaps the child process.
 
-The current v1 adapter provides process separation, streaming, and cancellation.
-Job Object/resource quotas, automatic crash restart, health checks, GPU
-scheduling, and OOM recovery remain separate runtime work.
+The v1 adapter provides process separation, streaming, cancellation and bounded
+request/response frames. Alex discovers CPU/GPU/NPU capabilities, validates the
+providers declared by each worker, accounts loaded model bytes against a daemon
+memory budget, limits concurrent requests and evicts only idle least-recently-used
+models. Worker crash restart, heartbeat health checks and OS-level worker memory
+enforcement remain runtime work.

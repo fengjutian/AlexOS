@@ -6,6 +6,8 @@ export type AgentRunId = { "runId": string };
 export type ModelManifest = { "id": string; "digest": string; "sizeBytes": number; "format": string; "architecture": string; "quantization"?: string | null; "license"?: string | null; "source"?: string | null; "compatibleWorkers": Array<string> };
 export type ModelDownloadRequest = { "url": string; "manifest": ModelManifest; "publisherKey": string; "signature": string; "acceptLicense"?: boolean };
 export type ModelDownloadTask = { "id": string; "request": ModelDownloadRequest; "state": "queued" | "running" | "paused" | "completed" | "failed"; "downloadedBytes": number; "totalBytes": number; "createdAtMs": number; "updatedAtMs": number; "error"?: string | null; "result"?: ModelManifest | null };
+export type HardwareProfile = { "logicalCpus": number; "providers": Array<"cpu" | "cuda" | "directMl" | "coreMl" | "rocm">; "devices": Array<{ "id": string; "name": string; "kind": string; "provider": "cpu" | "cuda" | "directMl" | "coreMl" | "rocm"; "memoryMb"?: number | null }> };
+export type ModelResourceStatus = { "budget": { "memoryBytes": number; "maxLoadedModels": number; "maxConcurrentRequestsPerModel": number }; "allocatedBytes": number; "models": Array<{ "modelId": string; "worker": string; "memoryBytes": number; "activeRequests": number; "lastUsedMs": number }> };
 export type AgentSpec = { "model": string; "systemPrompt"?: string; "tools"?: Array<{ "binding": string; "name": string; "idempotent"?: boolean; "requireApproval"?: boolean }>; "budget"?: { "maxSteps"?: number; "maxTokens"?: number; "maxToolCalls"?: number; "maxWallTimeMs"?: number } };
 export type UpdateTask = { "id": string; "appId": string; "manifestUrl": string; "channel": "stable" | "beta" | "dev"; "state": string; "stage": string; "progress": number; "error": string | null };
 export type JsonValue = unknown;
@@ -102,6 +104,8 @@ export type AlexCapability =
   | "model.downloadStatus"
   | "model.downloadPause"
   | "model.downloadResume"
+  | "model.hardware"
+  | "model.runtimeStatus"
   | "model.remove"
   | "model.load"
   | "model.unload"
@@ -242,6 +246,8 @@ export interface AlexMethodMap {
   "model.downloadStatus": { params: { "taskId": string }; result: ModelDownloadTask };
   "model.downloadPause": { params: { "taskId": string }; result: { "taskId": string; "paused": boolean } };
   "model.downloadResume": { params: { "taskId": string }; result: ModelDownloadTask };
+  "model.hardware": { params: Empty; result: HardwareProfile };
+  "model.runtimeStatus": { params: Empty; result: { "hardware": HardwareProfile; "resources": ModelResourceStatus } };
   "model.remove": { params: ModelId; result: { "modelId": string; "removed": boolean } };
   "model.load": { params: { "modelId": string; "worker": string }; result: { "modelId": string; "worker": string; "loaded": boolean } };
   "model.unload": { params: ModelId; result: { "modelId": string; "unloaded": boolean } };

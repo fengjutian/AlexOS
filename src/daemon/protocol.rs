@@ -308,6 +308,7 @@ pub enum ControlCommand {
     },
     ModelProviders,
     ModelHardware,
+    ModelRuntimeStatus,
     ModelProviderUpsert {
         config: crate::model::remote::RemoteProviderConfig,
     },

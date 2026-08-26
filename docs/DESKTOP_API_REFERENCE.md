@@ -85,6 +85,8 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `model.downloadStatus` | always | method-specific | blocking |
 | `model.downloadPause` | always | method-specific | blocking |
 | `model.downloadResume` | always | method-specific | blocking |
+| `model.hardware` | always | method-specific | blocking |
+| `model.runtimeStatus` | always | method-specific | blocking |
 | `model.remove` | always | method-specific | blocking |
 | `model.load` | always | method-specific | blocking |
 | `model.unload` | always | method-specific | blocking |
@@ -137,6 +139,6 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `shortcuts.unregister` | nativeDesktop | shortcuts | native |
 | `shortcuts.list` | nativeDesktop | shortcuts | native |
 
-Typed JSON Schema coverage: 132/132 methods.
+Typed JSON Schema coverage: 134/134 methods.
 
 Common errors: `INVALID_PARAMS`, `PERMISSION_DENIED`, `OPERATION_FAILED`, `DEADLINE_EXCEEDED`, `HOST_BUSY`, `METHOD_NOT_FOUND`.

@@ -911,6 +911,14 @@ impl ApiRouter {
         )
     }
 
+    pub(crate) fn model_runtime_status(&self) -> ApiResult {
+        self.model_use_scope(None)?;
+        self.daemon_ai(
+            "model-runtime-status",
+            crate::daemon::ControlCommand::ModelRuntimeStatus,
+        )
+    }
+
     pub(crate) fn model_provider_upsert(&self, params: &Value) -> ApiResult {
         self.require_model_manage()?;
         let p: ModelProviderUpsertParams = parse_params(params)?;

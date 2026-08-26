@@ -67,6 +67,7 @@
       error.hidden = false;
       $("ai-providers").textContent = "";
       $("ai-model-downloads").textContent = "";
+      $("ai-model-runtime").textContent = "";
       $("ai-mcp").textContent = "";
       $("ai-agents").textContent = "";
     }
@@ -95,6 +96,17 @@
           return `<div class="service-row"><div><div class="name">${escapeText(task.request?.manifest?.id ?? task.id)}</div><div class="meta">${percent}% · ${downloaded} / ${total} bytes${task.error ? ` · ${escapeText(task.error)}` : ""}</div><progress max="100" value="${percent}"></progress></div><span class="badge ${stateClass(task.state)}">${escapeText(formatState(task.state))}</span>${action}</div>`;
         }).join("")
       : '<p class="muted">No local model downloads.</p>';
+
+    const runtime = overview.modelRuntime ?? {};
+    const devices = runtime.hardware?.devices ?? [];
+    const resources = runtime.resources ?? {};
+    const budget = Number(resources.budget?.memoryBytes ?? 0);
+    const allocated = Number(resources.allocatedBytes ?? 0);
+    const usage = budget > 0 ? Math.min(100, allocated * 100 / budget) : 0;
+    const resourceSummary = `<div class="service-row"><div><div class="name">Memory budget</div><div class="meta">${allocated} / ${budget} bytes · ${resources.models?.length ?? 0} loaded</div></div><progress max="100" value="${usage}"></progress></div>`;
+    $("ai-model-runtime").innerHTML = resourceSummary + (devices.length
+      ? devices.map((device) => `<div class="service-row"><div><div class="name">${escapeText(device.name)}</div><div class="meta">${escapeText(device.kind)} · ${escapeText(device.provider)}${device.memoryMb ? ` · ${Number(device.memoryMb)} MiB` : ""}</div></div><span class="badge running">available</span></div>`).join("")
+      : '<p class="muted">No inference devices discovered.</p>');
 
     const applications = overview.applications ?? [];
     const connections = applications.flatMap((app) => {
