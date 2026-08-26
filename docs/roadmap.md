@@ -235,6 +235,10 @@ capabilities 明确报告，不能静默降级。
 
 ### 3.10 Rust Native Worker
 
+- 已完成首个通用协议切片：`src/native_worker/` 提供独立进程 JSONL v1、1 MiB 帧上限、
+  请求关联、描述符/包内入口校验、调用超时以及异常/Drop 时终止并回收子进程；协议见
+  [`native-worker-protocol.md`](./native-worker-protocol.md)，尚未接入 Manifest、Daemon 控制面
+  和 OS 级资源隔离；
 - 稳定 ABI 或独立进程协议；
 - 内存和资源所有权；
 - 崩溃隔离；

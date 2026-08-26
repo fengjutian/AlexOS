@@ -36,6 +36,11 @@ pub struct ApplicationManifestV2 {
     #[serde(default)]
     pub runtime: RuntimeRequirements,
     pub services: BTreeMap<String, ServiceSpec>,
+    /// Generic out-of-process native workers available to this application.
+    /// Declaration does not itself start a worker; the Daemon resolves and
+    /// authorizes a binding when a caller invokes it.
+    #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
+    pub native_workers: BTreeMap<String, NativeWorkerSpec>,
     #[serde(default, skip_serializing_if = "BTreeMap::is_empty")]
     pub mcp_servers: BTreeMap<String, McpServerSpec>,
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -142,6 +147,16 @@ pub struct ServiceSpec {
     /// no quota. The 0.2 slice validates and projects these through
     /// the unified service view; hard enforcement is wired by the
     /// isolation layer (Job Object / volume quota) in 0.3+.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub resources: Option<ServiceResources>,
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase", deny_unknown_fields)]
+pub struct NativeWorkerSpec {
+    /// Package-relative path to a `NativeWorkerDescriptor` JSON file.
+    pub descriptor: String,
+    /// Resource limits to apply when the Daemon starts the process.
     #[serde(default, skip_serializing_if = "Option::is_none")]
     pub resources: Option<ServiceResources>,
 }
@@ -478,6 +493,28 @@ impl ApplicationManifestV2 {
                 }
             }
         }
+        for (binding, worker) in &self.native_workers {
+            if !valid_component(binding) {
+                return Err(validation(format!(
+                    "invalid native worker binding {binding:?}"
+                )));
+            }
+            validate_package_path(
+                root,
+                &worker.descriptor,
+                &format!("native worker {binding} descriptor"),
+            )?;
+            let descriptor = crate::native_worker::load_descriptor(&root.join(&worker.descriptor))
+                .map_err(|error| {
+                    validation(format!("native worker {binding} descriptor: {error}"))
+                })?;
+            descriptor.executable(root).map_err(|error| {
+                validation(format!("native worker {binding} executable: {error}"))
+            })?;
+            if let Some(resources) = &worker.resources {
+                validate_resources(resources, &format!("native worker {binding}"))?;
+            }
+        }
         for storage in &self.storage {
             if !valid_component(&storage.name) {
                 return Err(validation(format!(
@@ -542,6 +579,26 @@ impl ApplicationManifestV2 {
         order.reverse();
         Ok(order)
     }
+}
+
+fn validate_resources(resources: &ServiceResources, label: &str) -> Result<(), ManifestV2Error> {
+    if resources.memory_mb == Some(0) {
+        return Err(validation(format!("{label} resources.memoryMb must be > 0")));
+    }
+    if resources.cpu_percent.is_some_and(|cpu| cpu > 100) {
+        return Err(validation(format!(
+            "{label} resources.cpuPercent must be in 0..=100"
+        )));
+    }
+    if resources.processes == Some(0) {
+        return Err(validation(format!("{label} resources.processes must be > 0")));
+    }
+    if resources.data_quota_mb == Some(0) {
+        return Err(validation(format!(
+            "{label} resources.dataQuotaMb must be > 0"
+        )));
+    }
+    Ok(())
 }
 
 fn validate_package_path(root: &Path, value: &str, label: &str) -> Result<(), ManifestV2Error> {

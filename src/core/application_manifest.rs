@@ -446,6 +446,7 @@ pub struct ResolvedApplication {
     pub version: semver::Version,
     pub frontend: Option<ResolvedFrontend>,
     pub services: BTreeMap<String, ResolvedService>,
+    pub native_workers: BTreeMap<String, crate::manifest_v2::NativeWorkerSpec>,
     pub mcp_servers: BTreeMap<String, crate::manifest_v2::McpServerSpec>,
     pub agent: Option<crate::agent::AgentSpec>,
     /// App-level runtime version requirements (`runtime.node` /
@@ -480,6 +481,10 @@ impl ApplicationManifest {
             version,
             frontend,
             services,
+            native_workers: self
+                .as_v2()
+                .map(|manifest| manifest.native_workers.clone())
+                .unwrap_or_default(),
             mcp_servers: self
                 .as_v2()
                 .map(|manifest| manifest.mcp_servers.clone())

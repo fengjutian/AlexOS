@@ -11,6 +11,9 @@ use std::{
     io::{BufRead, BufReader, BufWriter, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
+    sync::mpsc::{self, Receiver, RecvTimeoutError},
+    thread::{self, JoinHandle},
+    time::Duration,
 };
 
 use serde::{Deserialize, Serialize};
@@ -19,6 +22,7 @@ use thiserror::Error;
 
 pub const NATIVE_WORKER_PROTOCOL: u32 = 1;
 pub const MAX_FRAME_BYTES: usize = 1024 * 1024;
+pub const DEFAULT_INVOKE_TIMEOUT: Duration = Duration::from_secs(120);
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
 #[serde(rename_all = "camelCase", deny_unknown_fields)]
@@ -68,6 +72,8 @@ pub enum NativeWorkerError {
     Io(#[from] std::io::Error),
     #[error("native worker protocol failed: {0}")]
     Protocol(String),
+    #[error("native worker request timed out after {0:?}")]
+    Timeout(Duration),
     #[error("native worker returned {code}: {message}")]
     Remote { code: String, message: String },
 }
@@ -121,7 +127,8 @@ fn validate_identifier(label: &str, value: &str) -> Result<(), NativeWorkerError
 pub struct NativeWorkerProcess {
     child: Child,
     input: BufWriter<ChildStdin>,
-    output: BufReader<ChildStdout>,
+    responses: Receiver<Result<WorkerResponse, NativeWorkerError>>,
+    output_thread: Option<JoinHandle<()>>,
     next_request_id: u64,
 }
 
@@ -146,10 +153,15 @@ impl NativeWorkerProcess {
             .stdout
             .take()
             .ok_or_else(|| NativeWorkerError::Protocol("worker stdout unavailable".into()))?;
+        let (response_tx, responses) = mpsc::sync_channel(1);
+        let output_thread = thread::Builder::new()
+            .name(format!("alex-native-worker-{}-stdout", child.id()))
+            .spawn(move || pump_responses(output, response_tx))?;
         Ok(Self {
             child,
             input: BufWriter::new(input),
-            output: BufReader::new(output),
+            responses,
+            output_thread: Some(output_thread),
             next_request_id: 1,
         })
     }
@@ -158,8 +170,31 @@ impl NativeWorkerProcess {
         self.child.id()
     }
 
+    pub fn is_running(&mut self) -> Result<bool, NativeWorkerError> {
+        Ok(self.child.try_wait()?.is_none())
+    }
+
     pub fn invoke(&mut self, method: &str, params: Value) -> Result<Value, NativeWorkerError> {
+        self.invoke_timeout(method, params, DEFAULT_INVOKE_TIMEOUT)
+    }
+
+    pub fn invoke_timeout(
+        &mut self,
+        method: &str,
+        params: Value,
+        timeout: Duration,
+    ) -> Result<Value, NativeWorkerError> {
         validate_identifier("method", method)?;
+        if timeout.is_zero() {
+            return Err(NativeWorkerError::Protocol(
+                "invoke timeout must be greater than zero".into(),
+            ));
+        }
+        if !self.is_running()? {
+            return Err(NativeWorkerError::Protocol(
+                "native worker is not running".into(),
+            ));
+        }
         let request_id = format!("native-{}", self.next_request_id);
         self.next_request_id = self.next_request_id.saturating_add(1);
         let request = WorkerRequest {
@@ -169,29 +204,73 @@ impl NativeWorkerProcess {
             params,
         };
         write_frame(&mut self.input, &request)?;
-        let response: WorkerResponse = read_frame(&mut self.output)?;
-        if response.protocol != NATIVE_WORKER_PROTOCOL || response.request_id != request_id {
-            return Err(NativeWorkerError::Protocol(
-                "protocol version or requestId mismatch".into(),
-            ));
+        let response = match self.responses.recv_timeout(timeout) {
+            Ok(response) => response?,
+            Err(RecvTimeoutError::Timeout) => {
+                self.terminate();
+                return Err(NativeWorkerError::Timeout(timeout));
+            }
+            Err(RecvTimeoutError::Disconnected) => {
+                self.terminate();
+                return Err(NativeWorkerError::Protocol(
+                    "native worker closed its response stream".into(),
+                ));
+            }
+        };
+        let result = validate_response(response, &request_id);
+        if matches!(result, Err(NativeWorkerError::Protocol(_))) {
+            self.terminate();
         }
-        match (response.result, response.error) {
-            (Some(result), None) => Ok(result),
-            (None, Some(error)) => Err(NativeWorkerError::Remote {
-                code: error.code,
-                message: error.message,
-            }),
-            _ => Err(NativeWorkerError::Protocol(
-                "response must contain exactly one of result or error".into(),
-            )),
+        result
+    }
+
+    fn terminate(&mut self) {
+        let _ = self.child.kill();
+        let _ = self.child.wait();
+        if let Some(thread) = self.output_thread.take() {
+            let _ = thread.join();
         }
     }
 }
 
 impl Drop for NativeWorkerProcess {
     fn drop(&mut self) {
-        let _ = self.child.kill();
-        let _ = self.child.wait();
+        self.terminate();
+    }
+}
+
+fn pump_responses(
+    output: ChildStdout,
+    responses: mpsc::SyncSender<Result<WorkerResponse, NativeWorkerError>>,
+) {
+    let mut output = BufReader::new(output);
+    loop {
+        let response = read_frame(&mut output);
+        let terminal = response.is_err();
+        if responses.send(response).is_err() || terminal {
+            break;
+        }
+    }
+}
+
+fn validate_response(
+    response: WorkerResponse,
+    request_id: &str,
+) -> Result<Value, NativeWorkerError> {
+    if response.protocol != NATIVE_WORKER_PROTOCOL || response.request_id != request_id {
+        return Err(NativeWorkerError::Protocol(
+            "protocol version or requestId mismatch".into(),
+        ));
+    }
+    match (response.result, response.error) {
+        (Some(result), None) => Ok(result),
+        (None, Some(error)) => Err(NativeWorkerError::Remote {
+            code: error.code,
+            message: error.message,
+        }),
+        _ => Err(NativeWorkerError::Protocol(
+            "response must contain exactly one of result or error".into(),
+        )),
     }
 }
 
@@ -276,5 +355,27 @@ mod tests {
             ..descriptor
         };
         assert!(invalid.executable(root.path()).is_err());
+    }
+
+    #[test]
+    fn response_requires_matching_identity_and_one_outcome() {
+        let mismatch = WorkerResponse {
+            protocol: 1,
+            request_id: "native-2".into(),
+            result: Some(serde_json::json!(true)),
+            error: None,
+        };
+        assert!(validate_response(mismatch, "native-1").is_err());
+
+        let ambiguous = WorkerResponse {
+            protocol: 1,
+            request_id: "native-1".into(),
+            result: Some(Value::Null),
+            error: Some(WorkerErrorBody {
+                code: "FAILED".into(),
+                message: "failed".into(),
+            }),
+        };
+        assert!(validate_response(ambiguous, "native-1").is_err());
     }
 }
