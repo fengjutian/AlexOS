@@ -309,6 +309,32 @@ header p { margin: 0; color: #8d9ab7; }
   border-radius: 12px;
 }
 
+.mcp-workbench { border-color: #275b68; background: linear-gradient(145deg, #0f2029e8, #0f1728e8); }
+.mcp-fields {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 10px;
+  margin-top: 16px;
+}
+.mcp-fields label { display: grid; gap: 5px; min-width: 0; }
+.mcp-fields label.wide { grid-column: 1 / -1; }
+.mcp-fields span { color: #87a6b4; font-size: 11px; }
+.mcp-fields input {
+  width: 100%;
+  min-width: 0;
+  padding: 8px 10px;
+  color: #dcecf1;
+  background: #08151d;
+  border: 1px solid #294a56;
+  border-radius: 7px;
+  outline: none;
+  font-family: ui-monospace, SFMono-Regular, Consolas, monospace;
+  font-size: 12px;
+}
+.mcp-fields input:focus { border-color: #44a4bd; box-shadow: 0 0 0 3px #26778b33; }
+.mcp-actions { grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.mcp-note { display: block; margin-top: 12px; color: #668795; }
+
 /* ---------------------------------------------------------------------
  * Action group
  * ------------------------------------------------------------------ */
@@ -515,6 +541,8 @@ button:disabled { opacity: 0.5; cursor: progress; }
   .status, .meta { text-align: left; }
   .api-explorer { align-items: stretch; flex-direction: column; }
   .api-explorer input { width: 100%; }
+  .mcp-fields { grid-template-columns: 1fr; }
+  .mcp-fields label.wide { grid-column: auto; }
 
   /* Single button per row on phones — easier to tap and avoids
      truncating long Chinese labels. */

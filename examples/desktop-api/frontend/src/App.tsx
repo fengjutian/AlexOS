@@ -11,6 +11,7 @@ import { ActionGroup } from "./components/ActionGroup.js";
 import { AppHeader } from "./components/AppHeader.js";
 import { EventStream } from "./components/EventStream.js";
 import { MenuBar } from "./components/MenuBar.js";
+import { McpWorkbench } from "./components/McpWorkbench.js";
 import { ResultPanel } from "./components/ResultPanel.js";
 import { SharedInput } from "./components/SharedInput.js";
 import { useActionRunner } from "./hooks/useActionRunner.js";
@@ -135,6 +136,9 @@ export function App(): React.ReactElement {
             <ActionGroup key={group.title} group={group} pending={state.pending} onRun={run} />
           ))}
           {filteredGroups.length === 0 && <p className="no-results">没有匹配的 API 操作。</p>}
+          {(!query || "mcp model context protocol 工具 资源 提示词 oauth".includes(query.trim().toLocaleLowerCase())) && (
+            <McpWorkbench pending={state.pending} onRun={run} />
+          )}
         </div>
         <div className="results">
           <ResultPanel state={state} onClear={clear} />

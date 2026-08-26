@@ -184,6 +184,11 @@ export const net = {
     call<FetchResult>("net.fetch", { url, ...options }),
 };
 
+// ---------- MCP ----------
+
+/** Typed MCP client, including credit-streamed interactive calls and subscriptions. */
+export const mcp = alex.mcp;
+
 // ---------- tray ----------
 
 /** System tray icons. Permission: `menu.manage` (tray piggy-backs on the menu subsystem). */
@@ -220,6 +225,7 @@ export const desktop = {
   tray,
   shortcuts,
   net,
+  mcp,
 };
 
 export type Desktop = typeof desktop;

@@ -4,6 +4,10 @@
 文件监听、原生对话框、剪贴板、通知、设备权限、安全网络请求、多窗口、菜单、托盘和全局快捷键。
 页面顶部的 API Explorer 可以按中文功能名或实际方法名（例如 `window.getBounds`）过滤操作。
 
+MCP 工作台提供 binding、tool、JSON 参数、Resource URI、Prompt、Completion、OAuth 和交互
+Input ID 编辑器，并覆盖连接/健康、能力发现、工具调用、Resources、Prompts、审计、Ping、
+OAuth loopback、交互确认和订阅监听。MCP 操作需要该应用已经配置或持久化相应 binding。
+
 A standard React + TypeScript + Vite frontend that exercises every Alex
 desktop API exposed by the runtime. The single-page playground groups
 related calls into eight cards (system / paths, menu, tray, shortcuts,

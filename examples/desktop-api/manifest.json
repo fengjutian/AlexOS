@@ -31,6 +31,7 @@
     { "name": "shortcut.register" },
     { "name": "notification.show" },
     { "name": "network.fetch", "origins": ["https://example.com"] },
+    { "name": "mcp.use" },
     { "name": "system.openExternal", "origins": ["https://example.com"] }
   ]
 }
