@@ -23,7 +23,7 @@ Agent Runtime 和 MCP 市场。产品范围以 [`product-requirements.md`](./pro
 > | 阶段六 远程 Model Provider | 已落地基础闭环 | `src/model/remote.rs` + daemon/API：Provider CRUD/health、Secret 引用、generate/embed/cancel、流式、限流/重试/熔断已 wired；真实供应商兼容矩阵仍待扩展 |
 > | 阶段七 MCP Client / ConnectionManager | 已落地 | `src/mcp/`（mod.rs + oauth.rs）：initialize / ping / tools / resources / prompts / notifications / subscribe / health / presentInput / OAuth loopback / token refresh |
 > | 阶段八 MCP 权限与审计 | 部分落地 | Manifest + `mcp.use` + audit 已 wired；审计现绑定参数 SHA-256 并使用跨轮转 hash chain；always-ask 批准令牌与运行时撤销仍待完成 |
-> | 阶段九 本地模型管理与推理 Worker | 已落地产品基础闭环 | `src/model/` 已有签名下载/断点续传任务、内容寻址 ModelStore、恶意文件检查、Worker descriptor、独立 JSONL `ProcessInferenceWorker`、CPU/GPU/NPU 与 CUDA/DirectML/CoreML/ROCm Provider 发现、内存预算/并发限制/LRU 卸载和管理 UI；具体引擎发行包与 Worker 崩溃自恢复仍待完成 |
+> | 阶段九 本地模型管理与推理 Worker | 已落地产品基础闭环 | `src/model/` 已有签名下载/断点续传任务、内容寻址 ModelStore、恶意文件检查、Worker descriptor、独立 JSONL `ProcessInferenceWorker`、CPU/GPU/NPU 与 CUDA/DirectML/CoreML/ROCm Provider 发现、内存预算/并发限制/LRU 卸载、超时强杀、崩溃重启/模型恢复、健康状态和管理 UI；具体 llama.cpp/ONNX Runtime GenAI 引擎发行包仍待完成 |
 > | 阶段十 Agent Runtime | 已落地基础闭环 | `src/agent/` 已有完整生命周期、checkpoint/恢复、预算强制、幂等键、非幂等重审批、声明式原生工具白名单与注入防护；更完整的对抗性 eval 仍待补 |
 > | 阶段十一 Alex MCP Server + Registry | 未开始 | 无 `src/registry/` 模块 |
 

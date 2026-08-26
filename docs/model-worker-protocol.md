@@ -99,5 +99,9 @@ The v1 adapter provides process separation, streaming, cancellation and bounded
 request/response frames. Alex discovers CPU/GPU/NPU capabilities, validates the
 providers declared by each worker, accounts loaded model bytes against a daemon
 memory budget, limits concurrent requests and evicts only idle least-recently-used
-models. Worker crash restart, heartbeat health checks and OS-level worker memory
-enforcement remain runtime work.
+models. Every blocking response and every generation-event gap has a 120-second
+deadline; expiry terminates the process. EOF, protocol corruption and timeout
+failures trigger a clean respawn from the daemon-owned descriptor, and alexd
+restores the models previously loaded by that worker before publishing the
+replacement. Runtime status exposes worker PID and health. OS-level worker
+memory enforcement remains runtime work.

@@ -63,6 +63,18 @@ pub struct AgentBudget {
     pub max_tool_calls: u32,
     #[serde(default = "default_wall_ms")]
     pub max_wall_time_ms: u64,
+    #[serde(default = "default_context_tokens")]
+    pub max_context_tokens: u64,
+    #[serde(default = "default_recent_messages")]
+    pub keep_recent_messages: usize,
+    #[serde(default = "unlimited_cost")]
+    pub max_cost_micros: u64,
+    #[serde(default)]
+    pub input_cost_micros_per_million: u64,
+    #[serde(default)]
+    pub output_cost_micros_per_million: u64,
+    #[serde(default)]
+    pub tool_cost_micros: BTreeMap<String, u64>,
 }
 fn default_steps() -> u32 {
     32
@@ -76,6 +88,15 @@ fn default_tools() -> u32 {
 fn default_wall_ms() -> u64 {
     30 * 60 * 1_000
 }
+fn default_context_tokens() -> u64 {
+    32_000
+}
+fn default_recent_messages() -> usize {
+    12
+}
+fn unlimited_cost() -> u64 {
+    u64::MAX
+}
 impl Default for AgentBudget {
     fn default() -> Self {
         Self {
@@ -83,6 +104,12 @@ impl Default for AgentBudget {
             max_tokens: default_tokens(),
             max_tool_calls: default_tools(),
             max_wall_time_ms: default_wall_ms(),
+            max_context_tokens: default_context_tokens(),
+            keep_recent_messages: default_recent_messages(),
+            max_cost_micros: unlimited_cost(),
+            input_cost_micros_per_million: 0,
+            output_cost_micros_per_million: 0,
+            tool_cost_micros: BTreeMap::new(),
         }
     }
 }
@@ -116,6 +143,8 @@ pub struct AgentUsage {
     pub input_tokens: u64,
     pub output_tokens: u64,
     pub tool_calls: u32,
+    pub cost_micros: u64,
+    pub context_compactions: u32,
 }
 
 #[derive(Debug, Clone, Serialize, Deserialize, PartialEq)]
@@ -171,6 +200,11 @@ pub enum AgentEvent {
     },
     Usage {
         usage: AgentUsage,
+    },
+    ContextCompacted {
+        removed_messages: usize,
+        estimated_tokens_before: u64,
+        estimated_tokens_after: u64,
     },
     Checkpoint {
         step: u32,
@@ -540,6 +574,16 @@ impl AgentManager {
                         .map_err(|error| AgentError::Tool(error.to_string()))?
                 };
                 run.usage.tool_calls = run.usage.tool_calls.saturating_add(1);
+                let qualified = format!("{}/{}", call.binding, call.name);
+                let tool_cost = run
+                    .spec
+                    .budget
+                    .tool_cost_micros
+                    .get(&qualified)
+                    .or_else(|| run.spec.budget.tool_cost_micros.get(&call.name))
+                    .copied()
+                    .unwrap_or(0);
+                run.usage.cost_micros = run.usage.cost_micros.saturating_add(tool_cost);
                 run.messages.push(json!({"role":"tool","name":call.name,"content":value,"idempotencyKey":call.idempotency_key}));
                 run.pending_tool = None;
                 emit(AgentEvent::ToolResult {
@@ -551,6 +595,11 @@ impl AgentManager {
                 continue;
             }
             run.step = run.step.saturating_add(1);
+            if let Some(event) = compact_context(&mut run)? {
+                self.save(&run)?;
+                self.append_event(&run, &event)?;
+                emit(event)?;
+            }
             let request_id = format!("{}:{}:{}", run.id, run.generation, run.step);
             let mut messages = run.messages.clone();
             if let Some(prompt) = &run.spec.system_prompt {
@@ -565,6 +614,8 @@ impl AgentManager {
             let mut generated = String::new();
             let mut tool_call: Option<(String, Value)> = None;
             let mut saw_finish = false;
+            let input_rate = run.spec.budget.input_cost_micros_per_million;
+            let output_rate = run.spec.budget.output_cost_micros_per_million;
             self.models
                 .generate(&request, &mut |event| {
                     if cancellation.load(Ordering::Acquire) {
@@ -592,6 +643,13 @@ impl AgentManager {
                                 run.usage.input_tokens.saturating_add(input_tokens);
                             run.usage.output_tokens =
                                 run.usage.output_tokens.saturating_add(output_tokens);
+                            let input_cost = input_tokens.saturating_mul(input_rate) / 1_000_000;
+                            let output_cost = output_tokens.saturating_mul(output_rate) / 1_000_000;
+                            run.usage.cost_micros = run
+                                .usage
+                                .cost_micros
+                                .saturating_add(input_cost)
+                                .saturating_add(output_cost);
                         }
                         crate::model::GenerateEvent::Finish { .. } => saw_finish = true,
                     }
@@ -803,6 +861,9 @@ impl AgentManager {
         if run.usage.tool_calls >= budget.max_tool_calls {
             return Err(AgentError::Budget("maximum tool calls reached".into()));
         }
+        if run.usage.cost_micros >= budget.max_cost_micros {
+            return Err(AgentError::Budget("maximum cost reached".into()));
+        }
         if run
             .started_at_ms
             .is_some_and(|start| now_ms().saturating_sub(start) >= budget.max_wall_time_ms)
@@ -887,6 +948,99 @@ impl PendingToolCall {
         !self.approved
     }
 }
+
+fn compact_context(run: &mut AgentRun) -> Result<Option<AgentEvent>, AgentError> {
+    let system_tokens = run
+        .spec
+        .system_prompt
+        .as_deref()
+        .map(estimate_text_tokens)
+        .unwrap_or(0);
+    let before = system_tokens.saturating_add(estimate_messages_tokens(&run.messages));
+    let limit = run.spec.budget.max_context_tokens;
+    if before <= limit {
+        return Ok(None);
+    }
+    let keep = run.spec.budget.keep_recent_messages.min(run.messages.len());
+    let remove_count = run.messages.len().saturating_sub(keep);
+    if remove_count == 0 {
+        return Err(AgentError::Budget(
+            "context window exceeded by recent messages".into(),
+        ));
+    }
+    let older = run.messages.drain(..remove_count).collect::<Vec<_>>();
+    let mut summary = String::from("Deterministic context summary of earlier messages:\n");
+    for message in older {
+        let role = message
+            .get("role")
+            .and_then(Value::as_str)
+            .unwrap_or("unknown");
+        let content = message
+            .get("content")
+            .map(value_summary)
+            .unwrap_or_default();
+        summary.push_str(role);
+        summary.push_str(": ");
+        summary.extend(content.chars().take(512));
+        summary.push('\n');
+    }
+    let remaining_tokens = system_tokens.saturating_add(estimate_messages_tokens(&run.messages));
+    if remaining_tokens >= limit {
+        return Err(AgentError::Budget(
+            "context window exceeded by retained messages".into(),
+        ));
+    }
+    let summary_overhead = estimate_messages_tokens(&[
+        json!({"role":"system","name":"alex-context-summary","content":""}),
+    ]);
+    let summary_token_budget = limit
+        .saturating_sub(remaining_tokens)
+        .saturating_sub(summary_overhead)
+        .saturating_sub(2)
+        .max(1);
+    summary = summary
+        .chars()
+        .take(summary_token_budget.saturating_mul(4) as usize)
+        .collect();
+    run.messages.insert(
+        0,
+        json!({"role":"system","name":"alex-context-summary","content":summary}),
+    );
+    let after = system_tokens.saturating_add(estimate_messages_tokens(&run.messages));
+    if after > limit {
+        return Err(AgentError::Budget(
+            "context compression could not satisfy the context window".into(),
+        ));
+    }
+    run.usage.context_compactions = run.usage.context_compactions.saturating_add(1);
+    Ok(Some(AgentEvent::ContextCompacted {
+        removed_messages: remove_count,
+        estimated_tokens_before: before,
+        estimated_tokens_after: after,
+    }))
+}
+
+fn estimate_messages_tokens(messages: &[Value]) -> u64 {
+    messages
+        .iter()
+        .map(|message| {
+            serde_json::to_vec(message)
+                .map(|bytes| (bytes.len() as u64).div_ceil(4).saturating_add(4))
+                .unwrap_or(u64::MAX)
+        })
+        .fold(0, u64::saturating_add)
+}
+
+fn estimate_text_tokens(text: &str) -> u64 {
+    (text.len() as u64).div_ceil(4)
+}
+fn value_summary(value: &Value) -> String {
+    value
+        .as_str()
+        .map(str::to_owned)
+        .unwrap_or_else(|| serde_json::to_string(value).unwrap_or_default())
+}
+
 fn resolve_tool<'a>(
     tools: &'a [AgentToolSpec],
     qualified: &str,
@@ -928,6 +1082,9 @@ pub fn validate_spec(spec: &AgentSpec) -> Result<(), AgentError> {
         || spec.budget.max_tokens == 0
         || spec.budget.max_tool_calls > 1000
         || spec.budget.max_wall_time_ms == 0
+        || spec.budget.max_context_tokens < 128
+        || spec.budget.keep_recent_messages == 0
+        || spec.budget.keep_recent_messages > 256
     {
         return Err(AgentError::Invalid("invalid agent budget".into()));
     }
@@ -1252,6 +1409,7 @@ mod tests {
                         max_tokens: 1,
                         max_tool_calls: 0,
                         max_wall_time_ms: 1_000,
+                        ..AgentBudget::default()
                     },
                 },
                 vec![],
@@ -1266,6 +1424,67 @@ mod tests {
             AgentState::Failed
         );
         assert!(manager.history("com.example.app", &run.id, 100).unwrap().iter().any(|event| matches!(event, AgentEvent::Error { code, .. } if code == "AGENT_BUDGET_EXCEEDED")));
+    }
+
+    #[test]
+    fn context_is_compacted_with_recent_messages_preserved() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = runtime(&temp);
+        let messages = (0..20)
+            .map(|index| json!({"role":"user","content":format!("{index}:{}", "x".repeat(100))}))
+            .collect();
+        let mut run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: vec![],
+                    budget: AgentBudget {
+                        max_context_tokens: 300,
+                        keep_recent_messages: 3,
+                        ..AgentBudget::default()
+                    },
+                },
+                messages,
+            )
+            .unwrap();
+        let event = compact_context(&mut run).unwrap().unwrap();
+        assert!(matches!(
+            event,
+            AgentEvent::ContextCompacted {
+                removed_messages: 17,
+                ..
+            }
+        ));
+        assert_eq!(run.messages.len(), 4);
+        assert_eq!(run.usage.context_compactions, 1);
+        assert!(estimate_messages_tokens(&run.messages) <= 300);
+    }
+
+    #[test]
+    fn per_model_cost_budget_is_enforced() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = runtime(&temp);
+        let mut run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: vec![],
+                    budget: AgentBudget {
+                        max_cost_micros: 100,
+                        ..AgentBudget::default()
+                    },
+                },
+                vec![],
+            )
+            .unwrap();
+        run.usage.cost_micros = 100;
+        assert!(
+            matches!(manager.check_budget(&run), Err(AgentError::Budget(message)) if message.contains("cost"))
+        );
     }
 
     #[test]

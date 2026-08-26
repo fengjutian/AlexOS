@@ -483,17 +483,18 @@ export interface EmbeddingResponse {
   usage: { inputTokens: number };
 }
 
-export interface AgentBudget { maxSteps?: number; maxTokens?: number; maxToolCalls?: number; maxWallTimeMs?: number; }
+export interface AgentBudget { maxSteps?: number; maxTokens?: number; maxToolCalls?: number; maxWallTimeMs?: number; maxContextTokens?: number; keepRecentMessages?: number; maxCostMicros?: number; inputCostMicrosPerMillion?: number; outputCostMicrosPerMillion?: number; toolCostMicros?: Record<string, number>; }
 export interface AgentToolSpec { binding: string; name: string; idempotent?: boolean; requireApproval?: boolean; }
 export interface AgentSpec { model: string; systemPrompt?: string; tools?: AgentToolSpec[]; budget?: AgentBudget; }
 export type AgentState = "queued" | "running" | "waiting-approval" | "waiting-tool" | "paused" | "completed" | "failed" | "cancelled";
-export interface AgentRun { id: string; application: string; generation: number; state: AgentState; step: number; spec: AgentSpec; usage: { inputTokens: number; outputTokens: number; toolCalls: number }; messages: unknown[]; createdAtMs: number; updatedAtMs: number; startedAtMs?: number; lastError?: string; }
+export interface AgentRun { id: string; application: string; generation: number; state: AgentState; step: number; spec: AgentSpec; usage: { inputTokens: number; outputTokens: number; toolCalls: number; costMicros: number; contextCompactions: number }; messages: unknown[]; createdAtMs: number; updatedAtMs: number; startedAtMs?: number; lastError?: string; }
 export type AgentEvent =
   | { type: "state"; state: AgentState; generation: number }
   | { type: "modelDelta"; text: string }
   | { type: "toolIntent"; call: unknown }
   | { type: "toolResult"; binding: string; name: string; result: unknown }
   | { type: "usage"; usage: AgentRun["usage"] }
+  | { type: "contextCompacted"; removedMessages: number; estimatedTokensBefore: number; estimatedTokensAfter: number }
   | { type: "checkpoint"; step: number }
   | { type: "error"; code: string; message: string };
 export interface AgentTimelineEntry { sequence: number; timestampMs: number; generation: number; step: number; event: AgentEvent; }

@@ -333,7 +333,7 @@
         "model": { "type": "string", "minLength": 1 },
         "systemPrompt": { "type": "string" },
         "tools": { "type": "array", "maxItems": 128, "items": { "type": "object", "properties": { "binding": { "type": "string", "minLength": 1 }, "name": { "type": "string", "minLength": 1 }, "idempotent": { "type": "boolean" }, "requireApproval": { "type": "boolean" } }, "required": ["binding", "name"], "additionalProperties": false } },
-        "budget": { "type": "object", "properties": { "maxSteps": { "type": "integer", "minimum": 1, "maximum": 1000 }, "maxTokens": { "type": "integer", "minimum": 1 }, "maxToolCalls": { "type": "integer", "minimum": 0, "maximum": 1000 }, "maxWallTimeMs": { "type": "integer", "minimum": 1 } }, "additionalProperties": false }
+        "budget": { "type": "object", "properties": { "maxSteps": { "type": "integer", "minimum": 1, "maximum": 1000 }, "maxTokens": { "type": "integer", "minimum": 1 }, "maxToolCalls": { "type": "integer", "minimum": 0, "maximum": 1000 }, "maxWallTimeMs": { "type": "integer", "minimum": 1 }, "maxContextTokens": { "type": "integer", "minimum": 128 }, "keepRecentMessages": { "type": "integer", "minimum": 1, "maximum": 256 }, "maxCostMicros": { "type": "integer", "minimum": 0 }, "inputCostMicrosPerMillion": { "type": "integer", "minimum": 0 }, "outputCostMicrosPerMillion": { "type": "integer", "minimum": 0 }, "toolCostMicros": { "type": "object", "additionalProperties": { "type": "integer", "minimum": 0 } } }, "additionalProperties": false }
       },
       "required": ["model"],
       "additionalProperties": false

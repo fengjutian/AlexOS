@@ -6,7 +6,11 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc::sync_channel},
+    sync::{
+        Arc, Mutex,
+        atomic::{AtomicBool, Ordering},
+        mpsc::sync_channel,
+    },
     time::Duration,
 };
 
@@ -382,7 +386,12 @@ pub trait InferenceWorker: Send + Sync {
     fn cancel(&self, request_id: &str) -> Result<(), ModelError>;
     fn unload(&self, model_id: &str) -> Result<(), ModelError>;
     fn health(&self) -> WorkerHealth {
-        WorkerHealth { kind: self.kind().into(), healthy: true, pid: None, error: None }
+        WorkerHealth {
+            kind: self.kind().into(),
+            healthy: true,
+            pid: None,
+            error: None,
+        }
     }
 }
 
@@ -645,13 +654,33 @@ impl InferenceWorker for ProcessInferenceWorker {
     }
     fn health(&self) -> WorkerHealth {
         let Ok(mut child) = self.child.lock() else {
-            return WorkerHealth { kind: self.kind.clone(), healthy: false, pid: None, error: Some("process lock poisoned".into()) };
+            return WorkerHealth {
+                kind: self.kind.clone(),
+                healthy: false,
+                pid: None,
+                error: Some("process lock poisoned".into()),
+            };
         };
         let pid = child.id();
         match child.try_wait() {
-            Ok(None) => WorkerHealth { kind: self.kind.clone(), healthy: true, pid: Some(pid), error: None },
-            Ok(Some(status)) => WorkerHealth { kind: self.kind.clone(), healthy: false, pid: Some(pid), error: Some(format!("worker exited with {status}")) },
-            Err(error) => WorkerHealth { kind: self.kind.clone(), healthy: false, pid: Some(pid), error: Some(error.to_string()) },
+            Ok(None) => WorkerHealth {
+                kind: self.kind.clone(),
+                healthy: true,
+                pid: Some(pid),
+                error: None,
+            },
+            Ok(Some(status)) => WorkerHealth {
+                kind: self.kind.clone(),
+                healthy: false,
+                pid: Some(pid),
+                error: Some(format!("worker exited with {status}")),
+            },
+            Err(error) => WorkerHealth {
+                kind: self.kind.clone(),
+                healthy: false,
+                pid: Some(pid),
+                error: Some(error.to_string()),
+            },
         }
     }
 }
@@ -805,11 +834,14 @@ impl ModelManager {
             self.worker_launches
                 .lock()
                 .map_err(|_| ModelError::Worker("worker launch registry lock poisoned".into()))?
-                .insert(descriptor.kind.clone(), WorkerLaunchSpec {
-                    root: root.clone(),
-                    command: descriptor.command.clone(),
-                    args: descriptor.args.clone(),
-                });
+                .insert(
+                    descriptor.kind.clone(),
+                    WorkerLaunchSpec {
+                        root: root.clone(),
+                        command: descriptor.command.clone(),
+                        args: descriptor.args.clone(),
+                    },
+                );
             self.register_worker(Arc::new(worker))?;
             registered += 1;
         }
@@ -953,8 +985,14 @@ impl ModelManager {
         self.resources.status()
     }
     pub fn worker_health(&self) -> Vec<WorkerHealth> {
-        let workers = match self.workers.lock() { Ok(workers) => workers.values().cloned().collect::<Vec<_>>(), Err(_) => return Vec::new() };
-        let mut health = workers.into_iter().map(|worker| worker.health()).collect::<Vec<_>>();
+        let workers = match self.workers.lock() {
+            Ok(workers) => workers.values().cloned().collect::<Vec<_>>(),
+            Err(_) => return Vec::new(),
+        };
+        let mut health = workers
+            .into_iter()
+            .map(|worker| worker.health())
+            .collect::<Vec<_>>();
         health.sort_by(|a, b| a.kind.cmp(&b.kind));
         health
     }
@@ -970,26 +1008,40 @@ impl ModelManager {
     fn recover_after_failure(&self, kind: &str, original: ModelError) -> ModelError {
         match self.restart_worker(kind) {
             Ok(()) => ModelError::Worker(format!("{original}; worker was restarted")),
-            Err(recovery) => ModelError::Worker(format!("{original}; worker restart failed: {recovery}")),
+            Err(recovery) => {
+                ModelError::Worker(format!("{original}; worker restart failed: {recovery}"))
+            }
         }
     }
 
     fn restart_worker(&self, kind: &str) -> Result<(), ModelError> {
-        let launch = self.worker_launches
+        let launch = self
+            .worker_launches
             .lock()
             .map_err(|_| ModelError::Worker("worker launch registry lock poisoned".into()))?
-            .get(kind).cloned()
+            .get(kind)
+            .cloned()
             .ok_or_else(|| ModelError::Worker(format!("worker {kind:?} is not restartable")))?;
-        let replacement = Arc::new(ProcessInferenceWorker::spawn(kind, &launch.root, &launch.command, &launch.args)?);
-        let loaded = self.loaded.lock()
+        let replacement = Arc::new(ProcessInferenceWorker::spawn(
+            kind,
+            &launch.root,
+            &launch.command,
+            &launch.args,
+        )?);
+        let loaded = self
+            .loaded
+            .lock()
             .map_err(|_| ModelError::Worker("loaded registry lock poisoned".into()))?
-            .iter().filter(|(_, worker)| worker.as_str() == kind)
-            .map(|(model, _)| model.clone()).collect::<Vec<_>>();
+            .iter()
+            .filter(|(_, worker)| worker.as_str() == kind)
+            .map(|(model, _)| model.clone())
+            .collect::<Vec<_>>();
         for model_id in loaded {
             let manifest = self.store.get(&model_id)?;
             replacement.load(&manifest, &self.store.blob_path(&model_id)?)?;
         }
-        self.workers.lock()
+        self.workers
+            .lock()
             .map_err(|_| ModelError::Worker("worker registry lock poisoned".into()))?
             .insert(kind.into(), replacement);
         Ok(())
