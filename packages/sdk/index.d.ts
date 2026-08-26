@@ -442,6 +442,7 @@ export interface ModelResourceStatus {
   allocatedBytes: number;
   models: Array<{ modelId: string; worker: string; memoryBytes: number; activeRequests: number; lastUsedMs: number }>;
 }
+export interface ModelWorkerHealth { kind: string; healthy: boolean; pid?: number | null; error?: string | null; }
 
 export type ModelGenerateEvent =
   | { type: "delta"; text: string }
@@ -598,7 +599,7 @@ export interface AlexClient {
     downloadPause(taskId: string, options?: InvokeOptions): Promise<{ taskId: string; paused: boolean }>;
     downloadResume(taskId: string, options?: InvokeOptions): Promise<ModelDownloadTask>;
     hardware(options?: InvokeOptions): Promise<HardwareProfile>;
-    runtimeStatus(options?: InvokeOptions): Promise<{ hardware: HardwareProfile; resources: ModelResourceStatus }>;
+    runtimeStatus(options?: InvokeOptions): Promise<{ hardware: HardwareProfile; resources: ModelResourceStatus; workers: ModelWorkerHealth[] }>;
     remove(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; removed: boolean }>;
     load(modelId: string, worker: string, options?: InvokeOptions): Promise<{ modelId: string; worker: string; loaded: boolean }>;
     unload(modelId: string, options?: InvokeOptions): Promise<{ modelId: string; unloaded: boolean }>;

@@ -2222,7 +2222,8 @@ impl DaemonService {
     fn model_runtime_status(&self) -> Result<serde_json::Value, String> {
         Ok(json!({
             "hardware": crate::model::hardware::discover(),
-            "resources": self.model_manager()?.resource_status()
+            "resources": self.model_manager()?.resource_status(),
+            "workers": self.model_manager()?.worker_health()
         }))
     }
 

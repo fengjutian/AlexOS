@@ -6,7 +6,8 @@ use std::{
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
     process::{Child, ChildStdin, ChildStdout, Command, Stdio},
-    sync::{Arc, Mutex},
+    sync::{Arc, Mutex, atomic::{AtomicBool, Ordering}, mpsc::sync_channel},
+    time::Duration,
 };
 
 use base64::Engine as _;
@@ -380,6 +381,20 @@ pub trait InferenceWorker: Send + Sync {
     fn embed(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError>;
     fn cancel(&self, request_id: &str) -> Result<(), ModelError>;
     fn unload(&self, model_id: &str) -> Result<(), ModelError>;
+    fn health(&self) -> WorkerHealth {
+        WorkerHealth { kind: self.kind().into(), healthy: true, pid: None, error: None }
+    }
+}
+
+#[derive(Debug, Clone, Serialize, Deserialize, PartialEq, Eq)]
+#[serde(rename_all = "camelCase")]
+pub struct WorkerHealth {
+    pub kind: String,
+    pub healthy: bool,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub pid: Option<u32>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub error: Option<String>,
 }
 
 /// Adapter for an inference engine hosted in a dedicated JSON-lines process.
@@ -387,7 +402,7 @@ pub trait InferenceWorker: Send + Sync {
 /// never be mistaken for generation events.
 pub struct ProcessInferenceWorker {
     kind: String,
-    child: Mutex<Child>,
+    child: Arc<Mutex<Child>>,
     writer: Mutex<ChildStdin>,
     reader: Mutex<BufReader<ChildStdout>>,
     operation: Mutex<()>,
@@ -463,7 +478,7 @@ impl ProcessInferenceWorker {
         }
         Ok(Self {
             kind,
-            child: Mutex::new(child),
+            child: Arc::new(Mutex::new(child)),
             writer: Mutex::new(writer),
             reader: Mutex::new(BufReader::new(reader)),
             operation: Mutex::new(()),
@@ -516,13 +531,38 @@ impl ProcessInferenceWorker {
         Ok(value)
     }
 
+    fn receive_with_timeout(&self, timeout: Duration) -> Result<Value, ModelError> {
+        let (completed_tx, completed_rx) = sync_channel::<()>(1);
+        let child = Arc::clone(&self.child);
+        let timed_out = Arc::new(AtomicBool::new(false));
+        let watchdog_timed_out = Arc::clone(&timed_out);
+        std::thread::spawn(move || {
+            if completed_rx.recv_timeout(timeout).is_err() {
+                watchdog_timed_out.store(true, Ordering::Release);
+                if let Ok(mut process) = child.lock() {
+                    let _ = process.kill();
+                }
+            }
+        });
+        let result = self.receive();
+        let _ = completed_tx.send(());
+        if timed_out.load(Ordering::Acquire) {
+            Err(ModelError::Worker(format!(
+                "worker response timed out after {} ms and was terminated",
+                timeout.as_millis()
+            )))
+        } else {
+            result
+        }
+    }
+
     fn operation(&self, request: Value, expected: &str) -> Result<(), ModelError> {
         let _operation = self
             .operation
             .lock()
             .map_err(|_| ModelError::Worker("worker operation lock poisoned".into()))?;
         self.send(&request)?;
-        let response = self.receive()?;
+        let response = self.receive_with_timeout(Duration::from_secs(120))?;
         if response.get("type").and_then(Value::as_str) != Some(expected) {
             return Err(ModelError::Worker(format!(
                 "expected worker response {expected:?}"
@@ -553,7 +593,7 @@ impl InferenceWorker for ProcessInferenceWorker {
             .map_err(|_| ModelError::Worker("worker operation lock poisoned".into()))?;
         self.send(&serde_json::json!({"protocol":1,"type":"generate","request":request}))?;
         loop {
-            let value = self.receive()?;
+            let value = self.receive_with_timeout(Duration::from_secs(120))?;
             if value.get("requestId").and_then(Value::as_str) != Some(&request.request_id) {
                 return Err(ModelError::Worker(
                     "worker response requestId mismatch".into(),
@@ -579,7 +619,7 @@ impl InferenceWorker for ProcessInferenceWorker {
             .lock()
             .map_err(|_| ModelError::Worker("worker operation lock poisoned".into()))?;
         self.send(&serde_json::json!({"protocol":1,"type":"embed","request":request}))?;
-        let value = self.receive()?;
+        let value = self.receive_with_timeout(Duration::from_secs(120))?;
         if value.get("requestId").and_then(Value::as_str) != Some(&request.request_id) {
             return Err(ModelError::Worker(
                 "worker response requestId mismatch".into(),
@@ -603,6 +643,17 @@ impl InferenceWorker for ProcessInferenceWorker {
             "unloaded",
         )
     }
+    fn health(&self) -> WorkerHealth {
+        let Ok(mut child) = self.child.lock() else {
+            return WorkerHealth { kind: self.kind.clone(), healthy: false, pid: None, error: Some("process lock poisoned".into()) };
+        };
+        let pid = child.id();
+        match child.try_wait() {
+            Ok(None) => WorkerHealth { kind: self.kind.clone(), healthy: true, pid: Some(pid), error: None },
+            Ok(Some(status)) => WorkerHealth { kind: self.kind.clone(), healthy: false, pid: Some(pid), error: Some(format!("worker exited with {status}")) },
+            Err(error) => WorkerHealth { kind: self.kind.clone(), healthy: false, pid: Some(pid), error: Some(error.to_string()) },
+        }
+    }
 }
 
 impl Drop for ProcessInferenceWorker {
@@ -621,6 +672,14 @@ pub struct ModelManager {
     loaded: Arc<Mutex<BTreeMap<String, String>>>,
     remote: Arc<Mutex<Option<remote::RemoteProviderRouter>>>,
     resources: resource::ResourceGovernor,
+    worker_launches: Arc<Mutex<BTreeMap<String, WorkerLaunchSpec>>>,
+}
+
+#[derive(Debug, Clone)]
+struct WorkerLaunchSpec {
+    root: PathBuf,
+    command: PathBuf,
+    args: Vec<String>,
 }
 
 impl ModelManager {
@@ -631,6 +690,7 @@ impl ModelManager {
             loaded: Arc::new(Mutex::new(BTreeMap::new())),
             remote: Arc::new(Mutex::new(None)),
             resources: resource::ResourceGovernor::new(resource::ResourceBudget::default()),
+            worker_launches: Arc::new(Mutex::new(BTreeMap::new())),
         }
     }
 
@@ -737,11 +797,19 @@ impl ModelManager {
                 })?;
             validate_worker_descriptor(&descriptor, &root)?;
             let worker = ProcessInferenceWorker::spawn(
-                descriptor.kind,
+                descriptor.kind.clone(),
                 &root,
                 &descriptor.command,
                 &descriptor.args,
             )?;
+            self.worker_launches
+                .lock()
+                .map_err(|_| ModelError::Worker("worker launch registry lock poisoned".into()))?
+                .insert(descriptor.kind.clone(), WorkerLaunchSpec {
+                    root: root.clone(),
+                    command: descriptor.command.clone(),
+                    args: descriptor.args.clone(),
+                });
             self.register_worker(Arc::new(worker))?;
             registered += 1;
         }
@@ -783,7 +851,7 @@ impl ModelManager {
         }
         if let Err(error) = worker.load(&model, &self.store.blob_path(model_id)?) {
             self.resources.release(model_id);
-            return Err(error);
+            return Err(self.recover_after_failure(worker_kind, error));
         }
         self.loaded
             .lock()
@@ -817,7 +885,10 @@ impl ModelManager {
             .cloned()
             .ok_or_else(|| ModelError::Worker("model is not loaded".into()))?;
         let _permit = self.resources.acquire(&request.model)?;
-        self.worker(&worker_kind)?.generate(request, emit)
+        match self.worker(&worker_kind)?.generate(request, emit) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.recover_after_failure(&worker_kind, error)),
+        }
     }
     pub fn embed(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError> {
         if request.model.starts_with("remote/") {
@@ -834,7 +905,10 @@ impl ModelManager {
             .cloned()
             .ok_or_else(|| ModelError::Worker("model is not loaded".into()))?;
         let _permit = self.resources.acquire(&request.model)?;
-        self.worker(&worker_kind)?.embed(request)
+        match self.worker(&worker_kind)?.embed(request) {
+            Ok(response) => Ok(response),
+            Err(error) => Err(self.recover_after_failure(&worker_kind, error)),
+        }
     }
     pub fn cancel(&self, model_id: &str, request_id: &str) -> Result<(), ModelError> {
         if model_id.starts_with("remote/") {
@@ -848,7 +922,10 @@ impl ModelManager {
             .get(model_id)
             .cloned()
             .ok_or_else(|| ModelError::Worker("model is not loaded".into()))?;
-        self.worker(&worker_kind)?.cancel(request_id)
+        match self.worker(&worker_kind)?.cancel(request_id) {
+            Ok(()) => Ok(()),
+            Err(error) => Err(self.recover_after_failure(&worker_kind, error)),
+        }
     }
     pub fn unload(&self, model_id: &str) -> Result<bool, ModelError> {
         let worker_kind = self
@@ -859,7 +936,10 @@ impl ModelManager {
         let Some(worker_kind) = worker_kind else {
             return Ok(false);
         };
-        self.worker(&worker_kind)?.unload(model_id)?;
+        if let Err(error) = self.worker(&worker_kind)?.unload(model_id) {
+            self.resources.release(model_id);
+            return Err(self.recover_after_failure(&worker_kind, error));
+        }
         self.resources.release(model_id);
         Ok(true)
     }
@@ -872,6 +952,12 @@ impl ModelManager {
     pub fn resource_status(&self) -> resource::ResourceStatus {
         self.resources.status()
     }
+    pub fn worker_health(&self) -> Vec<WorkerHealth> {
+        let workers = match self.workers.lock() { Ok(workers) => workers.values().cloned().collect::<Vec<_>>(), Err(_) => return Vec::new() };
+        let mut health = workers.into_iter().map(|worker| worker.health()).collect::<Vec<_>>();
+        health.sort_by(|a, b| a.kind.cmp(&b.kind));
+        health
+    }
     fn worker(&self, kind: &str) -> Result<Arc<dyn InferenceWorker>, ModelError> {
         self.workers
             .lock()
@@ -879,6 +965,34 @@ impl ModelManager {
             .get(kind)
             .cloned()
             .ok_or_else(|| ModelError::Worker(format!("worker {kind:?} is not registered")))
+    }
+
+    fn recover_after_failure(&self, kind: &str, original: ModelError) -> ModelError {
+        match self.restart_worker(kind) {
+            Ok(()) => ModelError::Worker(format!("{original}; worker was restarted")),
+            Err(recovery) => ModelError::Worker(format!("{original}; worker restart failed: {recovery}")),
+        }
+    }
+
+    fn restart_worker(&self, kind: &str) -> Result<(), ModelError> {
+        let launch = self.worker_launches
+            .lock()
+            .map_err(|_| ModelError::Worker("worker launch registry lock poisoned".into()))?
+            .get(kind).cloned()
+            .ok_or_else(|| ModelError::Worker(format!("worker {kind:?} is not restartable")))?;
+        let replacement = Arc::new(ProcessInferenceWorker::spawn(kind, &launch.root, &launch.command, &launch.args)?);
+        let loaded = self.loaded.lock()
+            .map_err(|_| ModelError::Worker("loaded registry lock poisoned".into()))?
+            .iter().filter(|(_, worker)| worker.as_str() == kind)
+            .map(|(model, _)| model.clone()).collect::<Vec<_>>();
+        for model_id in loaded {
+            let manifest = self.store.get(&model_id)?;
+            replacement.load(&manifest, &self.store.blob_path(&model_id)?)?;
+        }
+        self.workers.lock()
+            .map_err(|_| ModelError::Worker("worker registry lock poisoned".into()))?
+            .insert(kind.into(), replacement);
+        Ok(())
     }
 }
 

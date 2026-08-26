@@ -321,6 +321,12 @@
       "required": ["budget", "allocatedBytes", "models"],
       "additionalProperties": false
     },
+    "ModelWorkerHealth": {
+      "type": "object",
+      "properties": { "kind": { "type": "string" }, "healthy": { "type": "boolean" }, "pid": { "type": ["integer", "null"] }, "error": { "type": ["string", "null"] } },
+      "required": ["kind", "healthy"],
+      "additionalProperties": false
+    },
     "AgentSpec": {
       "type": "object",
       "properties": {
@@ -2665,7 +2671,7 @@
     },
     "model.runtimeStatus": {
       "params": { "$ref": "#/$defs/Empty" },
-      "result": { "type": "object", "properties": { "hardware": { "$ref": "#/$defs/HardwareProfile" }, "resources": { "$ref": "#/$defs/ModelResourceStatus" } }, "required": ["hardware", "resources"], "additionalProperties": false }
+      "result": { "type": "object", "properties": { "hardware": { "$ref": "#/$defs/HardwareProfile" }, "resources": { "$ref": "#/$defs/ModelResourceStatus" }, "workers": { "type": "array", "items": { "$ref": "#/$defs/ModelWorkerHealth" } } }, "required": ["hardware", "resources", "workers"], "additionalProperties": false }
     },
     "model.remove": {
       "params": { "$ref": "#/$defs/ModelId" },

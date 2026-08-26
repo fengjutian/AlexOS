@@ -100,11 +100,13 @@
     const runtime = overview.modelRuntime ?? {};
     const devices = runtime.hardware?.devices ?? [];
     const resources = runtime.resources ?? {};
+    const workers = runtime.workers ?? [];
     const budget = Number(resources.budget?.memoryBytes ?? 0);
     const allocated = Number(resources.allocatedBytes ?? 0);
     const usage = budget > 0 ? Math.min(100, allocated * 100 / budget) : 0;
     const resourceSummary = `<div class="service-row"><div><div class="name">Memory budget</div><div class="meta">${allocated} / ${budget} bytes · ${resources.models?.length ?? 0} loaded</div></div><progress max="100" value="${usage}"></progress></div>`;
-    $("ai-model-runtime").innerHTML = resourceSummary + (devices.length
+    const workerRows = workers.map((worker) => `<div class="service-row"><div><div class="name">${escapeText(worker.kind)}</div><div class="meta">PID ${worker.pid ?? "-"}${worker.error ? ` · ${escapeText(worker.error)}` : ""}</div></div><span class="badge ${worker.healthy ? "running" : "error"}">${worker.healthy ? "healthy" : "crashed"}</span></div>`).join("");
+    $("ai-model-runtime").innerHTML = resourceSummary + workerRows + (devices.length
       ? devices.map((device) => `<div class="service-row"><div><div class="name">${escapeText(device.name)}</div><div class="meta">${escapeText(device.kind)} · ${escapeText(device.provider)}${device.memoryMb ? ` · ${Number(device.memoryMb)} MiB` : ""}</div></div><span class="badge running">available</span></div>`).join("")
       : '<p class="muted">No inference devices discovered.</p>');
 
