@@ -4025,6 +4025,7 @@ fn build_v2_manifest(
             python: None,
         },
         services: map,
+        native_workers: Default::default(),
         mcp_servers: Default::default(),
         agent: None,
         storage: Vec::new(),

@@ -2091,6 +2091,7 @@ fn legacy_permission_from_name(name: &str) -> Option<crate::permission::Permissi
         "system.openExternal" => Some(Permission::OpenExternal {
             origins: Vec::new(),
         }),
+        "system.autostart" => Some(Permission::SystemAutostart),
         "storage" => Some(Permission::Storage),
         "paths" => Some(Permission::Paths),
         "window.manage" => Some(Permission::WindowManage),

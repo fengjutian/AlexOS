@@ -85,6 +85,53 @@ MCP 接入；Runtime 仅提供 `model.embed`、Storage 与 Agent 原语，不内
 - 在移动平台运行任意 Node/Python/Native backend；
 - 为覆盖更多平台而抽象尚未在 Windows 场景验证的通用接口。
 
+### 1.6 两阶段交付策略（2026-08-27）
+
+当前产品先服务开发者自建、自用和可信分发的 **Windows 本地应用**，再在稳定桌面底座上交付
+AI 应用框架。安全隔离继续作为底线演进，但大众第三方应用沙箱、Store 和企业治理不得阻塞
+第一阶段常用桌面能力闭环。
+
+#### 第一阶段：Windows 本地应用框架（Tauri 常用能力覆盖率 ≥ 80%）
+
+“80%”按验收场景计算，不按 API 数量或跨平台插件数量计算。维护一组至少 20 个常用 Windows
+桌面开发场景，Alex 必须仅通过公开 SDK 独立完成其中至少 16 个；每个完成场景必须能够
+`alex create/dev/build/pack/install`、具备权限和稳定错误语义，并有自动化或 GUI evidence。
+
+能力矩阵：
+
+| 领域 | 第一阶段承诺 |
+| --- | --- |
+| Shell | WebView2、多窗口、窗口状态、菜单、右键菜单、托盘、全局快捷键、拖放、全屏 |
+| 本地 API | 文件/目录/监听、Dialog、剪贴板、通知、Store、Paths、HTTP/WebSocket、Process/Shell |
+| 系统集成 | 单实例、深链接、开机启动、外部打开、OS 信息 |
+| Runtime | IPC Request/Response/Event/Stream、Node backend、生命周期、日志、诊断 |
+| 开发体验 | React + TypeScript 模板、热更新、Backend 重启、IPC Inspector、Schema/codegen |
+| 分发 | build、pack、install、签名 Windows 安装器、更新、回滚、卸载 |
+
+首批 20 个验收场景固定为：文本文件、二进制文件、目录 CRUD、文件监听、打开文件、多选、选择目录、
+保存文件、持久 KV、剪贴板、通知、多窗口、窗口状态恢复、菜单、右键菜单、托盘、全局快捷键、单实例、
+深链接、开机启动。达到 16/20 才能宣称“第一阶段 80%”；没有 evidence 的代码路径不计入。
+
+#### 第二阶段：AI 应用框架
+
+第二阶段复用第一阶段的窗口、IPC、权限、存储、更新和调试体系，提供稳定公开 SDK：
+
+```text
+alex.model.generate/embed
+alex.agent.create/run/stream
+alex.mcp.connect/callTool
+alex.knowledge.ingest/search
+alex.secret.get
+```
+
+正式范围包括 Model Router（本地/远程、流式、取消、fallback、成本与硬件调度）、Agent Runtime
+（状态、Tool、审批、Checkpoint、恢复、预算、子 Agent 与调试时间线）、MCP（stdio/HTTP/OAuth、
+Tool/Resource/Prompt、审计与调试器）、Knowledge/RAG（摄取、切分、Embedding、索引、混合检索、
+引用、增量更新和任务恢复），以及 React hooks、Streaming UI 和 Eval 工具。
+
+第二阶段完成必须交付三个只依赖公开 Alex SDK 的参考应用：本地 AI 助手、企业文档 RAG、带 MCP
+工具调用的 AI 工作台。
+
 产品飞轮是：
 
 ```text

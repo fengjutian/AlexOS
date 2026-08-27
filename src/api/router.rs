@@ -787,6 +787,12 @@ struct OpenExternalParams {
 
 #[derive(Deserialize)]
 #[serde(deny_unknown_fields)]
+struct AutoStartParams {
+    enabled: bool,
+}
+
+#[derive(Deserialize)]
+#[serde(deny_unknown_fields)]
 struct WindowTitleParams {
     title: String,
 }

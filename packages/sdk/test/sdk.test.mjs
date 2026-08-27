@@ -307,6 +307,24 @@ test("openDirectory unwraps the first file-token grant", async () => {
   assert.deepEqual(await client.dialog.openDirectory(), grant);
 });
 
+test("autostart SDK queries and updates the per-app login setting", async () => {
+  const calls = [];
+  const client = createAlexClient({
+    async invoke(method, params) {
+      calls.push({ method, params });
+      if (method === "system.autostartStatus") return { enabled: false };
+      if (method === "system.setAutostart") return { enabled: params.enabled };
+      throw new Error(`unexpected method ${method}`);
+    },
+  });
+  assert.equal(await client.system.autostartStatus(), false);
+  assert.equal(await client.system.setAutostart(true), true);
+  assert.deepEqual(calls, [
+    { method: "system.autostartStatus", params: {} },
+    { method: "system.setAutostart", params: { enabled: true } },
+  ]);
+});
+
 test("net.fetch exposes headers and body decoding helpers", async () => {
   const client = createAlexClient({
     async invoke(method) {

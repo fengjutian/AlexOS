@@ -41,6 +41,7 @@
     "clipboard.read",
     "clipboard.write",
     "system.openExternal",
+    "system.autostart",
     "storage",
     "paths",
     "window.manage",
@@ -129,6 +130,10 @@
     {
       "permissions": ["system.openExternal"],
       "methods": ["system.openExternal"]
+    },
+    {
+      "permissions": ["system.autostart"],
+      "methods": ["system.autostartStatus", "system.setAutostart"]
     },
     {
       "permissions": ["system.install"],
@@ -370,6 +375,8 @@
       "system.capabilities",
       "system.requestPermission",
       "system.openExternal",
+      "system.autostartStatus",
+      "system.setAutostart",
       "system.listApps",
       "system.listExtensions",
       "system.install",
@@ -2003,6 +2010,37 @@
         "required": [
           "opened"
         ],
+        "additionalProperties": false
+      }
+    },
+    "system.autostartStatus": {
+      "params": {
+        "$ref": "#/$defs/Empty"
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" }
+        },
+        "required": ["enabled"],
+        "additionalProperties": false
+      }
+    },
+    "system.setAutostart": {
+      "params": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" }
+        },
+        "required": ["enabled"],
+        "additionalProperties": false
+      },
+      "result": {
+        "type": "object",
+        "properties": {
+          "enabled": { "type": "boolean" }
+        },
+        "required": ["enabled"],
         "additionalProperties": false
       }
     },

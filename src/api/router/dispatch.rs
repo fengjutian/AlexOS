@@ -38,6 +38,8 @@ pub(super) fn route(router: &ApiRouter, request: &Request, window_id: Option<u64
         "system.info" => router.system_info(),
         "system.capabilities" => router.system_capabilities(),
         "system.openExternal" => router.open_external(p),
+        "system.autostartStatus" => router.autostart_status(),
+        "system.setAutostart" => router.set_autostart(p),
         "system.requestPermission" => router.request_permission(p),
         "system.install" => router.system_install(p),
         "system.uninstall" => router.system_uninstall(p),

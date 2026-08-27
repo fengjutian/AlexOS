@@ -7,6 +7,19 @@ nav_order: 3
 
 # Alex Runtime 路线图
 
+> **当前执行顺序（2026-08-27）**：第一阶段先完成 Windows 本地应用框架，以
+> [`product-requirements.md` §1.6](./product-requirements.md#16-两阶段交付策略2026-08-27) 的
+> 20 个桌面场景达到至少 16/20 为“约 80% Tauri 常用能力”验收口径；第二阶段再冻结 Model、MCP、
+> Agent、Knowledge 与 AI 开发 SDK。下文旧版本细分任务若与该顺序冲突，以 §1.6 为准。
+
+## 当前开发队列
+
+1. 逐项核验并补齐 20 个桌面场景的 SDK、权限、测试和 GUI evidence；
+2. 优先完成当前缺口：单实例、深链接、窗口状态持久化；开机启动 API 已完成基础接线；
+3. 完成 React + TypeScript 模板与 `create/dev/build/pack/install` 开发闭环；
+4. 完成 Windows 安装器、更新、回滚和卸载；
+5. 冻结 Desktop API 后进入第二阶段 AI SDK 与三个参考应用。
+
 > 本路线图服务唯一产品主线：**Windows AI Application Runtime**。首发场景是 Windows 本地 AI 助手、
 > 企业内部 RAG/Agent 桌面应用，以及带 UI、模型和 MCP 的可安装 AI 工具。版本、优先级和成熟度的定义
 > 以 [`product-requirements.md`](./product-requirements.md) §9 为准。

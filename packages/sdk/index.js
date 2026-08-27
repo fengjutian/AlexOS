@@ -489,6 +489,12 @@ export function createAlexClient(transport = browserTransport()) {
       async openExternal(url, options) {
         await invoke("system.openExternal", { url }, options);
       },
+      async autostartStatus(options) {
+        return (await invoke("system.autostartStatus", {}, options)).enabled;
+      },
+      async setAutostart(enabled, options) {
+        return (await invoke("system.setAutostart", { enabled }, options)).enabled;
+      },
       async listApps(options) {
         const result = await invoke("system.listApps", {}, options);
         return result.apps;

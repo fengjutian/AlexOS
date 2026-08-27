@@ -693,6 +693,8 @@ export interface AlexClient {
     info(options?: InvokeOptions): Promise<SystemInfo>;
     capabilities(options?: InvokeOptions): Promise<SystemCapabilities>;
     openExternal(url: string, options?: InvokeOptions): Promise<void>;
+    autostartStatus(options?: InvokeOptions): Promise<boolean>;
+    setAutostart(enabled: boolean, options?: InvokeOptions): Promise<boolean>;
     /**
      * List applications installed in the system install root.
      * Requires the calling package to be a plugin with

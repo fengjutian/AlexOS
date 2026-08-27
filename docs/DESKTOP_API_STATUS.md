@@ -28,6 +28,8 @@ nav_order: 3
   后端 token；页面继续使用 `new WebSocket("alex://app/api/...")`。
 - 原生 Shell 的应用菜单、右键菜单、托盘和全局快捷键；点击通过
   `menu.clicked`、`tray.clicked`、`shortcut.triggered` 返回页面。
+- Windows 当前用户开机启动：`system.autostartStatus` / `system.setAutostart` 使用独立
+  `system.autostart` 权限，并通过 Alex CLI 启动已安装应用，不直接执行包内代码。
 
 `alex dev` 与非开发模式 Shell 共享同一套原生窗口、菜单、托盘和全局快捷键宿主，并在
 此基础上启用文件监听、自动刷新和 DevTools。

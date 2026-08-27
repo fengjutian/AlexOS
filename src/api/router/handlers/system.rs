@@ -47,6 +47,27 @@ impl ApiRouter {
         Ok(result)
     }
 
+    pub(crate) fn autostart_status(&self) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::SystemAutostart),
+            "system.autostart",
+        )?;
+        let enabled = crate::platform::autostart::is_enabled(&self.manifest.id)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        Ok(json!({ "enabled": enabled }))
+    }
+
+    pub(crate) fn set_autostart(&self, params: &Value) -> ApiResult {
+        self.require_permission(
+            |permission| matches!(permission, Permission::SystemAutostart),
+            "system.autostart",
+        )?;
+        let params: AutoStartParams = parse_params(params)?;
+        crate::platform::autostart::set_enabled(&self.manifest.id, params.enabled)
+            .map_err(|error| ("NATIVE_ERROR", error.to_string()))?;
+        Ok(json!({ "enabled": params.enabled }))
+    }
+
     pub(crate) fn system_capabilities(&self) -> ApiResult {
         // Capability negotiation: pages call this once at
         // boot to learn which APIs the current build supports.

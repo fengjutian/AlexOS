@@ -42,6 +42,8 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `system.capabilities` | `system.capabilities` | none | host | stable | blocking |
 | `system.requestPermission` | `system.requestPermission` | none | host | stable | blocking |
 | `system.openExternal` | `system.openExternal` | `system.openExternal` | host | stable | blocking |
+| `system.autostartStatus` | `system.autostartStatus` | `system.autostart` | host | stable | blocking |
+| `system.setAutostart` | `system.setAutostart` | `system.autostart` | host | stable | blocking |
 | `system.listApps` | `system.listApps` | `system.manageApps` | host | stable | blocking |
 | `system.listExtensions` | `system.listExtensions` | `system.manageExtensions` | host | stable | blocking |
 | `system.install` | `system.install` | `system.install` | host | stable | blocking |

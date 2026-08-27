@@ -57,6 +57,8 @@ export type AlexCapability =
   | "system.capabilities"
   | "system.requestPermission"
   | "system.openExternal"
+  | "system.autostartStatus"
+  | "system.setAutostart"
   | "system.listApps"
   | "system.listExtensions"
   | "system.install"
@@ -202,6 +204,7 @@ export type AlexPermissionKind =
   | "clipboard.read"
   | "clipboard.write"
   | "system.openExternal"
+  | "system.autostart"
   | "storage"
   | "paths"
   | "window.manage"
@@ -259,6 +262,8 @@ export interface AlexMethodSecurityMap {
   "system.capabilities": { action: "system.capabilities"; permissions: readonly []; resource: "host"; maturity: "stable" };
   "system.requestPermission": { action: "system.requestPermission"; permissions: readonly []; resource: "host"; maturity: "stable" };
   "system.openExternal": { action: "system.openExternal"; permissions: readonly ["system.openExternal"]; resource: "host"; maturity: "stable" };
+  "system.autostartStatus": { action: "system.autostartStatus"; permissions: readonly ["system.autostart"]; resource: "host"; maturity: "stable" };
+  "system.setAutostart": { action: "system.setAutostart"; permissions: readonly ["system.autostart"]; resource: "host"; maturity: "stable" };
   "system.listApps": { action: "system.listApps"; permissions: readonly ["system.manageApps"]; resource: "host"; maturity: "stable" };
   "system.listExtensions": { action: "system.listExtensions"; permissions: readonly ["system.manageExtensions"]; resource: "host"; maturity: "stable" };
   "system.install": { action: "system.install"; permissions: readonly ["system.install"]; resource: "host"; maturity: "stable" };
@@ -411,6 +416,8 @@ export interface AlexMethodMap {
   "system.capabilities": { params: Empty; result: { "capabilities": Array<string>; "experimental": Array<string>; "platform": { "os": "windows" | "macos" | "linux" | "other"; "atomicReplace": boolean; "processTreeLimits": boolean; "filesystemSandbox": boolean; "networkSandbox": boolean; "oci": boolean } } };
   "system.requestPermission": { params: { "permission": string }; result: { "permission": string; "granted": boolean } };
   "system.openExternal": { params: { "url": string }; result: { "opened": boolean } };
+  "system.autostartStatus": { params: Empty; result: { "enabled": boolean } };
+  "system.setAutostart": { params: { "enabled": boolean }; result: { "enabled": boolean } };
   "system.listApps": { params: Empty; result: { "apps": Array<{ [key: string]: unknown }> } };
   "system.listExtensions": { params: Empty; result: { "extensions": Array<{ [key: string]: unknown }> } };
   "system.install": { params: { "packagePath": string; "requireSignature"?: boolean; "trustedKey"?: string }; result: { "installed": string } };

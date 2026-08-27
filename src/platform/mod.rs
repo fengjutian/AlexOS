@@ -4,6 +4,7 @@
 //! code consume these contracts instead of importing Win32/AppKit directly.
 
 use std::path::Path;
+pub mod autostart;
 pub mod desktop;
 pub mod secret;
 

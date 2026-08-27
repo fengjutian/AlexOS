@@ -39,6 +39,9 @@ pub enum Permission {
     ClipboardWrite,
     #[serde(rename = "system.openExternal")]
     OpenExternal { origins: Vec<String> },
+    /// Register this application for the current user's Windows login.
+    #[serde(rename = "system.autostart")]
+    SystemAutostart,
     /// Per-app persistent key/value store. The host computes the
     /// backing file path from the manifest id; the permission only
     /// gates read/write.
@@ -148,6 +151,7 @@ impl Permission {
             Permission::ClipboardRead => "clipboard.read",
             Permission::ClipboardWrite => "clipboard.write",
             Permission::OpenExternal { .. } => "system.openExternal",
+            Permission::SystemAutostart => "system.autostart",
             Permission::Storage => "storage",
             Permission::Paths => "paths",
             Permission::WindowManage => "window.manage",
@@ -355,6 +359,10 @@ mod generated_permission_tests {
         assert_eq!(
             Permission::manifest_name_for_ipc_method("runtime.status"),
             Some("runtime.manage")
+        );
+        assert_eq!(
+            Permission::manifest_name_for_ipc_method("system.setAutostart"),
+            Some("system.autostart")
         );
         assert_eq!(
             Permission::manifest_name_for_ipc_method("filesystem.copy"),
