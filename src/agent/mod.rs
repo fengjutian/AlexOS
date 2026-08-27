@@ -9,7 +9,7 @@ use std::{
         Arc, Mutex,
         atomic::{AtomicBool, Ordering},
     },
-    time::{SystemTime, UNIX_EPOCH},
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use crate::platform::PlatformServices;
@@ -176,6 +176,10 @@ pub struct AgentRun {
     pub messages: Vec<Value>,
     #[serde(default)]
     pub pending_tool: Option<PendingToolCall>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub approval_grant_id: Option<String>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub run_grant_id: Option<String>,
     pub created_at_ms: u64,
     pub updated_at_ms: u64,
     pub started_at_ms: Option<u64>,
@@ -281,6 +285,7 @@ pub struct AgentManager {
     event_sequences: Arc<Mutex<BTreeMap<String, u64>>>,
     native_tools: Option<Arc<dyn AgentNativeTools>>,
     mcp_audit: Option<crate::mcp::AuditLog>,
+    grants: crate::grant::GrantStore,
 }
 
 impl AgentManager {
@@ -300,6 +305,7 @@ impl AgentManager {
             event_sequences: Arc::new(Mutex::new(BTreeMap::new())),
             native_tools: None,
             mcp_audit: None,
+            grants: crate::grant::GrantStore::default(),
         };
         manager.recover_interrupted()?;
         Ok(manager)
@@ -325,6 +331,31 @@ impl AgentManager {
                 continue;
             };
             let previous = run.state;
+            if !is_terminal(run.state) {
+                run.run_grant_id = Some(self.issue_run_grant(&run)?);
+                self.save(&run)?;
+            } else {
+                run.run_grant_id = None;
+            }
+            // Approval grants are intentionally process-local. A daemon restart
+            // invalidates the persisted reference and requires a fresh decision.
+            if run.approval_grant_id.take().is_some() {
+                if let Some(call) = run.pending_tool.as_mut() {
+                    call.approved = false;
+                    run.state = AgentState::WaitingApproval;
+                    run.generation = run.generation.saturating_add(1);
+                    run.updated_at_ms = now_ms();
+                    self.save(&run)?;
+                    self.append_event(
+                        &run,
+                        &AgentEvent::State {
+                            state: run.state,
+                            generation: run.generation,
+                        },
+                    )?;
+                    continue;
+                }
+            }
             match run.state {
                 AgentState::Running => run.state = AgentState::Queued,
                 AgentState::WaitingTool => {
@@ -333,6 +364,7 @@ impl AgentManager {
                         && !call.idempotent
                     {
                         call.approved = false;
+                        run.approval_grant_id = None;
                         run.state = AgentState::WaitingApproval;
                     } else {
                         run.state = AgentState::Queued;
@@ -382,7 +414,7 @@ impl AgentManager {
         }
         let id = new_id()?;
         let now = now_ms();
-        let run = AgentRun {
+        let mut run = AgentRun {
             schema_version: SCHEMA_VERSION,
             id,
             application: application.into(),
@@ -393,6 +425,8 @@ impl AgentManager {
             usage: AgentUsage::default(),
             messages: initial_messages,
             pending_tool: None,
+            approval_grant_id: None,
+            run_grant_id: None,
             created_at_ms: now,
             updated_at_ms: now,
             started_at_ms: None,
@@ -401,6 +435,7 @@ impl AgentManager {
             child_run_ids: Vec::new(),
             scheduled_at_ms: None,
         };
+        run.run_grant_id = Some(self.issue_run_grant(&run)?);
         self.save(&run)?;
         self.append_event(
             &run,
@@ -765,6 +800,21 @@ impl AgentManager {
                     self.checkpoint(&mut run, emit)?;
                     return Ok(run);
                 }
+                let approval_grant_id = run.approval_grant_id.clone();
+                if tool_call_needs_grant(&run, &call) {
+                    let grant_id = approval_grant_id.as_deref().ok_or_else(|| {
+                        AgentError::Conflict("approved tool call is missing its grant".into())
+                    })?;
+                    self.claim_tool_approval(&run, &call, grant_id)?;
+                } else {
+                    let resource = agent_tool_resource(&call)?;
+                    self.claim_run_grant(
+                        &run,
+                        "agent.tool.invoke",
+                        crate::policy::ResourceKind::AgentTool,
+                        &resource,
+                    )?;
+                }
                 call.attempted = true;
                 run.state = AgentState::WaitingTool;
                 run.pending_tool = Some(call.clone());
@@ -789,7 +839,7 @@ impl AgentManager {
                             &call.idempotency_key,
                         )?
                 } else {
-                    self.invoke_mcp_tool(&run, &call)?
+                    self.invoke_mcp_tool(&run, &call, approval_grant_id.as_deref())?
                 };
                 validate_tool_context(&value)?;
                 run.usage.tool_calls = run.usage.tool_calls.saturating_add(1);
@@ -805,6 +855,7 @@ impl AgentManager {
                 run.usage.cost_micros = run.usage.cost_micros.saturating_add(tool_cost);
                 run.messages.push(json!({"role":"tool","name":call.name,"content":value,"idempotencyKey":call.idempotency_key}));
                 run.pending_tool = None;
+                run.approval_grant_id = None;
                 emit(AgentEvent::ToolResult {
                     binding: call.binding,
                     name: call.name,
@@ -830,6 +881,12 @@ impl AgentManager {
                 messages,
                 options: json!({"tools":run.spec.tools}),
             };
+            self.claim_run_grant(
+                &run,
+                "model.generate",
+                crate::policy::ResourceKind::Model,
+                &model_resource(&request.model),
+            )?;
             let model_chain = actor_chain_for_model(&run, &request.model)?;
             let mut generated = String::new();
             let mut tool_calls: Vec<(String, Value)> = Vec::new();
@@ -941,9 +998,16 @@ impl AgentManager {
         &self,
         application: &str,
         run_id: &str,
-        generation: u64,
         call: &PendingToolCall,
     ) -> Result<Value, AgentError> {
+        let run = self.load(run_id)?;
+        let resource = agent_tool_resource(call)?;
+        self.claim_run_grant(
+            &run,
+            "agent.tool.invoke",
+            crate::policy::ResourceKind::AgentTool,
+            &resource,
+        )?;
         let value = if call.binding == "alex" {
             self.native_tools
                 .as_ref()
@@ -955,22 +1019,40 @@ impl AgentManager {
                     &call.idempotency_key,
                 )?
         } else {
-            self.invoke_mcp_tool_parts(application, run_id, generation, call)?
+            self.invoke_mcp_tool_parts(
+                application,
+                run_id,
+                call,
+                run.run_grant_id.as_deref(),
+                None,
+            )?
         };
         validate_tool_context(&value)?;
         Ok(value)
     }
 
-    fn invoke_mcp_tool(&self, run: &AgentRun, call: &PendingToolCall) -> Result<Value, AgentError> {
-        self.invoke_mcp_tool_parts(&run.application, &run.id, run.generation, call)
+    fn invoke_mcp_tool(
+        &self,
+        run: &AgentRun,
+        call: &PendingToolCall,
+        approval_grant_id: Option<&str>,
+    ) -> Result<Value, AgentError> {
+        self.invoke_mcp_tool_parts(
+            &run.application,
+            &run.id,
+            call,
+            run.run_grant_id.as_deref(),
+            approval_grant_id,
+        )
     }
 
     fn invoke_mcp_tool_parts(
         &self,
         application: &str,
         run_id: &str,
-        generation: u64,
         call: &PendingToolCall,
+        run_grant_id: Option<&str>,
+        approval_grant_id: Option<&str>,
     ) -> Result<Value, AgentError> {
         let app = crate::identity::PrincipalId::application(application)
             .map_err(|error| AgentError::Tool(error.to_string()))?;
@@ -985,8 +1067,8 @@ impl AgentManager {
         )
         .map_err(|error| AgentError::Tool(error.to_string()))?;
         let chain = crate::identity::ActorChain::new(app)
-            .delegate(agent, Some(format!("run_{run_id}_g{generation}")))
-            .and_then(|chain| chain.delegate(mcp, None))
+            .delegate(agent, run_grant_id.map(str::to_owned))
+            .and_then(|chain| chain.delegate(mcp, approval_grant_id.map(str::to_owned)))
             .map_err(|error| AgentError::Tool(error.to_string()))?;
         let mut audit = crate::mcp::AuditLog::entry(
             &call.idempotency_key,
@@ -1094,9 +1176,7 @@ impl AgentManager {
             let results = std::thread::scope(|scope| {
                 let handles = wave
                     .iter()
-                    .map(|call| {
-                        scope.spawn(|| self.invoke_tool(application, &run.id, run.generation, call))
-                    })
+                    .map(|call| scope.spawn(|| self.invoke_tool(application, &run.id, call)))
                     .collect::<Vec<_>>();
                 handles
                     .into_iter()
@@ -1135,6 +1215,120 @@ impl AgentManager {
     pub fn approve(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
         self.decide(application, run_id, true)
     }
+
+    fn issue_run_grant(&self, run: &AgentRun) -> Result<String, AgentError> {
+        let application = crate::identity::PrincipalId::application(&run.application)
+            .map_err(|error| AgentError::Conflict(error.to_string()))?;
+        let agent = agent_principal(run)?;
+        self.grants
+            .issue(crate::grant::GrantSpec {
+                issuer: application,
+                grantee: agent,
+                parent_id: None,
+                actions: BTreeSet::from([
+                    "agent.tool.invoke".to_owned(),
+                    "model.generate".to_owned(),
+                ]),
+                resources: vec![
+                    crate::grant::ResourceScope::prefix(
+                        crate::policy::ResourceKind::AgentTool,
+                        "agent-tool://",
+                    ),
+                    crate::grant::ResourceScope::exact(
+                        crate::policy::ResourceKind::Model,
+                        model_resource(&run.spec.model),
+                    ),
+                ],
+                expires_at_ms: u64::MAX,
+                max_uses: None,
+                session_id: Some(run.id.clone()),
+                generation: 0,
+                consume_on_attempt: false,
+            })
+            .map_err(|error| AgentError::Conflict(error.to_string()))
+    }
+
+    fn claim_run_grant(
+        &self,
+        run: &AgentRun,
+        action: &str,
+        kind: crate::policy::ResourceKind,
+        resource_id: &str,
+    ) -> Result<(), AgentError> {
+        let grant_id = run
+            .run_grant_id
+            .as_deref()
+            .ok_or_else(|| AgentError::Conflict("agent run grant is missing".into()))?;
+        let agent = agent_principal(run)?;
+        self.grants
+            .claim(
+                grant_id,
+                &crate::grant::GrantClaim {
+                    grantee: &agent,
+                    action,
+                    resource_kind: kind,
+                    resource_id,
+                    session_id: Some(&run.id),
+                    generation: 0,
+                },
+            )
+            .map_err(|error| AgentError::Conflict(format!("agent run grant rejected: {error}")))
+    }
+
+    fn issue_tool_approval(
+        &self,
+        run: &AgentRun,
+        call: &PendingToolCall,
+        generation: u64,
+    ) -> Result<String, AgentError> {
+        let agent = agent_principal(run)?;
+        let target = agent_tool_target(run, call)?;
+        let parent_id = run
+            .run_grant_id
+            .clone()
+            .ok_or_else(|| AgentError::Conflict("agent run grant is missing".into()))?;
+        self.grants
+            .issue(crate::grant::GrantSpec {
+                issuer: agent,
+                grantee: target,
+                parent_id: Some(parent_id),
+                actions: BTreeSet::from(["agent.tool.invoke".to_owned()]),
+                resources: vec![crate::grant::ResourceScope::exact(
+                    crate::policy::ResourceKind::AgentTool,
+                    agent_tool_resource(call)?,
+                )],
+                expires_at_ms: crate::grant::expires_after(Duration::from_secs(10 * 60)),
+                max_uses: Some(1),
+                session_id: Some(run.id.clone()),
+                generation,
+                consume_on_attempt: true,
+            })
+            .map_err(|error| AgentError::Conflict(error.to_string()))
+    }
+
+    fn claim_tool_approval(
+        &self,
+        run: &AgentRun,
+        call: &PendingToolCall,
+        grant_id: &str,
+    ) -> Result<(), AgentError> {
+        let target = agent_tool_target(run, call)?;
+        let resource = agent_tool_resource(call)?;
+        self.grants
+            .claim(
+                grant_id,
+                &crate::grant::GrantClaim {
+                    grantee: &target,
+                    action: "agent.tool.invoke",
+                    resource_kind: crate::policy::ResourceKind::AgentTool,
+                    resource_id: &resource,
+                    session_id: Some(&run.id),
+                    generation: run.generation,
+                },
+            )
+            .map_err(|error| AgentError::Conflict(format!("tool approval rejected: {error}")))
+    }
+
     pub fn deny(&self, application: &str, run_id: &str) -> Result<AgentRun, AgentError> {
         self.decide(application, run_id, false)
     }
@@ -1151,15 +1345,26 @@ impl AgentManager {
             ));
         }
         if approved {
+            let call = run
+                .pending_tool
+                .as_ref()
+                .ok_or_else(|| AgentError::Conflict("pending tool is missing".into()))?;
+            let next_generation = run.generation.saturating_add(1);
+            let grant_id = self.issue_tool_approval(&run, call, next_generation)?;
             run.pending_tool
                 .as_mut()
-                .ok_or_else(|| AgentError::Conflict("pending tool is missing".into()))?
+                .expect("checked pending tool")
                 .approved = true;
+            run.approval_grant_id = Some(grant_id);
             run.state = AgentState::Queued;
         } else {
+            if let Some(grant_id) = run.approval_grant_id.take() {
+                self.grants.remove(&grant_id);
+            }
             run.pending_tool = None;
             run.state = AgentState::Failed;
             run.last_error = Some("tool call denied".into());
+            self.revoke_run_grants(&run, "tool call denied");
         }
         run.generation = run.generation.saturating_add(1);
         run.updated_at_ms = now_ms();
@@ -1228,6 +1433,14 @@ impl AgentManager {
             ));
         }
         run.state = AgentState::Queued;
+        if run
+            .run_grant_id
+            .as_deref()
+            .and_then(|id| self.grants.get(id))
+            .is_none_or(|grant| grant.status != crate::grant::GrantStatus::Active)
+        {
+            run.run_grant_id = Some(self.issue_run_grant(&run)?);
+        }
         run.generation = run.generation.saturating_add(1);
         run.last_error = None;
         run.updated_at_ms = now_ms();
@@ -1243,6 +1456,9 @@ impl AgentManager {
     ) -> Result<AgentRun, AgentError> {
         let mut run = self.status(application, run_id)?;
         run.state = state;
+        if is_terminal(state) {
+            self.revoke_run_grants(&run, "agent run terminated");
+        }
         run.generation = run.generation.saturating_add(1);
         run.updated_at_ms = now_ms();
         self.save(&run)?;
@@ -1264,8 +1480,17 @@ impl AgentManager {
     ) -> Result<AgentRun, AgentError> {
         run.state = state;
         run.last_error = error;
+        if is_terminal(state) {
+            self.revoke_run_grants(&run, "agent run finished");
+        }
         self.checkpoint(&mut run, emit)?;
         Ok(run)
+    }
+
+    fn revoke_run_grants(&self, run: &AgentRun, reason: &str) {
+        if let Some(id) = &run.run_grant_id {
+            let _ = self.grants.revoke(id, reason);
+        }
     }
     fn checkpoint(
         &self,
@@ -1405,7 +1630,7 @@ fn actor_chain_for_model(
         crate::identity::PrincipalId::new(crate::identity::PrincipalKind::ModelProvider, model_id)
             .map_err(|error| AgentError::Model(error.to_string()))?;
     crate::identity::ActorChain::new(app)
-        .delegate(agent, Some(format!("run_{}_g{}", run.id, run.generation)))
+        .delegate(agent, run.run_grant_id.clone())
         .and_then(|chain| chain.delegate(model, None))
         .map_err(|error| AgentError::Model(error.to_string()))
 }
@@ -1456,6 +1681,59 @@ impl PendingToolCall {
     fn require_approval(&self) -> bool {
         !self.approved
     }
+}
+
+fn agent_principal(run: &AgentRun) -> Result<crate::identity::PrincipalId, AgentError> {
+    crate::identity::PrincipalId::new(
+        crate::identity::PrincipalKind::AgentRun,
+        format!("{}/{}", run.application, run.id),
+    )
+    .map_err(|error| AgentError::Conflict(error.to_string()))
+}
+
+fn agent_tool_resource(call: &PendingToolCall) -> Result<String, AgentError> {
+    let argument_hash = crate::mcp::audit_argument_hash(&call.arguments)
+        .map_err(|error| AgentError::Conflict(error.to_string()))?;
+    Ok(format!(
+        "agent-tool://{}:{}|{}:{}|{}:{}",
+        call.binding.len(),
+        call.binding,
+        call.name.len(),
+        call.name,
+        argument_hash.len(),
+        argument_hash,
+    ))
+}
+
+fn agent_tool_target(
+    run: &AgentRun,
+    call: &PendingToolCall,
+) -> Result<crate::identity::PrincipalId, AgentError> {
+    let (kind, subject) = if call.binding == "alex" {
+        (
+            crate::identity::PrincipalKind::NativeWorker,
+            format!("{}/alex", run.application),
+        )
+    } else {
+        (
+            crate::identity::PrincipalKind::McpServer,
+            format!("{}/{}", run.application, call.binding),
+        )
+    };
+    crate::identity::PrincipalId::new(kind, subject)
+        .map_err(|error| AgentError::Conflict(error.to_string()))
+}
+
+fn model_resource(model: &str) -> String {
+    format!("model://{model}")
+}
+
+fn tool_call_needs_grant(run: &AgentRun, call: &PendingToolCall) -> bool {
+    !call.idempotent
+        || crate::security::sensitive_json(&call.arguments).is_some()
+        || run.spec.tools.iter().any(|tool| {
+            tool.binding == call.binding && tool.name == call.name && tool.require_approval
+        })
 }
 
 fn compact_context(run: &mut AgentRun) -> Result<Option<AgentEvent>, AgentError> {
@@ -1982,12 +2260,38 @@ mod tests {
             .unwrap();
         assert_eq!(waiting.state, AgentState::WaitingApproval);
         assert!(waiting.pending_tool.is_some());
-        manager.approve("com.example.app", &run.id).unwrap();
+        let approved = manager.approve("com.example.app", &run.id).unwrap();
+        let approval_grant_id = approved
+            .approval_grant_id
+            .clone()
+            .expect("approval must mint a grant");
+        let run_grant_id = approved
+            .run_grant_id
+            .clone()
+            .expect("agent run must have a parent grant");
+        assert_eq!(
+            manager
+                .grants
+                .get(&approval_grant_id)
+                .unwrap()
+                .spec
+                .parent_id
+                .as_deref(),
+            Some(run_grant_id.as_str())
+        );
         let completed = manager
             .execute("com.example.app", &run.id, &mut |_| Ok(()))
             .unwrap();
         assert_eq!(completed.state, AgentState::Completed);
         assert_eq!(completed.usage.tool_calls, 1);
+        assert_eq!(
+            manager.grants.get(&run_grant_id).unwrap().status,
+            crate::grant::GrantStatus::Revoked
+        );
+        assert_eq!(
+            manager.grants.get(&approval_grant_id).unwrap().status,
+            crate::grant::GrantStatus::Revoked
+        );
         assert!(manager.run_dir(&run.id).join("checkpoints").is_dir());
         assert!(
             !manager
@@ -2015,6 +2319,14 @@ mod tests {
                 .principal
                 .as_str()
                 .starts_with("agent:com.example.app/")
+        );
+        assert_eq!(
+            chain.actors[0].delegation_id.as_deref(),
+            approved.run_grant_id.as_deref()
+        );
+        assert_eq!(
+            chain.actors[1].delegation_id.as_deref(),
+            Some(approval_grant_id.as_str())
         );
         assert_eq!(
             chain.effective_actor().as_str(),
@@ -2072,6 +2384,54 @@ mod tests {
             reopened.status("com.example.app", &run.id).unwrap().state,
             AgentState::Queued
         );
+    }
+
+    #[test]
+    fn tool_approval_is_bound_to_arguments_generation_and_single_use() {
+        let temp = tempfile::tempdir().unwrap();
+        let manager = runtime(&temp);
+        let run = manager
+            .create(
+                "com.example.app",
+                AgentSpec {
+                    model: "local/test@1".into(),
+                    system_prompt: None,
+                    tools: vec![AgentToolSpec {
+                        binding: "tools".into(),
+                        name: "write".into(),
+                        idempotent: false,
+                        require_approval: true,
+                        depends_on: vec![],
+                    }],
+                    budget: AgentBudget::default(),
+                },
+                vec![],
+            )
+            .unwrap();
+        let waiting = manager
+            .execute("com.example.app", &run.id, &mut |_| Ok(()))
+            .unwrap();
+        assert_eq!(waiting.state, AgentState::WaitingApproval);
+        let approved = manager.approve("com.example.app", &run.id).unwrap();
+        let original_call = approved.pending_tool.clone().unwrap();
+
+        let mut tampered = approved.clone();
+        tampered.pending_tool.as_mut().unwrap().arguments = json!({"value":"tampered"});
+        manager.save(&tampered).unwrap();
+        assert!(matches!(
+            manager.execute("com.example.app", &run.id, &mut |_| Ok(())),
+            Err(AgentError::Conflict(message)) if message.contains("tool approval rejected")
+        ));
+
+        // A mismatched attempt burns the one-shot grant; restoring the original
+        // payload cannot replay the approval.
+        let mut restored = approved;
+        restored.pending_tool = Some(original_call);
+        manager.save(&restored).unwrap();
+        assert!(matches!(
+            manager.execute("com.example.app", &run.id, &mut |_| Ok(())),
+            Err(AgentError::Conflict(message)) if message.contains("tool approval rejected")
+        ));
     }
 
     #[test]

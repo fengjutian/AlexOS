@@ -13,6 +13,7 @@ pub enum ResourceKind {
     File,
     NetworkOrigin,
     McpTool,
+    AgentTool,
     Model,
     AgentRun,
     Service,

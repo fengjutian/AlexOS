@@ -336,7 +336,9 @@ fn validate_parent(
             .all(|c| parent.spec.resources.iter().any(|p| p.contains(c)))
         || !uses_attenuated(parent.remaining_uses, child.max_uses)
         || (parent.spec.session_id.is_some() && parent.spec.session_id != child.session_id)
-        || child.generation != parent.spec.generation
+        // Generation zero is reserved for a stable parent capability. Its
+        // children must still bind their own concrete execution generation.
+        || (parent.spec.generation != 0 && child.generation != parent.spec.generation)
     {
         return Err(GrantError::NotAttenuated);
     }
