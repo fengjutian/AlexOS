@@ -326,6 +326,9 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
 
 ## 10. 延伸阅读
 
+- [`principal-identity-policy-design.md`](./principal-identity-policy-design.md) — Application、Agent、
+  MCP、Model、Worker 与用户共用的身份、委托、资源、策略和短期授权模型；
+
 按"新人 20 分钟入门"读：
 
 1. [`status.md`](./status.md) — 当前能做什么、不能做什么。

@@ -257,6 +257,10 @@ Windows 首版安全边界组合：Restricted Token、Job Object、ACL、可执�
 
 所有敏感调用必须具备：Manifest 声明、用户/管理员决策、运行时强制执行、撤销和审计。
 
+Application、Agent、Service、MCP、Model、Worker、Publisher 和用户统一采用 Principal、Identity、
+Actor Chain、Resource、Action、Policy 与 Grant 模型；目标设计和迁移阶段见
+[`principal-identity-policy-design.md`](./principal-identity-policy-design.md)。
+
 ## 7. IPC、存储、日志与更新
 
 Alex IPC 逐步支持 Request、Response、Event 和 Stream；本地控制面优先使用 Windows Named Pipe，
