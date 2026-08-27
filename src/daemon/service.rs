@@ -441,9 +441,12 @@ impl DaemonService {
         let remote_router = crate::model::remote::RemoteProviderRouter::open(root, secret_resolver)
             .map_err(|error| error.to_string())?;
         models.set_remote(remote_router);
+        let mcp_audit = crate::mcp::AuditLog::open(root.join("audit").join("mcp.jsonl"))
+            .map_err(|error| error.to_string())?;
         let agents =
             crate::agent::AgentManager::open(root.join("agents"), models.clone(), self.mcp.clone())
                 .map_err(|error| error.to_string())?
+                .with_mcp_audit(mcp_audit.clone())
                 .with_native_tools(Arc::new(DaemonAgentNativeTools {
                     state: self.state.clone(),
                 }));
@@ -455,10 +458,7 @@ impl DaemonService {
         self.models = Some(models);
         self.model_downloads = Some(model_downloads);
         self.worker_packages = Some(worker_packages);
-        self.mcp_audit = Some(
-            crate::mcp::AuditLog::open(root.join("audit").join("mcp.jsonl"))
-                .map_err(|error| error.to_string())?,
-        );
+        self.mcp_audit = Some(mcp_audit);
         self.mcp_configs = Some(
             crate::mcp::ConnectionConfigStore::open(root.join("mcp").join("connections.json"))
                 .map_err(|error| error.to_string())?,

@@ -280,6 +280,7 @@ pub struct AgentManager {
     cancellations: Arc<Mutex<BTreeMap<String, Arc<AtomicBool>>>>,
     event_sequences: Arc<Mutex<BTreeMap<String, u64>>>,
     native_tools: Option<Arc<dyn AgentNativeTools>>,
+    mcp_audit: Option<crate::mcp::AuditLog>,
 }
 
 impl AgentManager {
@@ -298,6 +299,7 @@ impl AgentManager {
             cancellations: Arc::new(Mutex::new(BTreeMap::new())),
             event_sequences: Arc::new(Mutex::new(BTreeMap::new())),
             native_tools: None,
+            mcp_audit: None,
         };
         manager.recover_interrupted()?;
         Ok(manager)
@@ -305,6 +307,11 @@ impl AgentManager {
 
     pub fn with_native_tools(mut self, tools: Arc<dyn AgentNativeTools>) -> Self {
         self.native_tools = Some(tools);
+        self
+    }
+
+    pub fn with_mcp_audit(mut self, audit: crate::mcp::AuditLog) -> Self {
+        self.mcp_audit = Some(audit);
         self
     }
 
@@ -782,14 +789,7 @@ impl AgentManager {
                             &call.idempotency_key,
                         )?
                 } else {
-                    let result = self
-                        .mcp
-                        .get(application, &call.binding)
-                        .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
-                        .and_then(crate::mcp::filter_tool_result)
-                        .map_err(|error| AgentError::Tool(error.to_string()))?;
-                    serde_json::to_value(result)
-                        .map_err(|error| AgentError::Tool(error.to_string()))?
+                    self.invoke_mcp_tool(&run, &call)?
                 };
                 validate_tool_context(&value)?;
                 run.usage.tool_calls = run.usage.tool_calls.saturating_add(1);
@@ -936,7 +936,13 @@ impl AgentManager {
         }
     }
 
-    fn invoke_tool(&self, application: &str, call: &PendingToolCall) -> Result<Value, AgentError> {
+    fn invoke_tool(
+        &self,
+        application: &str,
+        run_id: &str,
+        generation: u64,
+        call: &PendingToolCall,
+    ) -> Result<Value, AgentError> {
         let value = if call.binding == "alex" {
             self.native_tools
                 .as_ref()
@@ -948,16 +954,92 @@ impl AgentManager {
                     &call.idempotency_key,
                 )?
         } else {
-            let result = self
-                .mcp
-                .get(application, &call.binding)
-                .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
-                .and_then(crate::mcp::filter_tool_result)
-                .map_err(|error| AgentError::Tool(error.to_string()))?;
-            serde_json::to_value(result).map_err(|error| AgentError::Tool(error.to_string()))?
+            self.invoke_mcp_tool_parts(application, run_id, generation, call)?
         };
         validate_tool_context(&value)?;
         Ok(value)
+    }
+
+    fn invoke_mcp_tool(
+        &self,
+        run: &AgentRun,
+        call: &PendingToolCall,
+    ) -> Result<Value, AgentError> {
+        self.invoke_mcp_tool_parts(&run.application, &run.id, run.generation, call)
+    }
+
+    fn invoke_mcp_tool_parts(
+        &self,
+        application: &str,
+        run_id: &str,
+        generation: u64,
+        call: &PendingToolCall,
+    ) -> Result<Value, AgentError> {
+        let app = crate::identity::PrincipalId::application(application)
+            .map_err(|error| AgentError::Tool(error.to_string()))?;
+        let agent = crate::identity::PrincipalId::new(
+            crate::identity::PrincipalKind::AgentRun,
+            format!("{application}/{run_id}"),
+        )
+        .map_err(|error| AgentError::Tool(error.to_string()))?;
+        let mcp = crate::identity::PrincipalId::new(
+            crate::identity::PrincipalKind::McpServer,
+            format!("{application}/{}", call.binding),
+        )
+        .map_err(|error| AgentError::Tool(error.to_string()))?;
+        let chain = crate::identity::ActorChain::new(app)
+            .delegate(agent, Some(format!("run_{run_id}_g{generation}")))
+            .and_then(|chain| chain.delegate(mcp, None))
+            .map_err(|error| AgentError::Tool(error.to_string()))?;
+        let mut audit = crate::mcp::AuditLog::entry(
+            &call.idempotency_key,
+            application,
+            &call.binding,
+            &call.name,
+            "started",
+        );
+        audit.argument_hash = Some(
+            crate::mcp::audit_argument_hash(&call.arguments)
+                .map_err(|error| AgentError::Tool(error.to_string()))?,
+        );
+        audit
+            .set_actor_chain(chain)
+            .map_err(|error| AgentError::Tool(error.to_string()))?;
+        if let Some(log) = &self.mcp_audit {
+            log.append(&audit).map_err(|error| {
+                AgentError::Tool(format!("MCP audit unavailable; tool was not invoked: {error}"))
+            })?;
+        }
+        let started_at = std::time::Instant::now();
+        let result = self
+            .mcp
+            .get(application, &call.binding)
+            .and_then(|client| client.call_tool(&call.name, call.arguments.clone()))
+            .and_then(crate::mcp::filter_tool_result);
+        audit.timestamp_ms = now_ms();
+        audit.phase = "finished".into();
+        audit.duration_ms = Some(started_at.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
+        match result {
+            Ok(result) => {
+                audit.outcome = Some("success".into());
+                if let Some(log) = &self.mcp_audit {
+                    log.append(&audit).map_err(|error| {
+                        AgentError::Tool(format!(
+                            "MCP tool completed, but its audit outcome could not be persisted; do not retry automatically: {error}"
+                        ))
+                    })?;
+                }
+                serde_json::to_value(result).map_err(|error| AgentError::Tool(error.to_string()))
+            }
+            Err(error) => {
+                audit.outcome = Some("failure".into());
+                audit.error_kind = Some("tool".into());
+                if let Some(log) = &self.mcp_audit {
+                    let _ = log.append(&audit);
+                }
+                Err(AgentError::Tool(error.to_string()))
+            }
+        }
     }
 
     fn execute_parallel_calls(
@@ -1007,7 +1089,11 @@ impl AgentManager {
             let results = std::thread::scope(|scope| {
                 let handles = wave
                     .iter()
-                    .map(|call| scope.spawn(|| self.invoke_tool(application, call)))
+                    .map(|call| {
+                        scope.spawn(|| {
+                            self.invoke_tool(application, &run.id, run.generation, call)
+                        })
+                    })
                     .collect::<Vec<_>>();
                 handles
                     .into_iter()

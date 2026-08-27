@@ -147,6 +147,12 @@ pub struct AuditEntry {
     pub binding: String,
     pub tool: String,
     pub phase: String,
+    /// Host-constructed delegation path. Older audit records omit this field
+    /// and remain readable during the identity migration window.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_chain: Option<crate::identity::ActorChain>,
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub actor_chain_hash: Option<String>,
     /// SHA-256 of the canonical JSON tool arguments. The arguments
     /// themselves are deliberately never persisted.
     #[serde(default, skip_serializing_if = "Option::is_none")]
@@ -333,6 +339,8 @@ impl AuditLog {
             binding: binding.into(),
             tool: tool.into(),
             phase: phase.into(),
+            actor_chain: None,
+            actor_chain_hash: None,
             argument_hash: None,
             outcome: None,
             duration_ms: None,
@@ -340,6 +348,22 @@ impl AuditLog {
             previous_hash: None,
             record_hash: None,
         }
+    }
+}
+
+impl AuditEntry {
+    pub fn set_actor_chain(
+        &mut self,
+        actor_chain: crate::identity::ActorChain,
+    ) -> Result<(), McpError> {
+        actor_chain
+            .validate()
+            .map_err(|error| McpError::Authorization(error.to_string()))?;
+        let encoded = serde_json::to_vec(&actor_chain)
+            .map_err(|error| McpError::Protocol(error.to_string()))?;
+        self.actor_chain_hash = Some(format!("sha256:{:x}", Sha256::digest(encoded)));
+        self.actor_chain = Some(actor_chain);
+        Ok(())
     }
 }
 
