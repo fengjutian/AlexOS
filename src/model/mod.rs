@@ -11,7 +11,7 @@ use std::{
         atomic::{AtomicBool, Ordering},
         mpsc::sync_channel,
     },
-    time::Duration,
+    time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use base64::Engine as _;
@@ -23,6 +23,7 @@ use thiserror::Error;
 
 use crate::platform::PlatformServices;
 
+pub mod audit;
 pub mod download_tasks;
 pub mod hardware;
 pub mod remote;
@@ -749,6 +750,7 @@ pub struct ModelManager {
     remote: Arc<Mutex<Option<remote::RemoteProviderRouter>>>,
     resources: resource::ResourceGovernor,
     worker_launches: Arc<Mutex<BTreeMap<String, WorkerLaunchSpec>>>,
+    audit: Arc<Mutex<Option<audit::ModelAuditLog>>>,
 }
 
 #[derive(Debug, Clone)]
@@ -770,7 +772,12 @@ impl ModelManager {
             remote: Arc::new(Mutex::new(None)),
             resources: resource::ResourceGovernor::new(resource::ResourceBudget::default()),
             worker_launches: Arc::new(Mutex::new(BTreeMap::new())),
+            audit: Arc::new(Mutex::new(None)),
         }
+    }
+
+    pub fn set_audit(&self, audit: audit::ModelAuditLog) {
+        *self.audit.lock().expect("model audit lock poisoned") = Some(audit);
     }
 
     /// Attach the daemon-owned remote provider router. `remote/<provider>/<model>`
@@ -1003,6 +1010,65 @@ impl ModelManager {
         request: &GenerateRequest,
         emit: &mut dyn FnMut(GenerateEvent) -> Result<(), ModelError>,
     ) -> Result<(), ModelError> {
+        self.generate_with_actor_chain(request, None, emit)
+    }
+
+    pub fn generate_with_actor_chain(
+        &self,
+        request: &GenerateRequest,
+        actor_chain: Option<&crate::identity::ActorChain>,
+        emit: &mut dyn FnMut(GenerateEvent) -> Result<(), ModelError>,
+    ) -> Result<(), ModelError> {
+        let audit = self
+            .audit
+            .lock()
+            .map_err(|_| ModelError::Worker("model audit lock poisoned".into()))?
+            .clone();
+        let mut entry = audit::ModelAuditEntry::started(
+            &request.request_id,
+            "generate",
+            &request.model,
+            request,
+            actor_chain,
+        )?;
+        if let Some(log) = &audit {
+            log.append(&entry)?;
+        }
+        let started_at = std::time::Instant::now();
+        let result = self.generate_inner(request, emit);
+        entry.timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        entry.phase = "finished".into();
+        entry.duration_ms = Some(
+            started_at
+                .elapsed()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        );
+        entry.outcome = Some(if result.is_ok() { "success" } else { "failure" }.into());
+        if result.is_err() {
+            entry.error_kind = Some("inference".into());
+        }
+        if let Some(log) = &audit {
+            log.append(&entry).map_err(|error| {
+                ModelError::Worker(format!(
+                    "model inference completed, but its audit outcome could not be persisted; do not retry automatically: {error}"
+                ))
+            })?;
+        }
+        result
+    }
+
+    fn generate_inner(
+        &self,
+        request: &GenerateRequest,
+        emit: &mut dyn FnMut(GenerateEvent) -> Result<(), ModelError>,
+    ) -> Result<(), ModelError> {
         if request.model.starts_with("remote/") {
             let router = self.remote_router()?;
             return router
@@ -1030,6 +1096,60 @@ impl ModelManager {
         }
     }
     pub fn embed(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError> {
+        self.embed_with_actor_chain(request, None)
+    }
+
+    pub fn embed_with_actor_chain(
+        &self,
+        request: &EmbedRequest,
+        actor_chain: Option<&crate::identity::ActorChain>,
+    ) -> Result<EmbeddingResponse, ModelError> {
+        let audit = self
+            .audit
+            .lock()
+            .map_err(|_| ModelError::Worker("model audit lock poisoned".into()))?
+            .clone();
+        let mut entry = audit::ModelAuditEntry::started(
+            &request.request_id,
+            "embed",
+            &request.model,
+            request,
+            actor_chain,
+        )?;
+        if let Some(log) = &audit {
+            log.append(&entry)?;
+        }
+        let started_at = std::time::Instant::now();
+        let result = self.embed_inner(request);
+        entry.timestamp_ms = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis()
+            .try_into()
+            .unwrap_or(u64::MAX);
+        entry.phase = "finished".into();
+        entry.duration_ms = Some(
+            started_at
+                .elapsed()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        );
+        entry.outcome = Some(if result.is_ok() { "success" } else { "failure" }.into());
+        if result.is_err() {
+            entry.error_kind = Some("inference".into());
+        }
+        if let Some(log) = &audit {
+            log.append(&entry).map_err(|error| {
+                ModelError::Worker(format!(
+                    "model embedding completed, but its audit outcome could not be persisted; do not retry automatically: {error}"
+                ))
+            })?;
+        }
+        result
+    }
+
+    fn embed_inner(&self, request: &EmbedRequest) -> Result<EmbeddingResponse, ModelError> {
         if request.model.starts_with("remote/") {
             let router = self.remote_router()?;
             return router

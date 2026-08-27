@@ -830,13 +830,14 @@ impl AgentManager {
                 messages,
                 options: json!({"tools":run.spec.tools}),
             };
+            let model_chain = actor_chain_for_model(&run, &request.model)?;
             let mut generated = String::new();
             let mut tool_calls: Vec<(String, Value)> = Vec::new();
             let mut saw_finish = false;
             let input_rate = run.spec.budget.input_cost_micros_per_million;
             let output_rate = run.spec.budget.output_cost_micros_per_million;
             self.models
-                .generate(&request, &mut |event| {
+                .generate_with_actor_chain(&request, Some(&model_chain), &mut |event| {
                     if cancellation.load(Ordering::Acquire) {
                         return Err(crate::model::ModelError::Worker("agent cancelled".into()));
                     }
@@ -1389,6 +1390,26 @@ impl AgentManager {
     }
 }
 
+fn actor_chain_for_model(
+    run: &AgentRun,
+    model_id: &str,
+) -> Result<crate::identity::ActorChain, AgentError> {
+    let app = crate::identity::PrincipalId::application(&run.application)
+        .map_err(|error| AgentError::Model(error.to_string()))?;
+    let agent = crate::identity::PrincipalId::new(
+        crate::identity::PrincipalKind::AgentRun,
+        format!("{}/{}", run.application, run.id),
+    )
+    .map_err(|error| AgentError::Model(error.to_string()))?;
+    let model =
+        crate::identity::PrincipalId::new(crate::identity::PrincipalKind::ModelProvider, model_id)
+            .map_err(|error| AgentError::Model(error.to_string()))?;
+    crate::identity::ActorChain::new(app)
+        .delegate(agent, Some(format!("run_{}_g{}", run.id, run.generation)))
+        .and_then(|chain| chain.delegate(model, None))
+        .map_err(|error| AgentError::Model(error.to_string()))
+}
+
 pub struct AgentScheduler {
     stop: Arc<AtomicBool>,
     handle: Mutex<Option<std::thread::JoinHandle<()>>>,
@@ -1909,6 +1930,10 @@ mod tests {
             )
             .unwrap();
         let models = crate::model::ModelManager::new(store);
+        models.set_audit(
+            crate::model::audit::ModelAuditLog::open(temp.path().join("audit").join("model.jsonl"))
+                .unwrap(),
+        );
         models.register_worker(Arc::new(Worker)).unwrap();
         models.load("local/test@1", "mock").unwrap();
         let mcp = crate::mcp::ConnectionManager::default();
@@ -1995,6 +2020,26 @@ mod tests {
             chain.effective_actor().as_str(),
             "mcp:com.example.app/tools"
         );
+        let model_audit =
+            crate::model::audit::ModelAuditLog::open(temp.path().join("audit").join("model.jsonl"))
+                .unwrap()
+                .recent(10)
+                .unwrap();
+        assert_eq!(model_audit.len(), 4);
+        assert!(
+            model_audit
+                .iter()
+                .all(|entry| entry.actor_chain_hash.is_some())
+        );
+        let model_chain = model_audit[0].actor_chain.as_ref().unwrap();
+        assert_eq!(model_chain.initiator.as_str(), "app:com.example.app");
+        assert!(
+            model_chain.actors[0]
+                .principal
+                .as_str()
+                .starts_with("agent:com.example.app/")
+        );
+        assert_eq!(model_chain.effective_actor().as_str(), "model:local/test@1");
     }
 
     #[test]

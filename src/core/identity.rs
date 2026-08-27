@@ -116,7 +116,7 @@ impl FromStr for PrincipalId {
                     || character.is_whitespace()
                     || character == '\\'
                     || !(character.is_ascii_alphanumeric()
-                        || matches!(character, '.' | '-' | '_' | '/' | ':'))
+                        || matches!(character, '.' | '-' | '_' | '/' | ':' | '@'))
             })
         {
             return Err(IdentityError::InvalidPrincipalId);
@@ -368,6 +368,7 @@ mod tests {
         assert_eq!(app.kind(), PrincipalKind::Application);
         assert!(PrincipalId::from_str("app:../escape").is_err());
         assert!(PrincipalId::from_str("unknown:value").is_err());
+        assert!(PrincipalId::from_str("model:local/qwen@1").is_ok());
         let principal = Principal {
             id: app,
             kind: PrincipalKind::Service,

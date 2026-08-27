@@ -430,6 +430,10 @@ impl DaemonService {
             root.join("models").join("download-tasks.json"),
         )?;
         let models = crate::model::ModelManager::new(store);
+        models.set_audit(
+            crate::model::audit::ModelAuditLog::open(root.join("audit").join("model.jsonl"))
+                .map_err(|error| error.to_string())?,
+        );
         let worker_packages =
             crate::model::worker_packages::WorkerPackageStore::open(&root.join("runtimes"))
                 .map_err(|error| error.to_string())?;
