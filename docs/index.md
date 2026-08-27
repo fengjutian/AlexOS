@@ -147,6 +147,16 @@ cargo run -- shell my-app
 cargo run -- pack my-app target\my-app.alex
 ```
 
+也可以用一步式命令完成前端构建、应用校验和打包：
+
+```powershell
+cargo run -- package my-app target\my-app.alex
+
+# 正式分发时同时签名
+cargo run -- package my-app target\my-app-signed.alex `
+  --sign target\publisher-key.json
+```
+
 当前 `create` 生成最小 HTML + CommonJS Node 后端,不会创建 React 工程,也不会自动安装
 npm 依赖;当前 `pack` 只打包已有产物,不执行前端或 TypeScript 构建。
 

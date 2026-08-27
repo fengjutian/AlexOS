@@ -187,6 +187,14 @@ enum Commands {
         #[arg(long)]
         sign: Option<PathBuf>,
     },
+    /// Build, validate, and create a distributable .alex archive in one step.
+    Package {
+        path: PathBuf,
+        output: PathBuf,
+        /// Ed25519 publisher key. When supplied, the archive is signed.
+        #[arg(long)]
+        sign: Option<PathBuf>,
+    },
     /// Generate an Ed25519 publisher key file.
     Keygen { output: PathBuf },
     /// Install a .alex archive into an application directory.
@@ -796,6 +804,37 @@ fn execute() -> Result<(), Box<dyn std::error::Error>> {
                 package::pack(&path, &output)?;
             }
             println!("packed {}", output.display());
+        }
+        Commands::Package { path, output, sign } => {
+            // A build block currently exists only in the v1 JSON manifest.
+            // Inspect it without validating the frontend entry first: a clean
+            // checkout may not have generated `frontend/dist/index.html` yet.
+            let manifest_path = path.join("manifest.json");
+            let should_build = if manifest_path.is_file() {
+                let input = std::fs::read_to_string(&manifest_path)?;
+                serde_json::from_str::<serde_json::Value>(&input)?
+                    .pointer("/frontend/build")
+                    .is_some()
+            } else {
+                false
+            };
+            if should_build {
+                println!("building frontend...");
+                package::build_frontend(&path)?;
+            } else {
+                println!("no frontend build configured; skipping build");
+            }
+
+            let app = load_application(&path)?;
+            println!("validated {} {} ({})", app.name(), app.version(), app.id());
+
+            if let Some(key) = sign {
+                package::pack_signed(&path, &output, &key)?;
+                println!("signed and packaged {}", output.display());
+            } else {
+                package::pack(&path, &output)?;
+                println!("packaged {} (unsigned)", output.display());
+            }
         }
         Commands::Keygen { output } => {
             let public_key = package::generate_signing_key(&output)?;
