@@ -11,6 +11,10 @@ pub const PROTOCOL_VERSION: u32 = 1;
 pub struct ControlRequest {
     pub protocol: u32,
     pub id: String,
+    /// Authenticated caller and delegation path. Optional during the v1
+    /// migration window so older CLI/manager clients remain compatible.
+    #[serde(default, skip_serializing_if = "Option::is_none")]
+    pub identity: Option<crate::identity::RequestIdentity>,
     pub command: ControlCommand,
 }
 
@@ -524,6 +528,7 @@ mod tests {
         let request = ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: "req-1".into(),
+            identity: None,
             command: ControlCommand::Start {
                 app_id: "com.example.agent".into(),
             },
@@ -583,6 +588,7 @@ mod tests {
             let request = ControlRequest {
                 protocol: PROTOCOL_VERSION,
                 id: "phase5-1".into(),
+                identity: None,
                 command: command.clone(),
             };
             let value = serde_json::to_value(&request).unwrap();
@@ -695,6 +701,7 @@ mod tests {
             let value = serde_json::to_value(ControlRequest {
                 protocol: 1,
                 id: "native-control".into(),
+                identity: None,
                 command: command.clone(),
             })
             .unwrap();

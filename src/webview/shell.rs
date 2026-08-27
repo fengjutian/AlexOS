@@ -863,6 +863,7 @@ pub mod windows {
         let request = crate::daemon::ControlRequest {
             protocol: crate::daemon::PROTOCOL_VERSION,
             id: format!("shell-start-{}-{sequence}", std::process::id()),
+            identity: None,
             command: crate::daemon::ControlCommand::Start {
                 app_id: app_id.to_owned(),
             },

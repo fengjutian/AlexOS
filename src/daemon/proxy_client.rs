@@ -94,6 +94,7 @@ fn command(pipe: &str, command: ControlCommand) -> Result<serde_json::Value, Run
     let request = ControlRequest {
         protocol: PROTOCOL_VERSION,
         id: format!("shell-proxy-{}-{sequence}", std::process::id()),
+        identity: None,
         command,
     };
     let response = send_request(pipe, &request).map_err(RuntimeError::Io)?;

@@ -7,6 +7,9 @@ use serde_json::Value;
 
 use crate::{
     daemon::{ControlCommand, ControlRequest, ControlResponse, PROTOCOL_VERSION, send_request},
+    identity::{
+        ActorChain, AssuranceLevel, AuthenticationMethod, Identity, PrincipalId, RequestIdentity,
+    },
     runtime::{RuntimeError, RuntimeHandle},
 };
 
@@ -28,10 +31,34 @@ impl RuntimeClient {
         app_id: impl Into<String>,
         service: impl Into<String>,
     ) -> Self {
+        let app_id = app_id.into();
+        let service = service.into();
+        let principal_id = PrincipalId::application(&app_id).expect("validated manifest app id");
+        let service_id =
+            PrincipalId::service(&app_id, &service).expect("validated manifest service id");
+        let issued_at_ms = std::time::SystemTime::now()
+            .duration_since(std::time::UNIX_EPOCH)
+            .unwrap_or_default()
+            .as_millis() as u64;
+        let identity = RequestIdentity {
+            identity: Identity {
+                principal_id: principal_id.clone(),
+                authentication: AuthenticationMethod::AppLaunchToken,
+                session_id: format!("shell_{}", std::process::id()),
+                issued_at_ms,
+                expires_at_ms: None,
+                assurance: AssuranceLevel::ProcessBound,
+                claims: Default::default(),
+            },
+            actor_chain: ActorChain::new(principal_id)
+                .delegate(service_id, None)
+                .expect("app-to-service actor chain is valid"),
+        };
         Self::Daemon(DaemonRuntimeClient {
             pipe: pipe.into(),
-            app_id: app_id.into(),
-            service: service.into(),
+            app_id,
+            service,
+            identity,
             sequence: AtomicU64::new(1),
         })
     }
@@ -160,6 +187,7 @@ pub(crate) struct DaemonRuntimeClient {
     pipe: String,
     app_id: String,
     service: String,
+    identity: RequestIdentity,
     sequence: AtomicU64,
 }
 
@@ -173,6 +201,7 @@ impl DaemonRuntimeClient {
         let request = ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: request_id.to_owned(),
+            identity: Some(self.identity.clone()),
             command,
         };
         let response = send_request(&self.pipe, &request).map_err(RuntimeError::Io)?;
@@ -227,6 +256,7 @@ mod tests {
         ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: "req-1".into(),
+            identity: None,
             command: ControlCommand::Ping,
         }
     }

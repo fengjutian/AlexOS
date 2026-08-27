@@ -510,6 +510,21 @@ impl DaemonService {
                 ),
             );
         }
+        if let Some(identity) = &request.identity {
+            let now_ms = std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .unwrap_or_default()
+                .as_millis() as u64;
+            if let Err(error) = identity.validate_at(now_ms) {
+                return ControlResponse::failure(
+                    request.id,
+                    format!("invalid request identity: {error}"),
+                );
+            }
+            if let Err(error) = validate_request_identity_scope(identity, &request.command) {
+                return ControlResponse::failure(request.id, error);
+            }
+        }
         let id = request.id;
         let result: Result<serde_json::Value, String> = match request.command {
             ControlCommand::Ping => Ok(json!({
@@ -3110,6 +3125,29 @@ impl DaemonService {
     }
 }
 
+fn validate_request_identity_scope(
+    identity: &crate::identity::RequestIdentity,
+    command: &ControlCommand,
+) -> Result<(), String> {
+    let ControlCommand::InvokeService {
+        app_id, service, ..
+    } = command
+    else {
+        return Ok(());
+    };
+    let expected_app = crate::identity::PrincipalId::application(app_id)
+        .map_err(|error| format!("invalid command application identity: {error}"))?;
+    let expected_service = crate::identity::PrincipalId::service(app_id, service)
+        .map_err(|error| format!("invalid command service identity: {error}"))?;
+    if identity.actor_chain.initiator != expected_app {
+        return Err("request identity does not match command application".into());
+    }
+    if identity.actor_chain.effective_actor() != &expected_service {
+        return Err("request actor chain does not terminate at the target service".into());
+    }
+    Ok(())
+}
+
 fn stream_terminal_json(terminal: crate::runtime::stream::StreamTerminal) -> serde_json::Value {
     match terminal {
         crate::runtime::stream::StreamTerminal::Completed => json!({ "kind": "completed" }),
@@ -3447,6 +3485,7 @@ mod tests {
         ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: "test-1".into(),
+            identity: None,
             command,
         }
     }
@@ -3862,6 +3901,7 @@ mod tests {
         let response = service.handle(ControlRequest {
             protocol: 99,
             id: "bad".into(),
+            identity: None,
             command: ControlCommand::Start {
                 app_id: "com.example.agent".into(),
             },
@@ -4597,6 +4637,7 @@ mod tests {
         let status = service.handle(ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: "native-status".into(),
+            identity: None,
             command: ControlCommand::NativeWorkerStatus {
                 app_id: "com.example.app".into(),
             },
@@ -4607,6 +4648,7 @@ mod tests {
         let invoke = service.handle(ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: "native-invoke".into(),
+            identity: None,
             command: ControlCommand::NativeWorkerInvoke {
                 app_id: "com.example.app".into(),
                 binding: "image".into(),
@@ -4621,6 +4663,7 @@ mod tests {
         let stream = service.handle(ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: "native-stream".into(),
+            identity: None,
             command: ControlCommand::NativeWorkerInvokeStream {
                 app_id: "com.example.app".into(),
                 binding: "image".into(),
@@ -4636,6 +4679,7 @@ mod tests {
         let restart = service.handle(ControlRequest {
             protocol: PROTOCOL_VERSION,
             id: "native-restart".into(),
+            identity: None,
             command: ControlCommand::NativeWorkerRestart {
                 app_id: "com.example.app".into(),
                 binding: "image".into(),

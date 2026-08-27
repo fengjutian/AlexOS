@@ -1243,6 +1243,7 @@ fn daemon_command(
     let request = alex::daemon::ControlRequest {
         protocol: alex::daemon::PROTOCOL_VERSION,
         id: format!("cli-{}-{sequence}", std::process::id()),
+        identity: None,
         command,
     };
     let response = alex::daemon::send_request(pipe, &request)?;

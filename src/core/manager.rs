@@ -1734,6 +1734,7 @@ impl ManagerRouter {
         let request = crate::daemon::ControlRequest {
             protocol: crate::daemon::PROTOCOL_VERSION,
             id: format!("manager-{}-{operation}", std::process::id()),
+            identity: None,
             command,
         };
         let response = crate::daemon::send_request(pipe, &request)

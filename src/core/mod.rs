@@ -2,6 +2,7 @@
 
 pub mod application_manifest;
 pub mod exec_allowlist;
+pub mod identity;
 pub mod manager;
 pub mod manifest;
 pub mod manifest_v2;
