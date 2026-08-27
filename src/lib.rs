@@ -23,7 +23,7 @@ pub use api::{authorization, ipc, permission, permission_shim};
 pub use application_manifest::load_application;
 pub use core::manifest_v2;
 pub use core::{
-    application_manifest, identity, manager, manifest, package, plugin, policy, trust, update,
+    application_manifest, grant, identity, manager, manifest, package, plugin, policy, trust, update,
 };
 pub use data::{file_token, storage};
 pub use runtime::{event_bus, menu_tray, net, process, proxy, watcher, window_manager, windows};

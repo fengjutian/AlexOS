@@ -3,7 +3,7 @@
 pub mod oauth;
 
 use std::{
-    collections::{BTreeMap, HashMap},
+    collections::{BTreeMap, BTreeSet},
     fs::{self, OpenOptions},
     io::{BufRead, BufReader, Read, Write},
     path::{Path, PathBuf},
@@ -13,7 +13,7 @@ use std::{
         atomic::{AtomicBool, AtomicU64, Ordering},
     },
     thread::JoinHandle,
-    time::{Duration, Instant},
+    time::Duration,
     time::{SystemTime, UNIX_EPOCH},
 };
 
@@ -23,7 +23,12 @@ use sha2::{Digest, Sha256};
 use thiserror::Error;
 use url::Url;
 
-use crate::platform::PlatformServices;
+use crate::{
+    grant::{GrantClaim, GrantError, GrantSpec, GrantStore, ResourceScope, expires_after},
+    identity::{PrincipalId, PrincipalKind},
+    platform::PlatformServices,
+    policy::ResourceKind,
+};
 
 pub const MODERN_PROTOCOL_VERSION: &str = "2026-07-28";
 pub const LEGACY_PROTOCOL_VERSION: &str = "2025-11-25";
@@ -397,18 +402,12 @@ pub struct ApprovalBinding {
     pub argument_hash: String,
 }
 
-#[derive(Debug, Clone)]
-struct PendingApproval {
-    binding: ApprovalBinding,
-    expires_at: Instant,
-}
-
 /// In-memory, single-use approval capabilities for `always-ask` MCP tools.
 /// Tokens intentionally do not survive daemon restart and are removed before
 /// a successful call begins, preventing replay even when the tool later fails.
 #[derive(Clone, Default)]
 pub struct ApprovalStore {
-    pending: Arc<Mutex<HashMap<String, PendingApproval>>>,
+    grants: GrantStore,
 }
 
 impl ApprovalStore {
@@ -420,53 +419,72 @@ impl ApprovalStore {
                 "approval TTL is out of range".into(),
             ));
         }
-        let mut bytes = [0u8; 32];
-        getrandom::fill(&mut bytes).map_err(|error| McpError::Authorization(error.to_string()))?;
-        let token = bytes
-            .iter()
-            .map(|byte| format!("{byte:02x}"))
-            .collect::<String>();
-        let mut pending = self
-            .pending
-            .lock()
-            .map_err(|_| McpError::Authorization("approval store lock poisoned".into()))?;
-        pending.retain(|_, approval| approval.expires_at > Instant::now());
-        pending.insert(
-            token.clone(),
-            PendingApproval {
-                binding,
-                expires_at: Instant::now() + ttl,
-            },
-        );
-        Ok(token)
+        let grantee = PrincipalId::application(&binding.application)
+            .map_err(|error| McpError::Authorization(error.to_string()))?;
+        let issuer = PrincipalId::new(PrincipalKind::System, "alexd")
+            .map_err(|error| McpError::Authorization(error.to_string()))?;
+        self.grants
+            .issue(GrantSpec {
+                issuer,
+                grantee,
+                parent_id: None,
+                actions: BTreeSet::from(["mcp.invoke".to_owned()]),
+                resources: vec![ResourceScope::exact(
+                    ResourceKind::McpTool,
+                    approval_resource(&binding),
+                )],
+                expires_at_ms: expires_after(ttl),
+                max_uses: Some(1),
+                session_id: None,
+                generation: 0,
+                consume_on_attempt: true,
+            })
+            .map_err(|error| McpError::Authorization(error.to_string()))
     }
 
     pub fn consume(&self, token: &str, expected: &ApprovalBinding) -> Result<(), McpError> {
-        let approval = self
-            .pending
-            .lock()
-            .map_err(|_| McpError::Authorization("approval store lock poisoned".into()))?
-            .remove(token)
-            .ok_or_else(|| {
-                McpError::Authorization("approval token is missing or already used".into())
-            })?;
-        if approval.expires_at <= Instant::now() {
-            return Err(McpError::Authorization("approval token expired".into()));
-        }
-        if &approval.binding != expected {
-            return Err(McpError::Authorization(
-                "approval token does not match this tool call".into(),
-            ));
-        }
-        Ok(())
+        let grantee = PrincipalId::application(&expected.application)
+            .map_err(|error| McpError::Authorization(error.to_string()))?;
+        self.grants
+            .claim(
+                token,
+                &GrantClaim {
+                    grantee: &grantee,
+                    action: "mcp.invoke",
+                    resource_kind: ResourceKind::McpTool,
+                    resource_id: &approval_resource(expected),
+                    session_id: None,
+                    generation: 0,
+                },
+            )
+            .map_err(|error| match error {
+                GrantError::Expired => McpError::Authorization("approval token expired".into()),
+                GrantError::ClaimMismatch => McpError::Authorization(
+                    "approval token does not match this tool call".into(),
+                ),
+                _ => McpError::Authorization(
+                    "approval token is missing or already used".into(),
+                ),
+            })
     }
 
     pub fn revoke_application(&self, application: &str) -> usize {
-        let mut pending = self.pending.lock().expect("approval store lock poisoned");
-        let before = pending.len();
-        pending.retain(|_, approval| approval.binding.application != application);
-        before - pending.len()
+        PrincipalId::application(application)
+            .map(|principal| self.grants.revoke_grantee(&principal, "application revoked"))
+            .unwrap_or(0)
     }
+}
+
+fn approval_resource(binding: &ApprovalBinding) -> String {
+    // Length-prefix every untrusted component so distinct bindings cannot
+    // produce the same opaque exact-match resource identifier.
+    format!(
+        "mcp-tool://{}:{}|{}:{}|{}:{}|{}:{}",
+        binding.application.len(), binding.application,
+        binding.connection.len(), binding.connection,
+        binding.tool.len(), binding.tool,
+        binding.argument_hash.len(), binding.argument_hash,
+    )
 }
 
 fn last_audit_hash(path: &Path) -> Result<Option<String>, McpError> {
