@@ -29,6 +29,7 @@ nav_order: 1
   <a class="alex-card" href="desktop-api-example"><span class="alex-card__icon">02</span><strong>运行 Desktop API</strong><span>启动交互式 Playground，探索窗口、文件、网络和系统能力。</span></a>
   <a class="alex-card" href="mcp-runtime"><span class="alex-card__icon">03</span><strong>构建 MCP 集成</strong><span>连接、工具、Resources、Prompts、OAuth、审计与生产部署。</span></a>
   <a class="alex-card" href="architecture"><span class="alex-card__icon">04</span><strong>理解 Runtime</strong><span>Daemon、Shell、服务、权限和隔离边界的完整数据流。</span></a>
+  <a class="alex-card" href="rag-database-design"><span class="alex-card__icon">RAG</span><strong>设计知识库</strong><span>RAG、SQLite、向量索引、检索、权限与分阶段实施方案。</span></a>
   <a class="alex-card" href="DESKTOP_API_REFERENCE"><span class="alex-card__icon">API</span><strong>查询 API Reference</strong><span>由统一 schema 生成的方法、参数、结果和事件参考。</span></a>
   <a class="alex-card" href="troubleshooting"><span class="alex-card__icon">?</span><strong>排查问题</strong><span>Manifest、Daemon、MCP、Native Worker 与常见错误码。</span></a>
 </div>

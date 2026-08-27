@@ -26,6 +26,8 @@ OCI 容器。它管理这些现有 Runtime 和应用服务。
 
 RAG（检索增强生成）属于应用层能力：切分、向量索引、检索与重排由应用/Agent 自行实现或经
 MCP 接入；Runtime 仅提供 `model.embed`、Storage 与 Agent 原语，不内建向量数据库或检索编排。
+官方可选 Knowledge Service 的目标边界、数据库方案、API 与实施阶段见
+[`rag-database-design.md`](./rag-database-design.md)。
 
 产品飞轮是：
 
