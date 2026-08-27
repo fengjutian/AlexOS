@@ -5,15 +5,14 @@ parent: 架构与设计
 nav_order: 3
 ---
 
-# Alex OS 路线图
+# Alex Runtime 路线图
 
-> 本路线图已按 [`product-requirements.md`](./product-requirements.md) 重新排序。两条主线**并行**：
+> 本路线图服务唯一产品主线：**Windows AI Application Runtime**。首发场景是 Windows 本地 AI 助手、
+> 企业内部 RAG/Agent 桌面应用，以及带 UI、模型和 MCP 的可安装 AI 工具。版本、优先级和成熟度的定义
+> 以 [`product-requirements.md`](./product-requirements.md) §9 为准。
 >
-> 1. **Runtime MVP（0.1 P0）** — Application Package + Process Manager + Runtime Manager + Permission Manager；
-> 2. **AI Runtime（0.2 主线）** — Model + MCP + Agent，按 [`ai-runtime-implementation.md`](./ai-runtime-implementation.md) 实施，
->    当前已在 `src/agent/`、`src/mcp/`、`src/model/` 并行落地，并由 [`status.md`](./status.md) §1.1 末尾与 §2 维护事实描述。
->
-> 延后项不变：Native Shell 切换、macOS GUI、完整 OCI 适配、Registry / Store。
+> macOS、Linux、Android、HarmonyOS、iOS、Server/Edge 集群、完整 OCI 和大众 Store 在 Windows 1.0
+> 之前统一标记为 Deferred，不得挤占 Windows 安全、安装、更新、诊断和三个目标场景的产品闭环。
 
 ## P0：Alex Runtime MVP
 
@@ -84,7 +83,7 @@ nav_order: 3
 - [未做] backend 文件、进程和网络策略强制执行（当前为「声明即拒绝」，未到「声明即强制」）；
 - [未做] 权限撤销与审计覆盖实际服务进程。
 
-以下旧 P0/P1/P2 内容保留为历史细分任务；若与上述顺序冲突，以上述 Runtime MVP 为准。
+以下旧 P0/P1/P2 内容保留为历史细分任务；若与新的 Windows-first 产品阶段冲突，以产品需求 §9 为准。
 
 > 本文档只描述**未开发**的功能和未来方向。当前代码已实现的能力在 [`status.md`](./status.md) 中。
 > "已实现"和"待开发"混在一起会让文档快速漂移到不可信——读者无法分辨哪句话是事实、哪句是意图。
@@ -94,10 +93,11 @@ nav_order: 3
 
 ## 优先级分级
 
-- **P0** — Windows + Node 0.1 发布门槛。完成前项目应继续标记为"实验性开发者预览"，不应承诺
+- **P0** — 当前 Windows 版本发布阻断项。完成前项目应继续标记为"实验性开发者预览"，不应承诺
   运行不受信任的第三方应用。
-- **P1** — 平台和生态核心。P0 完成后开始。
-- **P2** — 跨平台和商业生态。P1 完成后开始。
+- **P1** — 三个目标场景的 Windows 产品闭环。
+- **P2** — Windows 生态、企业部署和开发体验增强。
+- **Deferred** — 跨平台、移动端、Server/Edge 集群、完整 OCI 和大众 Store；Windows 1.0 前不排期。
 - **工程质量** — 跨优先级的横切关注点。
 
 ## P0：Windows + Node 0.1 发布门槛
@@ -155,9 +155,9 @@ nav_order: 3
 
 验收标准：干净 Windows 环境可以从签名安装器安装、运行示例、更新和卸载 Alex OS。
 
-## P1：平台和生态核心
+## P1/P2：Windows 产品与生态闭环
 
-### 3.5 插件系统
+### 3.5 Windows 插件系统
 
 - `app/plugin/service` 包类型；
 - Plugin Host；
@@ -173,7 +173,7 @@ nav_order: 3
 > 现有的 reverse IPC（详见 [`reverse-ipc.md`](./reverse-ipc.md)）是这条路线图的第一步：
 > plugin backend 已经有能力问 host `system.*`。下一阶段是把"问问题"扩展到"注册扩展点、贡献 UI"。
 
-### 3.6 Python Runtime
+### 3.6 Python Runtime（按目标场景进入）
 
 - Runtime Adapter 接口；
 - Python 发现、下载和版本锁定；
@@ -185,7 +185,7 @@ nav_order: 3
 
 验收标准：同一 Alex API 可以选择 Node 或 Python Backend，生命周期和错误语义保持一致。
 
-### 3.7 更新产品化
+### 3.7 Windows 更新产品化
 
 - 每应用渠道设置持久化；
 - 后台更新检查服务；
@@ -197,7 +197,10 @@ nav_order: 3
 
 验收标准：普通用户无需 CLI 即可安全检查、下载、安装和回滚更新。
 
-## P2：跨平台和商业生态
+## Deferred：Windows 1.0 后重新评估
+
+以下方向不属于当前版本承诺。保留任务用于记录长期意图，不表示已经排期，也不能作为抽象当前 Windows
+实现或推迟 Windows 发布门禁的理由。
 
 ### 3.8 macOS 与 Linux
 
@@ -255,7 +258,7 @@ capabilities 明确报告，不能静默降级。
 - 签名和可信等级；
 - 禁止第三方动态库进入 Shell 主进程的默认策略。
 
-### 3.11 Alex Store
+### 3.11 大众 Alex Store
 
 - 发布者注册和身份验证；
 - 包上传、扫描和审核；
@@ -280,18 +283,16 @@ capabilities 明确报告，不能静默降级。
 
 ## 推荐开发顺序
 
-1. 建立 Windows CI 和可重复测试环境；
-2. 完成 Runtime 并发协议、单请求取消和 Job Object；
-3. 完成权限设置 UI、WebView 权限回调和 CSP 收紧；
-4. 实现 `alex dev`、React 模板和构建钩子；
-5. 制作签名 Windows 安装器及 Shell 自更新；
-6. 产品化后台应用更新；
-7. 定义 Plugin Package 与 Extension Point；
-8. 用 Python Runtime 验证 Runtime Adapter；
-9. 完成 macOS/Linux 平台边界并稳定 `.alx` 跨平台能力；
-10. 定义 Mobile Runtime Profile 和 `.alx` 平台切片；
-11. 依次交付 Android、HarmonyOS、iOS Preview；
-12. 最后建设 Store 服务。
+1. 冻结 v0.1 Windows Developer Preview：CI、真实进程恢复、诊断和事实文档；
+2. 完成 backend Restricted Token、文件/进程/网络策略、权限撤销和审计；
+3. 交付 Windows 本地 AI 助手参考应用：Model Router、本地 Worker、MCP、Agent 与调试 UI；
+4. 制作签名 Windows 安装器，并完成应用与 Shell 更新、回滚和卸载；
+5. 交付 Knowledge Service 首个垂直切片：SQLite、Embedding、向量检索、引用和任务恢复；
+6. 完成企业 RAG/Agent 的数据生命周期、配额、Eval、离线安装、代理和私有 CA 验证；
+7. 完成 React + TypeScript 模板、应用测试工具、SDK 兼容和可安装 AI 工具参考应用；
+8. 产品化 Windows Plugin/Connector 与私有 Registry；
+9. 完成 Windows 1.0 的 GUI E2E、性能、长期运行、安全、供应链、可访问性和支持门禁；
+10. Windows 1.0 后再评估跨平台、移动端、Server/Edge 和大众 Store。
 
 在 P0 完成前，项目应继续标记为实验性开发者预览，不应承诺运行不受信任的第三方应用。
 
