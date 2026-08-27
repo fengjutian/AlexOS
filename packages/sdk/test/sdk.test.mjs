@@ -9,6 +9,7 @@ test("generated security metadata covers every registered API method", () => {
   const generatedTs = fs.readFileSync(new URL("../schema.generated.d.ts", import.meta.url), "utf8");
   const generatedRust = fs.readFileSync(new URL("../../../src/api/idl_generated.rs", import.meta.url), "utf8");
   const resourceKinds = new Set(schema.resourceKinds);
+  const permissionKinds = new Set(schema.permissionKinds);
   const registeredMethods = Object.values(schema.capabilities).flat();
   const permissionAssignments = new Map();
 
@@ -20,6 +21,7 @@ test("generated security metadata covers every registered API method", () => {
   }
 
   assert.equal(resourceKinds.size, schema.resourceKinds.length);
+  assert.equal(permissionKinds.size, schema.permissionKinds.length);
   assert.ok(resourceKinds.has("file"));
   assert.ok(resourceKinds.has("agent-run"));
   for (const [domain, metadata] of Object.entries(schema.domains)) {
@@ -33,8 +35,10 @@ test("generated security metadata covers every registered API method", () => {
   assert.deepEqual(permissionAssignments.get("filesystem.copy"), ["filesystem.read", "filesystem.write"]);
   assert.deepEqual(permissionAssignments.get("system.info"), []);
   assert.match(generatedTs, /export type AlexResourceKind =/);
+  assert.match(generatedTs, /export type AlexPermissionKind =/);
   assert.match(generatedTs, /export type AlexAction =/);
   assert.match(generatedRust, /pub const RESOURCE_KINDS:/);
+  assert.match(generatedRust, /pub const PERMISSION_KINDS:/);
   assert.match(generatedRust, /pub action: &'static str/);
   assert.match(generatedRust, /pub permissions: &'static \[&'static str\]/);
   assert.match(generatedRust, /pub fn manifest_permission_for_ipc_method/);

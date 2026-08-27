@@ -341,3 +341,29 @@ impl std::fmt::Display for PathError {
         }
     }
 }
+
+#[cfg(test)]
+mod generated_permission_tests {
+    use super::Permission;
+
+    #[test]
+    fn ipc_permissions_come_from_the_generated_schema() {
+        assert_eq!(
+            Permission::manifest_name_for_ipc_method("system.listPermissions"),
+            Some("system.managePermissions")
+        );
+        assert_eq!(
+            Permission::manifest_name_for_ipc_method("runtime.status"),
+            Some("runtime.manage")
+        );
+        assert_eq!(
+            Permission::manifest_name_for_ipc_method("filesystem.copy"),
+            None,
+            "a compound permission must not be collapsed during legacy migration"
+        );
+        assert_eq!(
+            Permission::manifest_name_for_ipc_method("system.info"),
+            None
+        );
+    }
+}

@@ -191,6 +191,42 @@ export type AlexResourceKind =
   | "process"
   | "network-origin";
 
+export type AlexPermissionKind =
+  | "filesystem.read"
+  | "filesystem.write"
+  | "filesystem.watch"
+  | "filesystem.delete"
+  | "filesystem.drop"
+  | "dialog.open"
+  | "dialog.save"
+  | "clipboard.read"
+  | "clipboard.write"
+  | "system.openExternal"
+  | "storage"
+  | "paths"
+  | "window.manage"
+  | "window.open"
+  | "notification.show"
+  | "menu.manage"
+  | "tray.manage"
+  | "shortcut.register"
+  | "runtime.invoke"
+  | "runtime.manage"
+  | "mcp.use"
+  | "model.use"
+  | "model.manage"
+  | "agent.run"
+  | "process.spawn"
+  | "media.camera"
+  | "media.microphone"
+  | "geolocation"
+  | "system.install"
+  | "system.uninstall"
+  | "system.manageApps"
+  | "system.manageExtensions"
+  | "system.managePermissions"
+  | "network.fetch";
+
 export interface AlexMethodSecurityMap {
   "filesystem.readText": { action: "filesystem.readText"; permissions: readonly ["filesystem.read"]; resource: "file"; maturity: "stable" };
   "filesystem.readBinary": { action: "filesystem.readBinary"; permissions: readonly ["filesystem.read"]; resource: "file"; maturity: "stable" };
