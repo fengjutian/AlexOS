@@ -20,17 +20,22 @@
 //! dragging any extra context with it.
 
 use std::{
-    collections::HashMap,
     path::PathBuf,
-    sync::{
-        Arc, Mutex,
-        atomic::{AtomicU64, Ordering},
-    },
+    sync::Arc,
     time::{Duration, SystemTime, UNIX_EPOCH},
 };
 
 use serde::{Deserialize, Serialize};
+use sha2::{Digest, Sha256};
 use thiserror::Error;
+
+use crate::{
+    grant::{
+        GrantClaim, GrantError, GrantSpec, GrantStatus, GrantStore, ResourceScope, ScopeMatch,
+    },
+    identity::{PrincipalId, PrincipalKind},
+    policy::ResourceKind,
+};
 
 /// Operations that a token can grant. Multiple operations can be
 /// combined (e.g. an "edit" flow grants both `read` and `write`).
@@ -64,15 +69,9 @@ pub struct FileToken {
 /// state on disk.
 #[derive(Debug)]
 pub struct FileTokenStore {
-    state: Mutex<HashMap<String, Issued>>,
-    counter: AtomicU64,
+    grants: GrantStore,
     default_ttl: Duration,
     session_id: String,
-}
-
-#[derive(Debug, Clone)]
-struct Issued {
-    bound: FileToken,
 }
 
 #[derive(Debug, Error)]
@@ -92,8 +91,7 @@ pub enum TokenError {
 impl FileTokenStore {
     pub fn new(session_id: impl Into<String>, default_ttl: Duration) -> Arc<Self> {
         Arc::new(Self {
-            state: Mutex::new(HashMap::new()),
-            counter: AtomicU64::new(0),
+            grants: GrantStore::default(),
             default_ttl,
             session_id: session_id.into(),
         })
@@ -111,11 +109,30 @@ impl FileTokenStore {
         let canonical = path.canonicalize().map_err(|_| TokenError::Unknown)?;
         let now_ms = now_ms();
         let expires_at_ms = now_ms.saturating_add(self.default_ttl.as_millis() as u64);
-        let token = format!(
-            "fat-{}-{:x}",
-            self.session_id,
-            self.counter.fetch_add(1, Ordering::Relaxed)
-        );
+        let app = PrincipalId::application(app_id).map_err(|_| TokenError::Unknown)?;
+        let issuer =
+            PrincipalId::new(PrincipalKind::System, "alexd").map_err(|_| TokenError::Unknown)?;
+        let actions = ops.iter().map(|op| file_action(*op).to_owned()).collect();
+        let token = self
+            .grants
+            .issue(GrantSpec {
+                issuer,
+                grantee: app,
+                parent_id: None,
+                actions,
+                resources: vec![ResourceScope::exact(
+                    ResourceKind::File,
+                    file_resource(&canonical),
+                )],
+                // Expired-at-issuance grants are valid records but can never be
+                // claimed, preserving the legacy zero-TTL behavior.
+                expires_at_ms,
+                max_uses: None,
+                session_id: Some(self.session_id.clone()),
+                generation: 0,
+                consume_on_attempt: false,
+            })
+            .map_err(|_| TokenError::Unknown)?;
         let bound = FileToken {
             token: token.clone(),
             path: canonical,
@@ -123,12 +140,6 @@ impl FileTokenStore {
             ops: ops.to_vec(),
             expires_at_ms,
         };
-        self.state.lock().expect("file token lock poisoned").insert(
-            token,
-            Issued {
-                bound: bound.clone(),
-            },
-        );
         Ok(bound)
     }
 
@@ -144,45 +155,64 @@ impl FileTokenStore {
         op: FileOp,
     ) -> Result<PathBuf, TokenError> {
         let now = now_ms();
-        let state = self.state.lock().expect("file token lock poisoned");
-        let Some(issued) = state.get(token) else {
+        let Some(grant) = self.grants.get(token) else {
             return Err(TokenError::Unknown);
         };
-        let bound = &issued.bound;
-        if bound.expires_at_ms <= now {
+        if grant.status != GrantStatus::Active {
+            return Err(TokenError::Unknown);
+        }
+        if grant.spec.expires_at_ms <= now {
             return Err(TokenError::Expired);
         }
-        if bound.app_id != app_id {
+        let app = PrincipalId::application(app_id).map_err(|_| TokenError::AppMismatch)?;
+        if grant.spec.grantee != app {
             return Err(TokenError::AppMismatch);
         }
-        if !bound.ops.contains(&op) {
+        if !grant.spec.actions.contains(file_action(op)) {
             return Err(TokenError::OpDenied);
         }
         let requested_canonical = requested
             .canonicalize()
             .unwrap_or_else(|_| requested.to_path_buf());
-        if requested_canonical != bound.path {
+        let resource_id = file_resource(&requested_canonical);
+        if !grant.spec.resources.iter().any(|scope| {
+            scope.kind == ResourceKind::File
+                && scope.match_mode == ScopeMatch::Exact
+                && scope.id == resource_id
+        }) {
             return Err(TokenError::PathMismatch);
         }
-        Ok(bound.path.clone())
+        self.grants
+            .claim(
+                token,
+                &GrantClaim {
+                    grantee: &app,
+                    action: file_action(op),
+                    resource_kind: ResourceKind::File,
+                    resource_id: &resource_id,
+                    session_id: Some(&self.session_id),
+                    generation: 0,
+                },
+            )
+            .map_err(|error| match error {
+                GrantError::Expired => TokenError::Expired,
+                _ => TokenError::Unknown,
+            })?;
+        Ok(requested_canonical)
     }
 
     /// Drop a token explicitly (e.g. when the user revokes access
     /// or the dialog is dismissed without confirming).
     pub fn revoke(&self, token: &str) {
-        self.state
-            .lock()
-            .expect("file token lock poisoned")
-            .remove(token);
+        self.grants.remove(token);
     }
 
     /// Drop every token belonging to `app_id`. Called when the
     /// app's window is destroyed or the host kills its session.
     pub fn revoke_all(&self, app_id: &str) -> usize {
-        let mut state = self.state.lock().expect("file token lock poisoned");
-        let before = state.len();
-        state.retain(|_, issued| issued.bound.app_id != app_id);
-        before.saturating_sub(state.len())
+        PrincipalId::application(app_id)
+            .map(|principal| self.grants.remove_grantee(&principal))
+            .unwrap_or(0)
     }
 
     /// Drop every token whose expiry has passed. Returns the
@@ -190,12 +220,36 @@ impl FileTokenStore {
     /// store is bounded by the number of file dialogs in a
     /// session, not by app data.
     pub fn sweep_expired(&self) -> usize {
-        let now = now_ms();
-        let mut state = self.state.lock().expect("file token lock poisoned");
-        let before = state.len();
-        state.retain(|_, issued| issued.bound.expires_at_ms > now);
-        before.saturating_sub(state.len())
+        self.grants.sweep_expired()
     }
+}
+
+fn file_action(op: FileOp) -> &'static str {
+    match op {
+        FileOp::Read => "file.read",
+        FileOp::Write => "file.write",
+    }
+}
+
+fn file_resource(path: &std::path::Path) -> String {
+    let mut digest = Sha256::new();
+    digest.update(path_bytes(path));
+    format!("file://sha256:{:x}", digest.finalize())
+}
+
+#[cfg(windows)]
+fn path_bytes(path: &std::path::Path) -> Vec<u8> {
+    use std::os::windows::ffi::OsStrExt;
+    path.as_os_str()
+        .encode_wide()
+        .flat_map(u16::to_le_bytes)
+        .collect()
+}
+
+#[cfg(unix)]
+fn path_bytes(path: &std::path::Path) -> Vec<u8> {
+    use std::os::unix::ffi::OsStrExt;
+    path.as_os_str().as_bytes().to_vec()
 }
 
 fn now_ms() -> u64 {
@@ -227,6 +281,12 @@ mod tests {
             .verify(&issued.token, "com.example.app", &file, FileOp::Read)
             .expect("verify");
         assert_eq!(path, file.canonicalize().unwrap());
+        assert!(
+            store
+                .verify(&issued.token, "com.example.app", &file, FileOp::Read)
+                .is_ok(),
+            "file grants remain reusable until expiry or revocation"
+        );
     }
 
     #[test]
@@ -294,5 +354,20 @@ mod tests {
         // t2 still works
         assert!(store.verify(&t2.token, "b", &f2, FileOp::Read).is_ok());
         let _: PathBuf = f1;
+    }
+
+    #[test]
+    fn sweep_removes_expired_grants() {
+        let tmp = tempfile::tempdir().unwrap();
+        let file = tmp.path().join("expired.txt");
+        std::fs::write(&file, b"expired").unwrap();
+        let store = FileTokenStore::new("session-1", Duration::from_millis(1));
+        let issued = store.issue("app", &file, &[FileOp::Read]).unwrap();
+        std::thread::sleep(Duration::from_millis(5));
+        assert_eq!(store.sweep_expired(), 1);
+        assert!(matches!(
+            store.verify(&issued.token, "app", &file, FileOp::Read),
+            Err(TokenError::Unknown)
+        ));
     }
 }

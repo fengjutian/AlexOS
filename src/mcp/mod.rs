@@ -459,18 +459,19 @@ impl ApprovalStore {
             )
             .map_err(|error| match error {
                 GrantError::Expired => McpError::Authorization("approval token expired".into()),
-                GrantError::ClaimMismatch => McpError::Authorization(
-                    "approval token does not match this tool call".into(),
-                ),
-                _ => McpError::Authorization(
-                    "approval token is missing or already used".into(),
-                ),
+                GrantError::ClaimMismatch => {
+                    McpError::Authorization("approval token does not match this tool call".into())
+                }
+                _ => McpError::Authorization("approval token is missing or already used".into()),
             })
     }
 
     pub fn revoke_application(&self, application: &str) -> usize {
         PrincipalId::application(application)
-            .map(|principal| self.grants.revoke_grantee(&principal, "application revoked"))
+            .map(|principal| {
+                self.grants
+                    .revoke_grantee(&principal, "application revoked")
+            })
             .unwrap_or(0)
     }
 }
@@ -480,10 +481,14 @@ fn approval_resource(binding: &ApprovalBinding) -> String {
     // produce the same opaque exact-match resource identifier.
     format!(
         "mcp-tool://{}:{}|{}:{}|{}:{}|{}:{}",
-        binding.application.len(), binding.application,
-        binding.connection.len(), binding.connection,
-        binding.tool.len(), binding.tool,
-        binding.argument_hash.len(), binding.argument_hash,
+        binding.application.len(),
+        binding.application,
+        binding.connection.len(),
+        binding.connection,
+        binding.tool.len(),
+        binding.tool,
+        binding.argument_hash.len(),
+        binding.argument_hash,
     )
 }
 
