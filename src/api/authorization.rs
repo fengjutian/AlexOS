@@ -26,6 +26,14 @@ pub enum AuthorizationError {
     Io(#[from] std::io::Error),
     #[error("permission store is invalid: {0}")]
     Json(#[from] serde_json::Error),
+    #[error("transient permission grant failed: {0}")]
+    Transient(String),
+}
+
+#[derive(Debug, Clone)]
+struct TransientDecision {
+    decision: PermissionDecision,
+    grant_id: Option<String>,
 }
 
 #[derive(Clone)]
@@ -45,7 +53,9 @@ pub struct PermissionStore {
     /// The `Arc<Mutex<_>>` means `Clone` of the store shares the
     /// same transient map across every clone; the last `Drop`
     /// releases the map and the session is over.
-    transient: Arc<Mutex<BTreeMap<String, PermissionDecision>>>,
+    transient: Arc<Mutex<BTreeMap<String, TransientDecision>>>,
+    transient_grants: crate::grant::GrantStore,
+    session_id: String,
 }
 
 impl PermissionStore {
@@ -98,12 +108,16 @@ impl PermissionStore {
             fs::write(&temporary, serialized)?;
             fs::rename(temporary, &state_path)?;
         }
+        let session_id = transient_session_id()
+            .map_err(|error| AuthorizationError::Transient(error.to_string()))?;
         Ok(Self {
             app_id: app_id.to_owned(),
             state_path,
             audit_path,
             decisions: Arc::new(Mutex::new(decisions)),
             transient: Arc::new(Mutex::new(BTreeMap::new())),
+            transient_grants: crate::grant::GrantStore::default(),
+            session_id,
         })
     }
 
@@ -123,9 +137,21 @@ impl PermissionStore {
             .transient
             .lock()
             .ok()
-            .and_then(|values| values.get(permission).copied())
+            .and_then(|values| values.get(permission).cloned())
         {
-            return value;
+            if value.decision == PermissionDecision::Denied {
+                return PermissionDecision::Denied;
+            }
+            if value.decision == PermissionDecision::Granted
+                && value.grant_id.as_deref().is_some_and(|grant_id| {
+                    self.claim_transient_grant(permission, grant_id).is_ok()
+                })
+            {
+                return PermissionDecision::Granted;
+            }
+            if let Ok(mut values) = self.transient.lock() {
+                values.remove(permission);
+            }
         }
         self.decisions
             .lock()
@@ -166,9 +192,35 @@ impl PermissionStore {
     /// `alex permissions grant --transient` for scripted
     /// single-session tests.
     pub fn set_transient(&self, permission: &str, decision: PermissionDecision) {
-        if let Ok(mut values) = self.transient.lock() {
-            values.insert(permission.to_owned(), decision);
+        let _ = self.set_transient_for_user(permission, decision, None);
+    }
+
+    /// Install a transient decision attributed to an authenticated user.
+    /// `None` keeps compatibility with non-interactive/CLI callers and uses
+    /// the trusted host approval service as issuer.
+    pub fn set_transient_for_user(
+        &self,
+        permission: &str,
+        decision: PermissionDecision,
+        user_subject: Option<&str>,
+    ) -> Result<(), AuthorizationError> {
+        let grant_id = if decision == PermissionDecision::Granted {
+            Some(self.issue_transient_grant(permission, user_subject)?)
+        } else {
+            None
+        };
+        let previous = self
+            .transient
+            .lock()
+            .map_err(|_| AuthorizationError::Transient("permission lock poisoned".into()))?
+            .insert(
+                permission.to_owned(),
+                TransientDecision { decision, grant_id },
+            );
+        if let Some(old_id) = previous.and_then(|entry| entry.grant_id) {
+            self.transient_grants.remove(&old_id);
         }
+        Ok(())
     }
 
     /// Drop every session-scoped override. Useful when the host
@@ -178,6 +230,12 @@ impl PermissionStore {
     /// no transient grants are active.
     pub fn clear_transient(&self) {
         if let Ok(mut values) = self.transient.lock() {
+            for grant_id in values
+                .values()
+                .filter_map(|entry| entry.grant_id.as_deref())
+            {
+                self.transient_grants.remove(grant_id);
+            }
             values.clear();
         }
     }
@@ -189,8 +247,70 @@ impl PermissionStore {
     pub fn transient_list(&self) -> BTreeMap<String, PermissionDecision> {
         self.transient
             .lock()
-            .map(|value| value.clone())
+            .map(|values| {
+                values
+                    .iter()
+                    .map(|(permission, entry)| (permission.clone(), entry.decision))
+                    .collect()
+            })
             .unwrap_or_default()
+    }
+
+    fn issue_transient_grant(
+        &self,
+        permission: &str,
+        user_subject: Option<&str>,
+    ) -> Result<String, AuthorizationError> {
+        let issuer = match user_subject {
+            Some(subject) => {
+                crate::identity::PrincipalId::new(crate::identity::PrincipalKind::User, subject)
+            }
+            None => crate::identity::PrincipalId::new(
+                crate::identity::PrincipalKind::System,
+                "alexd-approval",
+            ),
+        }
+        .map_err(|error| AuthorizationError::Transient(error.to_string()))?;
+        let app = crate::identity::PrincipalId::application(&self.app_id)
+            .map_err(|error| AuthorizationError::Transient(error.to_string()))?;
+        self.transient_grants
+            .issue(crate::grant::GrantSpec {
+                issuer,
+                grantee: app.clone(),
+                parent_id: None,
+                actions: std::collections::BTreeSet::from(["permission.use".to_owned()]),
+                resources: vec![crate::grant::ResourceScope::exact(
+                    crate::policy::ResourceKind::Capability,
+                    capability_resource(&app, permission),
+                )],
+                expires_at_ms: u64::MAX,
+                max_uses: None,
+                session_id: Some(self.session_id.clone()),
+                generation: 0,
+                consume_on_attempt: false,
+            })
+            .map_err(|error| AuthorizationError::Transient(error.to_string()))
+    }
+
+    fn claim_transient_grant(
+        &self,
+        permission: &str,
+        grant_id: &str,
+    ) -> Result<(), crate::grant::GrantError> {
+        let app = crate::identity::PrincipalId::application(&self.app_id)
+            .map_err(|_| crate::grant::GrantError::ClaimMismatch)?;
+        let resource = capability_resource(&app, permission);
+        self.transient_grants.claim(
+            grant_id,
+            &crate::grant::GrantClaim {
+                grantee: &app,
+                action: "permission.use",
+                resource_kind: crate::policy::ResourceKind::Capability,
+                resource_id: &resource,
+                session_id: Some(&self.session_id),
+                generation: 0,
+            },
+        )
     }
 
     pub fn list(&self) -> BTreeMap<String, PermissionDecision> {
@@ -334,6 +454,16 @@ pub struct AuditEntry {
     pub app_id: String,
     pub permission: String,
     pub decision: PermissionDecision,
+}
+
+fn capability_resource(app: &crate::identity::PrincipalId, permission: &str) -> String {
+    format!("capability://{app}/{permission}")
+}
+
+fn transient_session_id() -> Result<String, getrandom::Error> {
+    let mut bytes = [0u8; 16];
+    getrandom::fill(&mut bytes)?;
+    Ok(bytes.iter().map(|byte| format!("{byte:02x}")).collect())
 }
 
 /// Rotate the audit log at `path` if it is larger than `cap`
@@ -494,6 +624,38 @@ mod tests {
             runtime_clone.decision("filesystem.write"),
             PermissionDecision::Granted
         );
+    }
+
+    #[test]
+    fn transient_allow_is_a_user_attributed_capability_grant() {
+        let (_workspace, store) = open_fresh("com.alex.test");
+        store
+            .set_transient_for_user(
+                "filesystem.read",
+                PermissionDecision::Granted,
+                Some("local-user"),
+            )
+            .unwrap();
+        let grant_id = store
+            .transient
+            .lock()
+            .unwrap()
+            .get("filesystem.read")
+            .unwrap()
+            .grant_id
+            .clone()
+            .unwrap();
+        let grant = store.transient_grants.get(&grant_id).unwrap();
+        assert_eq!(grant.spec.issuer.as_str(), "user:local-user");
+        assert_eq!(grant.spec.grantee.as_str(), "app:com.alex.test");
+        assert!(grant.spec.actions.contains("permission.use"));
+        assert_eq!(
+            store.decision("filesystem.read"),
+            PermissionDecision::Granted
+        );
+
+        store.clear_transient();
+        assert!(store.transient_grants.get(&grant_id).is_none());
     }
 
     #[test]
