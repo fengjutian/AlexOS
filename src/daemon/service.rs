@@ -3490,6 +3490,66 @@ mod tests {
         }
     }
 
+    fn app_service_identity(app_id: &str, service: &str) -> crate::identity::RequestIdentity {
+        use crate::identity::{
+            ActorChain, AssuranceLevel, AuthenticationMethod, Identity, PrincipalId,
+            RequestIdentity,
+        };
+
+        let app = PrincipalId::application(app_id).unwrap();
+        RequestIdentity {
+            identity: Identity {
+                principal_id: app.clone(),
+                authentication: AuthenticationMethod::AppLaunchToken,
+                session_id: "test_session".into(),
+                issued_at_ms: 1,
+                expires_at_ms: None,
+                assurance: AssuranceLevel::ProcessBound,
+                claims: Default::default(),
+            },
+            actor_chain: ActorChain::new(app)
+                .delegate(PrincipalId::service(app_id, service).unwrap(), None)
+                .unwrap(),
+        }
+    }
+
+    #[test]
+    fn invoke_service_identity_is_bound_to_the_command_target() {
+        let identity = app_service_identity("com.example.one", "main");
+        let matching = ControlCommand::InvokeService {
+            app_id: "com.example.one".into(),
+            service: "main".into(),
+            method: "ping".into(),
+            arguments: json!({}),
+            timeout_ms: 1_000,
+        };
+        assert!(validate_request_identity_scope(&identity, &matching).is_ok());
+
+        let cross_app = ControlCommand::InvokeService {
+            app_id: "com.example.two".into(),
+            service: "main".into(),
+            method: "ping".into(),
+            arguments: json!({}),
+            timeout_ms: 1_000,
+        };
+        assert_eq!(
+            validate_request_identity_scope(&identity, &cross_app),
+            Err("request identity does not match command application".into())
+        );
+
+        let wrong_service = ControlCommand::InvokeService {
+            app_id: "com.example.one".into(),
+            service: "admin".into(),
+            method: "ping".into(),
+            arguments: json!({}),
+            timeout_ms: 1_000,
+        };
+        assert_eq!(
+            validate_request_identity_scope(&identity, &wrong_service),
+            Err("request actor chain does not terminate at the target service".into())
+        );
+    }
+
     #[test]
     fn daemon_owns_mcp_connections_and_tool_calls() {
         let temp = tempfile::tempdir().unwrap();

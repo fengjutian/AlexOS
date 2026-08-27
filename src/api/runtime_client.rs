@@ -272,6 +272,27 @@ mod tests {
     }
 
     #[test]
+    fn daemon_client_builds_an_app_to_service_actor_chain() {
+        let RuntimeClient::Daemon(client) =
+            RuntimeClient::daemon(r"\\.\pipe\alex-test", "com.example.assistant", "main")
+        else {
+            unreachable!();
+        };
+        assert_eq!(
+            client.identity.actor_chain.initiator.as_str(),
+            "app:com.example.assistant"
+        );
+        assert_eq!(
+            client.identity.actor_chain.effective_actor().as_str(),
+            "service:com.example.assistant/main"
+        );
+        client
+            .identity
+            .validate_at(client.identity.identity.issued_at_ms)
+            .unwrap();
+    }
+
+    #[test]
     fn daemon_failure_is_not_misreported_as_success() {
         let error = validate_response(&request(), ControlResponse::failure("req-1", "crashed"))
             .unwrap_err();

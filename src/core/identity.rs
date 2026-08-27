@@ -213,7 +213,10 @@ pub struct Identity {
 impl Identity {
     pub fn validate_at(&self, now_ms: u64) -> Result<(), IdentityError> {
         validate_token(&self.session_id)?;
-        if self.expires_at_ms.is_some_and(|expiry| expiry <= self.issued_at_ms) {
+        if self
+            .expires_at_ms
+            .is_some_and(|expiry| expiry <= self.issued_at_ms)
+        {
             return Err(IdentityError::InvalidLifetime);
         }
         if self.expires_at_ms.is_some_and(|expiry| expiry <= now_ms) {
@@ -373,14 +376,19 @@ mod tests {
             status: PrincipalStatus::Active,
             attributes: BTreeMap::new(),
         };
-        assert_eq!(principal.validate(), Err(IdentityError::PrincipalKindMismatch));
+        assert_eq!(
+            principal.validate(),
+            Err(IdentityError::PrincipalKindMismatch)
+        );
     }
 
     #[test]
     fn actor_chain_is_contiguous_acyclic_and_bounded() {
         let app = PrincipalId::application("com.example.assistant").unwrap();
-        let agent = PrincipalId::new(PrincipalKind::AgentRun, "com.example.assistant/run_1").unwrap();
-        let mcp = PrincipalId::new(PrincipalKind::McpServer, "com.example.assistant/files").unwrap();
+        let agent =
+            PrincipalId::new(PrincipalKind::AgentRun, "com.example.assistant/run_1").unwrap();
+        let mcp =
+            PrincipalId::new(PrincipalKind::McpServer, "com.example.assistant/files").unwrap();
         let chain = ActorChain::new(app.clone())
             .delegate(agent, Some("grant_1".into()))
             .unwrap()
@@ -411,7 +419,13 @@ mod tests {
         };
         request.validate_at(20).unwrap();
         let encoded = serde_json::to_value(&request).unwrap();
-        assert_eq!(serde_json::from_value::<RequestIdentity>(encoded).unwrap(), request);
-        assert_eq!(request.validate_at(100), Err(IdentityError::ExpiredIdentity));
+        assert_eq!(
+            serde_json::from_value::<RequestIdentity>(encoded).unwrap(),
+            request
+        );
+        assert_eq!(
+            request.validate_at(100),
+            Err(IdentityError::ExpiredIdentity)
+        );
     }
 }
