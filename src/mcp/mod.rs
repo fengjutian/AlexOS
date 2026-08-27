@@ -2078,6 +2078,41 @@ mod tests {
     }
 
     #[test]
+    fn audit_actor_chain_is_hashed_and_old_records_remain_readable() {
+        let app = crate::identity::PrincipalId::application("com.example.app").unwrap();
+        let agent = crate::identity::PrincipalId::new(
+            crate::identity::PrincipalKind::AgentRun,
+            "com.example.app/run_1",
+        )
+        .unwrap();
+        let mcp = crate::identity::PrincipalId::new(
+            crate::identity::PrincipalKind::McpServer,
+            "com.example.app/files",
+        )
+        .unwrap();
+        let chain = crate::identity::ActorChain::new(app)
+            .delegate(agent, Some("grant_1".into()))
+            .unwrap()
+            .delegate(mcp, None)
+            .unwrap();
+        let mut entry = AuditLog::entry("call-1", "com.example.app", "files", "write", "started");
+        entry.set_actor_chain(chain.clone()).unwrap();
+        assert_eq!(entry.actor_chain, Some(chain));
+        assert!(
+            entry
+                .actor_chain_hash
+                .as_deref()
+                .unwrap()
+                .starts_with("sha256:")
+        );
+
+        let legacy = r#"{"timestampMs":1,"callId":"old","application":"com.example.app","binding":"files","tool":"read","phase":"finished"}"#;
+        let parsed: AuditEntry = serde_json::from_str(legacy).unwrap();
+        assert!(parsed.actor_chain.is_none());
+        assert!(parsed.actor_chain_hash.is_none());
+    }
+
+    #[test]
     fn approval_tokens_are_bound_single_use_and_revocable() {
         let store = ApprovalStore::default();
         let binding = ApprovalBinding {

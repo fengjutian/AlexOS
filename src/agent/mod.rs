@@ -960,11 +960,7 @@ impl AgentManager {
         Ok(value)
     }
 
-    fn invoke_mcp_tool(
-        &self,
-        run: &AgentRun,
-        call: &PendingToolCall,
-    ) -> Result<Value, AgentError> {
+    fn invoke_mcp_tool(&self, run: &AgentRun, call: &PendingToolCall) -> Result<Value, AgentError> {
         self.invoke_mcp_tool_parts(&run.application, &run.id, run.generation, call)
     }
 
@@ -1007,7 +1003,9 @@ impl AgentManager {
             .map_err(|error| AgentError::Tool(error.to_string()))?;
         if let Some(log) = &self.mcp_audit {
             log.append(&audit).map_err(|error| {
-                AgentError::Tool(format!("MCP audit unavailable; tool was not invoked: {error}"))
+                AgentError::Tool(format!(
+                    "MCP audit unavailable; tool was not invoked: {error}"
+                ))
             })?;
         }
         let started_at = std::time::Instant::now();
@@ -1018,7 +1016,13 @@ impl AgentManager {
             .and_then(crate::mcp::filter_tool_result);
         audit.timestamp_ms = now_ms();
         audit.phase = "finished".into();
-        audit.duration_ms = Some(started_at.elapsed().as_millis().try_into().unwrap_or(u64::MAX));
+        audit.duration_ms = Some(
+            started_at
+                .elapsed()
+                .as_millis()
+                .try_into()
+                .unwrap_or(u64::MAX),
+        );
         match result {
             Ok(result) => {
                 audit.outcome = Some("success".into());
@@ -1090,9 +1094,7 @@ impl AgentManager {
                 let handles = wave
                     .iter()
                     .map(|call| {
-                        scope.spawn(|| {
-                            self.invoke_tool(application, &run.id, run.generation, call)
-                        })
+                        scope.spawn(|| self.invoke_tool(application, &run.id, run.generation, call))
                     })
                     .collect::<Vec<_>>();
                 handles
@@ -1916,7 +1918,11 @@ mod tests {
             crate::mcp::McpClient::new(Arc::new(Mcp), crate::mcp::ProtocolEra::Modern),
         )
         .unwrap();
-        AgentManager::open(temp.path().join("agents"), models, mcp).unwrap()
+        AgentManager::open(temp.path().join("agents"), models, mcp)
+            .unwrap()
+            .with_mcp_audit(
+                crate::mcp::AuditLog::open(temp.path().join("audit").join("mcp.jsonl")).unwrap(),
+            )
     }
 
     #[test]
@@ -1971,6 +1977,24 @@ mod tests {
                 .all(|pair| pair[0].sequence < pair[1].sequence)
         );
         assert!(timeline.iter().all(|entry| entry.timestamp_ms > 0));
+        let audit = crate::mcp::AuditLog::open(temp.path().join("audit").join("mcp.jsonl"))
+            .unwrap()
+            .recent("com.example.app", 10)
+            .unwrap();
+        assert_eq!(audit.len(), 2);
+        assert!(audit.iter().all(|entry| entry.actor_chain_hash.is_some()));
+        let chain = audit[0].actor_chain.as_ref().unwrap();
+        assert_eq!(chain.initiator.as_str(), "app:com.example.app");
+        assert!(
+            chain.actors[0]
+                .principal
+                .as_str()
+                .starts_with("agent:com.example.app/")
+        );
+        assert_eq!(
+            chain.effective_actor().as_str(),
+            "mcp:com.example.app/tools"
+        );
     }
 
     #[test]
