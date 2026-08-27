@@ -1,7 +1,32 @@
 import assert from "node:assert/strict";
+import fs from "node:fs";
 import test from "node:test";
 
 import { AlexError, createAlexClient } from "../index.js";
+
+test("generated security metadata covers every registered API method", () => {
+  const schema = JSON.parse(fs.readFileSync(new URL("../desktop-api.schema.json", import.meta.url)));
+  const generatedTs = fs.readFileSync(new URL("../schema.generated.d.ts", import.meta.url), "utf8");
+  const generatedRust = fs.readFileSync(new URL("../../../src/api/idl_generated.rs", import.meta.url), "utf8");
+  const resourceKinds = new Set(schema.resourceKinds);
+  const registeredMethods = Object.values(schema.capabilities).flat();
+
+  assert.equal(resourceKinds.size, schema.resourceKinds.length);
+  assert.ok(resourceKinds.has("file"));
+  assert.ok(resourceKinds.has("agent-run"));
+  for (const [domain, metadata] of Object.entries(schema.domains)) {
+    assert.ok(resourceKinds.has(metadata.resource), `${domain} has a registered resource kind`);
+  }
+  for (const method of registeredMethods) {
+    assert.match(generatedTs, new RegExp(`${JSON.stringify(method)}: \\{ action:`));
+  }
+  assert.match(generatedTs, /export type AlexResourceKind =/);
+  assert.match(generatedTs, /export type AlexAction =/);
+  assert.match(generatedRust, /pub const RESOURCE_KINDS:/);
+  assert.match(generatedRust, /pub action: &'static str/);
+  assert.match(generatedRust, /pub resource: &'static str/);
+  assert.match(generatedRust, /pub maturity: &'static str/);
+});
 
 test("typed namespaces map to Alex API methods", async () => {
   const calls = [];

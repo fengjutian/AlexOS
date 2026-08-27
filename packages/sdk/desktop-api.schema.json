@@ -8,82 +8,123 @@
     "HOST_BUSY",
     "METHOD_NOT_FOUND"
   ],
+  "resourceKinds": [
+    "none",
+    "file",
+    "storage-entry",
+    "path",
+    "dialog-selection",
+    "clipboard",
+    "host",
+    "window",
+    "menu",
+    "tray",
+    "shortcut",
+    "notification",
+    "runtime",
+    "stream",
+    "mcp-binding",
+    "model",
+    "agent-run",
+    "event-subscription",
+    "process",
+    "network-origin"
+  ],
   "domains": {
     "filesystem": {
       "permission": "filesystem.*",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "file"
     },
     "storage": {
       "permission": "storage",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "storage-entry"
     },
     "paths": {
       "permission": "none",
-      "execution": "inline"
+      "execution": "inline",
+      "resource": "path"
     },
     "dialog": {
       "permission": "dialog.*",
-      "execution": "native"
+      "execution": "native",
+      "resource": "dialog-selection"
     },
     "clipboard": {
       "permission": "clipboard.*",
-      "execution": "native"
+      "execution": "native",
+      "resource": "clipboard"
     },
     "system": {
       "permission": "method-specific",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "host"
     },
     "window": {
       "permission": "window.*",
-      "execution": "native"
+      "execution": "native",
+      "resource": "window"
     },
     "menu": {
       "permission": "menu",
-      "execution": "native"
+      "execution": "native",
+      "resource": "menu"
     },
     "tray": {
       "permission": "tray",
-      "execution": "native"
+      "execution": "native",
+      "resource": "tray"
     },
     "shortcuts": {
       "permission": "shortcuts",
-      "execution": "native"
+      "execution": "native",
+      "resource": "shortcut"
     },
     "notification": {
       "permission": "notification",
-      "execution": "native"
+      "execution": "native",
+      "resource": "notification"
     },
     "runtime": {
       "permission": "runtime",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "runtime"
     },
     "stream": {
       "permission": "runtime.invoke",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "stream"
     },
     "mcp": {
       "permission": "mcp.use",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "mcp-binding"
     },
     "model": {
       "permission": "method-specific",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "model"
     },
     "agent": {
       "permission": "agent.run",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "agent-run"
     },
     "events": {
       "permission": "none",
-      "execution": "inline"
+      "execution": "inline",
+      "resource": "event-subscription"
     },
     "process": {
       "permission": "process.*",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "process"
     },
     "net": {
       "permission": "network.fetch",
-      "execution": "blocking"
+      "execution": "blocking",
+      "resource": "network-origin"
     }
   },
   "capabilities": {

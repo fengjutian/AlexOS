@@ -9,150 +9,150 @@ nav_order: 2
 
 Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 
-| Method | Availability | Permission | Execution |
-|---|---|---|---|
-| `filesystem.readText` | always | filesystem.* | blocking |
-| `filesystem.readBinary` | always | filesystem.* | blocking |
-| `filesystem.writeText` | always | filesystem.* | blocking |
-| `filesystem.writeBinary` | always | filesystem.* | blocking |
-| `filesystem.exists` | always | filesystem.* | blocking |
-| `filesystem.stat` | always | filesystem.* | blocking |
-| `filesystem.readDir` | always | filesystem.* | blocking |
-| `filesystem.createDir` | always | filesystem.* | blocking |
-| `filesystem.remove` | always | filesystem.* | blocking |
-| `filesystem.rename` | always | filesystem.* | blocking |
-| `filesystem.copy` | always | filesystem.* | blocking |
-| `filesystem.watch` | always | filesystem.* | blocking |
-| `filesystem.unwatch` | always | filesystem.* | blocking |
-| `storage.get` | always | storage | blocking |
-| `storage.set` | always | storage | blocking |
-| `storage.delete` | always | storage | blocking |
-| `storage.clear` | always | storage | blocking |
-| `storage.keys` | always | storage | blocking |
-| `paths.dataDir` | always | none | inline |
-| `paths.cacheDir` | always | none | inline |
-| `paths.tempDir` | always | none | inline |
-| `dialog.openFile` | always | dialog.* | native |
-| `dialog.openFiles` | always | dialog.* | native |
-| `dialog.openDirectory` | always | dialog.* | native |
-| `dialog.saveFile` | always | dialog.* | native |
-| `clipboard.readText` | always | clipboard.* | native |
-| `clipboard.writeText` | always | clipboard.* | native |
-| `system.info` | always | method-specific | blocking |
-| `system.capabilities` | always | method-specific | blocking |
-| `system.requestPermission` | always | method-specific | blocking |
-| `system.openExternal` | always | method-specific | blocking |
-| `system.listApps` | always | method-specific | blocking |
-| `system.listExtensions` | always | method-specific | blocking |
-| `system.install` | always | method-specific | blocking |
-| `system.uninstall` | always | method-specific | blocking |
-| `system.updateStart` | always | method-specific | blocking |
-| `system.updateTasks` | always | method-specific | blocking |
-| `system.updateCancel` | always | method-specific | blocking |
-| `system.updateRetry` | always | method-specific | blocking |
-| `system.listPermissions` | always | method-specific | blocking |
-| `system.setPermission` | always | method-specific | blocking |
-| `system.listTrustedPublishers` | always | method-specific | blocking |
-| `system.readAuditLog` | always | method-specific | blocking |
-| `window.setTitle` | always | window.* | native |
-| `window.minimize` | always | window.* | native |
-| `window.maximize` | always | window.* | native |
-| `window.close` | always | window.* | native |
-| `notification.show` | always | notification | native |
-| `runtime.invoke` | always | runtime | blocking |
-| `runtime.status` | always | runtime | blocking |
-| `runtime.restart` | always | runtime | blocking |
-| `runtime.cancel` | always | runtime | blocking |
-| `stream.credit` | always | runtime.invoke | blocking |
-| `stream.read` | always | runtime.invoke | blocking |
-| `stream.cancel` | always | runtime.invoke | blocking |
-| `mcp.connections` | always | mcp.use | blocking |
-| `mcp.health` | always | mcp.use | blocking |
-| `mcp.discover` | always | mcp.use | blocking |
-| `mcp.listTools` | always | mcp.use | blocking |
-| `mcp.callTool` | always | mcp.use | blocking |
-| `mcp.callToolInteractive` | always | mcp.use | blocking |
-| `mcp.respondInput` | always | mcp.use | blocking |
-| `mcp.presentInput` | always | mcp.use | blocking |
-| `mcp.oauthBegin` | always | mcp.use | blocking |
-| `mcp.oauthLoopback` | always | mcp.use | blocking |
-| `mcp.oauthComplete` | always | mcp.use | blocking |
-| `mcp.audit` | always | mcp.use | blocking |
-| `mcp.listResources` | always | mcp.use | blocking |
-| `mcp.readResource` | always | mcp.use | blocking |
-| `mcp.listPrompts` | always | mcp.use | blocking |
-| `mcp.getPrompt` | always | mcp.use | blocking |
-| `mcp.complete` | always | mcp.use | blocking |
-| `mcp.ping` | always | mcp.use | blocking |
-| `mcp.listen` | always | mcp.use | blocking |
-| `model.list` | always | method-specific | blocking |
-| `model.import` | always | method-specific | blocking |
-| `model.downloadStart` | always | method-specific | blocking |
-| `model.downloadList` | always | method-specific | blocking |
-| `model.downloadStatus` | always | method-specific | blocking |
-| `model.downloadPause` | always | method-specific | blocking |
-| `model.downloadResume` | always | method-specific | blocking |
-| `model.hardware` | always | method-specific | blocking |
-| `model.runtimeStatus` | always | method-specific | blocking |
-| `model.workerPackages` | always | method-specific | blocking |
-| `model.workerInstall` | always | method-specific | blocking |
-| `model.workerActivate` | always | method-specific | blocking |
-| `model.remove` | always | method-specific | blocking |
-| `model.load` | always | method-specific | blocking |
-| `model.unload` | always | method-specific | blocking |
-| `model.cancel` | always | method-specific | blocking |
-| `model.generate` | always | method-specific | blocking |
-| `model.embed` | always | method-specific | blocking |
-| `model.providers` | always | method-specific | blocking |
-| `model.providerUpsert` | always | method-specific | blocking |
-| `model.providerRemove` | always | method-specific | blocking |
-| `model.providerHealth` | always | method-specific | blocking |
-| `model.secretSet` | always | method-specific | blocking |
-| `model.secretDelete` | always | method-specific | blocking |
-| `model.secretExists` | always | method-specific | blocking |
-| `agent.create` | always | agent.run | blocking |
-| `agent.spawnChild` | always | agent.run | blocking |
-| `agent.children` | always | agent.run | blocking |
-| `agent.waitChildren` | always | agent.run | blocking |
-| `agent.schedule` | always | agent.run | blocking |
-| `agent.scheduled` | always | agent.run | blocking |
-| `agent.start` | always | agent.run | blocking |
-| `agent.pause` | always | agent.run | blocking |
-| `agent.resume` | always | agent.run | blocking |
-| `agent.cancel` | always | agent.run | blocking |
-| `agent.approve` | always | agent.run | blocking |
-| `agent.deny` | always | agent.run | blocking |
-| `agent.status` | always | agent.run | blocking |
-| `agent.list` | always | agent.run | blocking |
-| `agent.history` | always | agent.run | blocking |
-| `agent.timeline` | always | agent.run | blocking |
-| `events.subscribe` | always | none | inline |
-| `events.unsubscribe` | always | none | inline |
-| `system.instances.create` | always | method-specific | blocking |
-| `system.instances.start` | always | method-specific | blocking |
-| `system.instances.stop` | always | method-specific | blocking |
-| `system.instances.restart` | always | method-specific | blocking |
-| `system.instances.remove` | always | method-specific | blocking |
-| `system.instances.inspect` | always | method-specific | blocking |
-| `system.instances.list` | always | method-specific | blocking |
-| `system.instances.logs` | always | method-specific | blocking |
-| `process.spawn` | always | process.* | blocking |
-| `process.kill` | always | process.* | blocking |
-| `net.fetch` | always | network.fetch | blocking |
-| `window.create` | nativeDesktop | window.* | native |
-| `window.list` | nativeDesktop | window.* | native |
-| `window.getBounds` | nativeDesktop | window.* | native |
-| `window.setBounds` | nativeDesktop | window.* | native |
-| `window.setFullscreen` | nativeDesktop | window.* | native |
-| `window.isFullscreen` | nativeDesktop | window.* | native |
-| `window.destroy` | nativeDesktop | window.* | native |
-| `menu.setApplicationMenu` | nativeDesktop | menu | native |
-| `menu.setContextMenu` | nativeDesktop | menu | native |
-| `tray.create` | nativeDesktop | tray | native |
-| `tray.destroy` | nativeDesktop | tray | native |
-| `shortcuts.register` | nativeDesktop | shortcuts | native |
-| `shortcuts.unregister` | nativeDesktop | shortcuts | native |
-| `shortcuts.list` | nativeDesktop | shortcuts | native |
+| Method | Action | Permission | Resource | Maturity | Execution |
+|---|---|---|---|---|---|
+| `filesystem.readText` | `filesystem.readText` | filesystem.* | file | stable | blocking |
+| `filesystem.readBinary` | `filesystem.readBinary` | filesystem.* | file | stable | blocking |
+| `filesystem.writeText` | `filesystem.writeText` | filesystem.* | file | stable | blocking |
+| `filesystem.writeBinary` | `filesystem.writeBinary` | filesystem.* | file | stable | blocking |
+| `filesystem.exists` | `filesystem.exists` | filesystem.* | file | stable | blocking |
+| `filesystem.stat` | `filesystem.stat` | filesystem.* | file | stable | blocking |
+| `filesystem.readDir` | `filesystem.readDir` | filesystem.* | file | stable | blocking |
+| `filesystem.createDir` | `filesystem.createDir` | filesystem.* | file | stable | blocking |
+| `filesystem.remove` | `filesystem.remove` | filesystem.* | file | stable | blocking |
+| `filesystem.rename` | `filesystem.rename` | filesystem.* | file | stable | blocking |
+| `filesystem.copy` | `filesystem.copy` | filesystem.* | file | stable | blocking |
+| `filesystem.watch` | `filesystem.watch` | filesystem.* | file | stable | blocking |
+| `filesystem.unwatch` | `filesystem.unwatch` | filesystem.* | file | stable | blocking |
+| `storage.get` | `storage.get` | storage | storage-entry | stable | blocking |
+| `storage.set` | `storage.set` | storage | storage-entry | stable | blocking |
+| `storage.delete` | `storage.delete` | storage | storage-entry | stable | blocking |
+| `storage.clear` | `storage.clear` | storage | storage-entry | stable | blocking |
+| `storage.keys` | `storage.keys` | storage | storage-entry | stable | blocking |
+| `paths.dataDir` | `paths.dataDir` | none | path | stable | inline |
+| `paths.cacheDir` | `paths.cacheDir` | none | path | stable | inline |
+| `paths.tempDir` | `paths.tempDir` | none | path | stable | inline |
+| `dialog.openFile` | `dialog.openFile` | dialog.* | dialog-selection | stable | native |
+| `dialog.openFiles` | `dialog.openFiles` | dialog.* | dialog-selection | stable | native |
+| `dialog.openDirectory` | `dialog.openDirectory` | dialog.* | dialog-selection | stable | native |
+| `dialog.saveFile` | `dialog.saveFile` | dialog.* | dialog-selection | stable | native |
+| `clipboard.readText` | `clipboard.readText` | clipboard.* | clipboard | stable | native |
+| `clipboard.writeText` | `clipboard.writeText` | clipboard.* | clipboard | stable | native |
+| `system.info` | `system.info` | method-specific | host | stable | blocking |
+| `system.capabilities` | `system.capabilities` | method-specific | host | stable | blocking |
+| `system.requestPermission` | `system.requestPermission` | method-specific | host | stable | blocking |
+| `system.openExternal` | `system.openExternal` | method-specific | host | stable | blocking |
+| `system.listApps` | `system.listApps` | method-specific | host | stable | blocking |
+| `system.listExtensions` | `system.listExtensions` | method-specific | host | stable | blocking |
+| `system.install` | `system.install` | method-specific | host | stable | blocking |
+| `system.uninstall` | `system.uninstall` | method-specific | host | stable | blocking |
+| `system.updateStart` | `system.updateStart` | method-specific | host | stable | blocking |
+| `system.updateTasks` | `system.updateTasks` | method-specific | host | stable | blocking |
+| `system.updateCancel` | `system.updateCancel` | method-specific | host | stable | blocking |
+| `system.updateRetry` | `system.updateRetry` | method-specific | host | stable | blocking |
+| `system.listPermissions` | `system.listPermissions` | method-specific | host | stable | blocking |
+| `system.setPermission` | `system.setPermission` | method-specific | host | stable | blocking |
+| `system.listTrustedPublishers` | `system.listTrustedPublishers` | method-specific | host | stable | blocking |
+| `system.readAuditLog` | `system.readAuditLog` | method-specific | host | stable | blocking |
+| `window.setTitle` | `window.setTitle` | window.* | window | stable | native |
+| `window.minimize` | `window.minimize` | window.* | window | stable | native |
+| `window.maximize` | `window.maximize` | window.* | window | stable | native |
+| `window.close` | `window.close` | window.* | window | stable | native |
+| `notification.show` | `notification.show` | notification | notification | stable | native |
+| `runtime.invoke` | `runtime.invoke` | runtime | runtime | stable | blocking |
+| `runtime.status` | `runtime.status` | runtime | runtime | stable | blocking |
+| `runtime.restart` | `runtime.restart` | runtime | runtime | stable | blocking |
+| `runtime.cancel` | `runtime.cancel` | runtime | runtime | stable | blocking |
+| `stream.credit` | `stream.credit` | runtime.invoke | stream | stable | blocking |
+| `stream.read` | `stream.read` | runtime.invoke | stream | stable | blocking |
+| `stream.cancel` | `stream.cancel` | runtime.invoke | stream | stable | blocking |
+| `mcp.connections` | `mcp.connections` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.health` | `mcp.health` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.discover` | `mcp.discover` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.listTools` | `mcp.listTools` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.callTool` | `mcp.callTool` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.callToolInteractive` | `mcp.callToolInteractive` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.respondInput` | `mcp.respondInput` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.presentInput` | `mcp.presentInput` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.oauthBegin` | `mcp.oauthBegin` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.oauthLoopback` | `mcp.oauthLoopback` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.oauthComplete` | `mcp.oauthComplete` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.audit` | `mcp.audit` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.listResources` | `mcp.listResources` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.readResource` | `mcp.readResource` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.listPrompts` | `mcp.listPrompts` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.getPrompt` | `mcp.getPrompt` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.complete` | `mcp.complete` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.ping` | `mcp.ping` | mcp.use | mcp-binding | stable | blocking |
+| `mcp.listen` | `mcp.listen` | mcp.use | mcp-binding | stable | blocking |
+| `model.list` | `model.list` | method-specific | model | stable | blocking |
+| `model.import` | `model.import` | method-specific | model | stable | blocking |
+| `model.downloadStart` | `model.downloadStart` | method-specific | model | stable | blocking |
+| `model.downloadList` | `model.downloadList` | method-specific | model | stable | blocking |
+| `model.downloadStatus` | `model.downloadStatus` | method-specific | model | stable | blocking |
+| `model.downloadPause` | `model.downloadPause` | method-specific | model | stable | blocking |
+| `model.downloadResume` | `model.downloadResume` | method-specific | model | stable | blocking |
+| `model.hardware` | `model.hardware` | method-specific | model | stable | blocking |
+| `model.runtimeStatus` | `model.runtimeStatus` | method-specific | model | stable | blocking |
+| `model.workerPackages` | `model.workerPackages` | method-specific | model | stable | blocking |
+| `model.workerInstall` | `model.workerInstall` | method-specific | model | stable | blocking |
+| `model.workerActivate` | `model.workerActivate` | method-specific | model | stable | blocking |
+| `model.remove` | `model.remove` | method-specific | model | stable | blocking |
+| `model.load` | `model.load` | method-specific | model | stable | blocking |
+| `model.unload` | `model.unload` | method-specific | model | stable | blocking |
+| `model.cancel` | `model.cancel` | method-specific | model | stable | blocking |
+| `model.generate` | `model.generate` | method-specific | model | stable | blocking |
+| `model.embed` | `model.embed` | method-specific | model | stable | blocking |
+| `model.providers` | `model.providers` | method-specific | model | stable | blocking |
+| `model.providerUpsert` | `model.providerUpsert` | method-specific | model | stable | blocking |
+| `model.providerRemove` | `model.providerRemove` | method-specific | model | stable | blocking |
+| `model.providerHealth` | `model.providerHealth` | method-specific | model | stable | blocking |
+| `model.secretSet` | `model.secretSet` | method-specific | model | stable | blocking |
+| `model.secretDelete` | `model.secretDelete` | method-specific | model | stable | blocking |
+| `model.secretExists` | `model.secretExists` | method-specific | model | stable | blocking |
+| `agent.create` | `agent.create` | agent.run | agent-run | stable | blocking |
+| `agent.spawnChild` | `agent.spawnChild` | agent.run | agent-run | stable | blocking |
+| `agent.children` | `agent.children` | agent.run | agent-run | stable | blocking |
+| `agent.waitChildren` | `agent.waitChildren` | agent.run | agent-run | stable | blocking |
+| `agent.schedule` | `agent.schedule` | agent.run | agent-run | stable | blocking |
+| `agent.scheduled` | `agent.scheduled` | agent.run | agent-run | stable | blocking |
+| `agent.start` | `agent.start` | agent.run | agent-run | stable | blocking |
+| `agent.pause` | `agent.pause` | agent.run | agent-run | stable | blocking |
+| `agent.resume` | `agent.resume` | agent.run | agent-run | stable | blocking |
+| `agent.cancel` | `agent.cancel` | agent.run | agent-run | stable | blocking |
+| `agent.approve` | `agent.approve` | agent.run | agent-run | stable | blocking |
+| `agent.deny` | `agent.deny` | agent.run | agent-run | stable | blocking |
+| `agent.status` | `agent.status` | agent.run | agent-run | stable | blocking |
+| `agent.list` | `agent.list` | agent.run | agent-run | stable | blocking |
+| `agent.history` | `agent.history` | agent.run | agent-run | stable | blocking |
+| `agent.timeline` | `agent.timeline` | agent.run | agent-run | stable | blocking |
+| `events.subscribe` | `events.subscribe` | none | event-subscription | stable | inline |
+| `events.unsubscribe` | `events.unsubscribe` | none | event-subscription | stable | inline |
+| `system.instances.create` | `system.instances.create` | method-specific | host | stable | blocking |
+| `system.instances.start` | `system.instances.start` | method-specific | host | stable | blocking |
+| `system.instances.stop` | `system.instances.stop` | method-specific | host | stable | blocking |
+| `system.instances.restart` | `system.instances.restart` | method-specific | host | stable | blocking |
+| `system.instances.remove` | `system.instances.remove` | method-specific | host | stable | blocking |
+| `system.instances.inspect` | `system.instances.inspect` | method-specific | host | stable | blocking |
+| `system.instances.list` | `system.instances.list` | method-specific | host | stable | blocking |
+| `system.instances.logs` | `system.instances.logs` | method-specific | host | stable | blocking |
+| `process.spawn` | `process.spawn` | process.* | process | stable | blocking |
+| `process.kill` | `process.kill` | process.* | process | stable | blocking |
+| `net.fetch` | `net.fetch` | network.fetch | network-origin | stable | blocking |
+| `window.create` | `window.create` | window.* | window | stable | native |
+| `window.list` | `window.list` | window.* | window | stable | native |
+| `window.getBounds` | `window.getBounds` | window.* | window | stable | native |
+| `window.setBounds` | `window.setBounds` | window.* | window | stable | native |
+| `window.setFullscreen` | `window.setFullscreen` | window.* | window | stable | native |
+| `window.isFullscreen` | `window.isFullscreen` | window.* | window | stable | native |
+| `window.destroy` | `window.destroy` | window.* | window | stable | native |
+| `menu.setApplicationMenu` | `menu.setApplicationMenu` | menu | menu | stable | native |
+| `menu.setContextMenu` | `menu.setContextMenu` | menu | menu | stable | native |
+| `tray.create` | `tray.create` | tray | tray | stable | native |
+| `tray.destroy` | `tray.destroy` | tray | tray | stable | native |
+| `shortcuts.register` | `shortcuts.register` | shortcuts | shortcut | stable | native |
+| `shortcuts.unregister` | `shortcuts.unregister` | shortcuts | shortcut | stable | native |
+| `shortcuts.list` | `shortcuts.list` | shortcuts | shortcut | stable | native |
 
 Typed JSON Schema coverage: 142/142 methods.
 
