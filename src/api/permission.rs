@@ -129,61 +129,7 @@ impl Permission {
     /// by `PermissionStore::open_at` to migrate decisions that
     /// were stored under the old IPC-method-name keys.
     pub fn manifest_name_for_ipc_method(method: &str) -> Option<&'static str> {
-        match method {
-            "filesystem.readText" => Some("filesystem.read"),
-            "filesystem.writeText" => Some("filesystem.write"),
-            "dialog.openFile" => Some("dialog.open"),
-            "clipboard.readText" => Some("clipboard.read"),
-            "clipboard.writeText" => Some("clipboard.write"),
-            "system.openExternal" => Some("system.openExternal"),
-            "window.setTitle" => Some("window.manage"),
-            "notification.show" => Some("notification.show"),
-            "runtime.invoke" => Some("runtime.invoke"),
-            "runtime.restart" => Some("runtime.manage"),
-            "mcp.discover" | "mcp.listTools" | "mcp.callTool" | "mcp.audit"
-            | "mcp.listResources" | "mcp.readResource" | "mcp.listPrompts" | "mcp.getPrompt"
-            | "mcp.complete" | "mcp.ping" | "mcp.health" | "mcp.oauthBegin"
-            | "mcp.oauthLoopback" | "mcp.oauthComplete" => Some("mcp.use"),
-            "mcp.listen" => Some("mcp.use"),
-            "mcp.callToolInteractive" | "mcp.respondInput" | "mcp.presentInput" => Some("mcp.use"),
-            "model.list"
-            | "model.hardware"
-            | "model.runtimeStatus"
-            | "model.generate"
-            | "model.cancel"
-            | "model.embed" => Some("model.use"),
-            "model.import"
-            | "model.load"
-            | "model.unload"
-            | "model.downloadStart"
-            | "model.downloadList"
-            | "model.downloadStatus"
-            | "model.downloadPause"
-            | "model.downloadResume"
-            | "model.remove"
-            | "model.providers"
-            | "model.providerUpsert"
-            | "model.providerRemove"
-            | "model.providerHealth"
-            | "model.secretSet"
-            | "model.secretDelete"
-            | "model.secretExists" => Some("model.manage"),
-            "model.workerPackages" | "model.workerInstall" | "model.workerActivate" => {
-                Some("model.manage")
-            }
-            "agent.create" | "agent.start" | "agent.pause" | "agent.resume" | "agent.cancel"
-            | "agent.status" | "agent.list" | "agent.approve" | "agent.deny" | "agent.history"
-            | "agent.timeline" | "agent.spawnChild" | "agent.children" | "agent.schedule"
-            | "agent.scheduled" => Some("agent.run"),
-            "media.camera" => Some("media.camera"),
-            "media.microphone" => Some("media.microphone"),
-            "geolocation" => Some("geolocation"),
-            "system.install" => Some("system.install"),
-            "system.uninstall" => Some("system.uninstall"),
-            "system.manageApps" => Some("system.manageApps"),
-            "system.manageExtensions" => Some("system.manageExtensions"),
-            _ => None,
-        }
+        crate::api::idl_generated::manifest_permission_for_ipc_method(method)
     }
 
     /// Return the canonical permission name as written in `manifest.json`

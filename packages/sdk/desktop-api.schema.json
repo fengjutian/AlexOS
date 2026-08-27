@@ -30,6 +30,216 @@
     "process",
     "network-origin"
   ],
+  "permissionKinds": [
+    "filesystem.read",
+    "filesystem.write",
+    "filesystem.watch",
+    "filesystem.delete",
+    "filesystem.drop",
+    "dialog.open",
+    "dialog.save",
+    "clipboard.read",
+    "clipboard.write",
+    "system.openExternal",
+    "storage",
+    "paths",
+    "window.manage",
+    "window.open",
+    "notification.show",
+    "menu.manage",
+    "tray.manage",
+    "shortcut.register",
+    "runtime.invoke",
+    "runtime.manage",
+    "mcp.use",
+    "model.use",
+    "model.manage",
+    "agent.run",
+    "process.spawn",
+    "media.camera",
+    "media.microphone",
+    "geolocation",
+    "system.install",
+    "system.uninstall",
+    "system.manageApps",
+    "system.manageExtensions",
+    "system.managePermissions",
+    "network.fetch"
+  ],
+  "permissionGroups": [
+    {
+      "permissions": [],
+      "methods": [
+        "filesystem.unwatch",
+        "system.info",
+        "system.capabilities",
+        "system.requestPermission",
+        "events.subscribe",
+        "events.unsubscribe"
+      ]
+    },
+    {
+      "permissions": ["filesystem.read"],
+      "methods": ["filesystem.readText", "filesystem.readBinary", "filesystem.exists", "filesystem.stat", "filesystem.readDir"]
+    },
+    {
+      "permissions": ["filesystem.write"],
+      "methods": ["filesystem.writeText", "filesystem.writeBinary", "filesystem.createDir"]
+    },
+    {
+      "permissions": ["filesystem.delete"],
+      "methods": ["filesystem.remove"]
+    },
+    {
+      "permissions": ["filesystem.write", "filesystem.delete"],
+      "methods": ["filesystem.rename"]
+    },
+    {
+      "permissions": ["filesystem.read", "filesystem.write"],
+      "methods": ["filesystem.copy"]
+    },
+    {
+      "permissions": ["filesystem.watch"],
+      "methods": ["filesystem.watch"]
+    },
+    {
+      "permissions": ["storage"],
+      "methods": ["storage.get", "storage.set", "storage.delete", "storage.clear", "storage.keys"]
+    },
+    {
+      "permissions": ["paths"],
+      "methods": ["paths.dataDir", "paths.cacheDir", "paths.tempDir"]
+    },
+    {
+      "permissions": ["dialog.open"],
+      "methods": ["dialog.openFile", "dialog.openFiles", "dialog.openDirectory"]
+    },
+    {
+      "permissions": ["dialog.save"],
+      "methods": ["dialog.saveFile"]
+    },
+    {
+      "permissions": ["clipboard.read"],
+      "methods": ["clipboard.readText"]
+    },
+    {
+      "permissions": ["clipboard.write"],
+      "methods": ["clipboard.writeText"]
+    },
+    {
+      "permissions": ["system.openExternal"],
+      "methods": ["system.openExternal"]
+    },
+    {
+      "permissions": ["system.install"],
+      "methods": ["system.install"]
+    },
+    {
+      "permissions": ["system.uninstall"],
+      "methods": ["system.uninstall"]
+    },
+    {
+      "permissions": ["system.manageApps"],
+      "methods": [
+        "system.listApps",
+        "system.updateStart",
+        "system.updateTasks",
+        "system.updateCancel",
+        "system.updateRetry",
+        "system.listTrustedPublishers",
+        "system.instances.create",
+        "system.instances.start",
+        "system.instances.stop",
+        "system.instances.restart",
+        "system.instances.remove",
+        "system.instances.inspect",
+        "system.instances.list",
+        "system.instances.logs"
+      ]
+    },
+    {
+      "permissions": ["system.manageExtensions"],
+      "methods": ["system.listExtensions"]
+    },
+    {
+      "permissions": ["system.managePermissions"],
+      "methods": ["system.listPermissions", "system.setPermission", "system.readAuditLog"]
+    },
+    {
+      "permissions": ["window.manage"],
+      "methods": [
+        "window.setTitle", "window.minimize", "window.maximize", "window.close",
+        "window.getBounds", "window.setBounds", "window.setFullscreen", "window.isFullscreen", "window.destroy"
+      ]
+    },
+    {
+      "permissions": ["window.open"],
+      "methods": ["window.create", "window.list"]
+    },
+    {
+      "permissions": ["notification.show"],
+      "methods": ["notification.show"]
+    },
+    {
+      "permissions": ["runtime.invoke"],
+      "methods": ["runtime.invoke", "runtime.cancel", "stream.credit", "stream.read", "stream.cancel"]
+    },
+    {
+      "permissions": ["runtime.manage"],
+      "methods": ["runtime.status", "runtime.restart"]
+    },
+    {
+      "permissions": ["mcp.use"],
+      "methods": [
+        "mcp.connections", "mcp.health", "mcp.discover", "mcp.listTools", "mcp.callTool",
+        "mcp.callToolInteractive", "mcp.respondInput", "mcp.presentInput", "mcp.oauthBegin",
+        "mcp.oauthLoopback", "mcp.oauthComplete", "mcp.audit", "mcp.listResources",
+        "mcp.readResource", "mcp.listPrompts", "mcp.getPrompt", "mcp.complete", "mcp.ping", "mcp.listen"
+      ]
+    },
+    {
+      "permissions": ["model.use"],
+      "methods": ["model.list", "model.hardware", "model.runtimeStatus", "model.cancel", "model.generate", "model.embed"]
+    },
+    {
+      "permissions": ["model.manage"],
+      "methods": [
+        "model.import", "model.downloadStart", "model.downloadList", "model.downloadStatus",
+        "model.downloadPause", "model.downloadResume", "model.workerPackages", "model.workerInstall",
+        "model.workerActivate", "model.remove", "model.load", "model.unload", "model.providers",
+        "model.providerUpsert", "model.providerRemove", "model.providerHealth", "model.secretSet",
+        "model.secretDelete", "model.secretExists"
+      ]
+    },
+    {
+      "permissions": ["agent.run"],
+      "methods": [
+        "agent.create", "agent.spawnChild", "agent.children", "agent.waitChildren", "agent.schedule",
+        "agent.scheduled", "agent.start", "agent.pause", "agent.resume", "agent.cancel", "agent.approve",
+        "agent.deny", "agent.status", "agent.list", "agent.history", "agent.timeline"
+      ]
+    },
+    {
+      "permissions": ["process.spawn"],
+      "methods": ["process.spawn", "process.kill"]
+    },
+    {
+      "permissions": ["network.fetch"],
+      "methods": ["net.fetch"]
+    },
+    {
+      "permissions": ["menu.manage"],
+      "methods": ["menu.setApplicationMenu", "menu.setContextMenu"]
+    },
+    {
+      "permissions": ["tray.manage"],
+      "methods": ["tray.create", "tray.destroy"]
+    },
+    {
+      "permissions": ["shortcut.register"],
+      "methods": ["shortcuts.register", "shortcuts.unregister", "shortcuts.list"]
+    }
+  ],
   "domains": {
     "filesystem": {
       "permission": "filesystem.*",
