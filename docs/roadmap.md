@@ -270,6 +270,11 @@ capabilities 明确报告，不能静默降级。
 
 ## 工程质量未完成项
 
+- 执行 [`release-gates.md`](./release-gates.md) 的 v0.1/Preview/Stable evidence 门禁；
+- 落地 [`compatibility-migration-support-policy.md`](./compatibility-migration-support-policy.md) 的协议矩阵、
+  迁移 fixture 和支持窗口；
+- 落地 [`resource-scheduling-fault-domains.md`](./resource-scheduling-fault-domains.md) 的 workload owner、
+  全局准入、公平队列、压力策略和故障注入；
 - WebView GUI 自动化；
 - Runtime 真实崩溃、超时、进程树和重启集成测试；
 - IPC 与 ZIP 解析模糊测试；
@@ -301,6 +306,11 @@ capabilities 明确报告，不能静默降级。
 - [`status.md`](./status.md) — 当前所有"已实现"和"限制"的来源；
 - [`ai-runtime-implementation.md`](./ai-runtime-implementation.md) — Manifest、Daemon、流式 IPC、
   Secret、Model、MCP、Agent 和 MCP 市场的完整技术实施步骤与完成标准；
+- [`ai-product-roadmap.md`](./ai-product-roadmap.md) — Model Router、Eval 与 Knowledge Service 的正式
+  Windows 产品里程碑；
+- [`compatibility-migration-support-policy.md`](./compatibility-migration-support-policy.md) — 协议、数据与支持周期；
+- [`resource-scheduling-fault-domains.md`](./resource-scheduling-fault-domains.md) — 全局调度与故障隔离；
+- [`release-gates.md`](./release-gates.md) — Developer Preview、Preview 和 Stable 统一发布门禁；
 - [`app-manager-ui-design.md`](./app-manager-ui-design.md) — §3.2 权限设置 UI、§3.4 安装器 UI 的设计提案；
 - [`alex-container-design.md`](./alex-container-design.md) — §3.1 Job Object、§3.10 0.3 AppContainer、§3.13 OCI 的详细分阶段计划；
 - [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) — 每个 API 的"待 wired"项对应 P0 §3.2 / P1 §3.5。

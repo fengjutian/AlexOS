@@ -328,6 +328,12 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
 
 - [`principal-identity-policy-design.md`](./principal-identity-policy-design.md) — Application、Agent、
   MCP、Model、Worker 与用户共用的身份、委托、资源、策略和短期授权模型；
+- [`compatibility-migration-support-policy.md`](./compatibility-migration-support-policy.md) — 公共协议、
+  持久格式迁移、弃用和支持周期；
+- [`resource-scheduling-fault-domains.md`](./resource-scheduling-fault-domains.md) — 单机 Windows 全局资源
+  准入、优先级、压力处理和进程故障域；
+- [`ai-product-roadmap.md`](./ai-product-roadmap.md) — Model Router、Eval 与 Knowledge Service 产品路线；
+- [`release-gates.md`](./release-gates.md) — 不同成熟度的发布 evidence 和强制门禁；
 
 按"新人 20 分钟入门"读：
 

@@ -246,6 +246,9 @@ Service Orchestrator 根据依赖图拓扑启动，并按反向顺序停止。�
 
 Daemon 重启后必须从持久状态恢复，不依赖 Shell 是否运行。
 
+多应用、Agent、Model、MCP 和 Knowledge 并发时的全局准入、公平性、压力处理和故障隔离遵循
+[`resource-scheduling-fault-domains.md`](./resource-scheduling-fault-domains.md)。
+
 ## 6. 权限与安全
 
 AI Agent 可以读写文件、执行命令、访问网络、调用 MCP、控制浏览器和设备，因此权限控制必须覆盖
@@ -272,6 +275,9 @@ Storage Manager 统一 config、data、cache、models 和 logs，并提供 list�
 
 更新流程必须包含：下载、签名与哈希校验、暂存、停止旧版本、启动新版本、健康检查；健康失败时自动
 恢复旧版本。用户还应能够显式执行 rollback。
+
+协议演进、持久格式迁移、弃用和支持窗口遵循
+[`compatibility-migration-support-policy.md`](./compatibility-migration-support-policy.md)。
 
 ## 8. CLI 产品面
 
@@ -372,6 +378,8 @@ v0.1 不承诺安全运行来源不明的第三方 backend。
 
 `system.capabilities` 和文档必须报告能力成熟度；“已接线”不自动等于 preview 或 stable。
 
+各成熟度进入条件和所需 evidence 由 [`release-gates.md`](./release-gates.md) 统一定义。
+
 ## 10. 当前工程决策
 
 从 2026-08-27 起只保留一条产品主线：**Windows AI Application Runtime**。
@@ -384,3 +392,6 @@ v0.1 不承诺安全运行来源不明的第三方 backend。
 4. macOS、Linux、移动端、Server/Edge 集群、完整 OCI 和大众 Store 统一标记为 Deferred；
 5. Python、Plugin、Native Worker 和 Registry 只有在直接服务三个 Windows 目标场景时才进入当前优先级；
 6. 每个新增路线图项必须写明目标场景、成熟度目标、依赖和可验证完成标准。
+
+Model Router、Eval 与 Knowledge Service 的正式版本归属、依赖和完成标准见
+[`ai-product-roadmap.md`](./ai-product-roadmap.md)。
