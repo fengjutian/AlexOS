@@ -276,7 +276,7 @@ pub fn run(
 /// `hostResponse` to stdin) or echo the line to the host terminal.
 fn run_unified_dispatch<R: std::io::Read + Send + 'static>(
     mut reader: R,
-    stdin: Arc<Mutex<std::process::ChildStdin>>,
+    stdin: Arc<Mutex<Box<dyn std::io::Write + Send>>>,
     router: Arc<ApiRouter>,
     manifest_id: String,
 ) {

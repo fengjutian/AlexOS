@@ -240,11 +240,11 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 限制：
 
 - 安装时没有权限摘要确认页；
-- 没有统一权限设置 UI；
+- Manager 已提供统一权限设置 UI，但运行中撤销尚未联动终止或重启实际 backend；
 - 文件选择结果不会生成临时文件访问授权；
-- 没有一次性授权或"仅本次运行"；
-- 没有权限版本迁移；
-- 权限审计没有轮转、查询或防篡改；
+- 已有一次性授权/拒绝和会话级 grant，但尚未覆盖所有 WebView 权限回调；
+- 已有旧 IPC 权限名到 Manifest 权限名的基础迁移，尚无正式版本化迁移框架；
+- 权限审计已有轮转和查询，但没有防篡改哈希链；
 - `PermissionStore` 是普通本地 JSON，不受系统安全存储保护；
 - 权限无法约束 Node 内置模块。
 
@@ -270,8 +270,8 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - 归档使用 Stored ZIP，没有压缩；
 - `.alexignore` 已使用 gitignore 语法接入 `alex dev` 文件监听；文件缺失或语法错误时安全回退为
   不过滤，并有对应回归测试；
-- 没有可复现构建证明或 SBOM；
-- 没有恶意软件扫描。
+- CI 已接入 CycloneDX SBOM 生成/上传，并对锁定依赖执行漏洞审计；尚无可复现构建证明；
+- PR 已接入依赖变更审查（高危漏洞与 GPL-3.0/AGPL-3.0 许可证门禁）；尚无发布产物恶意软件扫描。
 
 ### 2.8 更新
 
@@ -384,8 +384,8 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 
 限制：
 
-- Restricted Token 与 ACL 尚未接入 service 启动路径（`grant_restricted_path` / `RestrictedJobProvider`
-  已存在，供 0.3/0.4 接线）；
+- Restricted Token + Job Object 已通过 `ALEX_RESTRICT_BACKENDS=1` 接入 RPC/service 启动路径；
+  Restricted Code SID 所需包目录和应用数据目录 ACL 尚未自动配置，因此当前仍为显式 opt-in；
 - backend 文件、进程和网络策略在 0.1 supervisor 路径未强制（容器路径 `enforce_policy` 已有雏形）；
 - 权限撤销与审计尚未覆盖实际运行中的服务进程。
 

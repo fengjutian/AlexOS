@@ -1,10 +1,10 @@
 use std::{
     collections::{HashMap, VecDeque},
     fmt::Write as _,
-    io::{BufRead, BufReader, Write},
+    io::{BufRead, BufReader, Read, Write},
     net::TcpListener,
     path::{Path, PathBuf},
-    process::{Child, ChildStdin, ChildStdout, Command, ExitStatus, Stdio},
+    process::{Child, Command, ExitStatus, Stdio},
     sync::{
         Arc, Mutex,
         atomic::{AtomicBool, AtomicU32, Ordering},
@@ -350,9 +350,9 @@ fn valid_id(id: &str) -> bool {
 }
 
 pub struct RuntimeProcess {
-    child: Child,
-    stdin: Option<ChildStdin>,
-    stdout: Option<BufReader<ChildStdout>>,
+    child: ManagedRuntimeChild,
+    stdin: Option<Box<dyn Write + Send>>,
+    stdout: Option<BufReader<Box<dyn Read + Send>>>,
     rpc: Option<RpcChannel>,
     service: Option<ServiceState>,
     /// Job Object boundary, present when the launch declared resource
@@ -363,10 +363,118 @@ pub struct RuntimeProcess {
     isolation: Option<IsolationHandle>,
 }
 
+struct ManagedRuntimeChild {
+    child: Option<Child>,
+    pid: u32,
+}
+
+impl ManagedRuntimeChild {
+    fn standard(child: Child) -> Self {
+        let pid = child.id();
+        Self {
+            child: Some(child),
+            pid,
+        }
+    }
+
+    fn restricted(pid: u32) -> Self {
+        Self { child: None, pid }
+    }
+
+    fn id(&self) -> u32 {
+        self.pid
+    }
+
+    fn try_wait(&mut self) -> std::io::Result<Option<ExitStatus>> {
+        if let Some(child) = &mut self.child {
+            return child.try_wait();
+        }
+        restricted_process_exit_status(self.pid)
+    }
+
+    fn kill(&mut self) -> std::io::Result<()> {
+        if let Some(child) = &mut self.child {
+            return child.kill();
+        }
+        terminate_restricted_process(self.pid)
+    }
+
+    fn wait(&mut self) -> std::io::Result<ExitStatus> {
+        if let Some(child) = &mut self.child {
+            return child.wait();
+        }
+        loop {
+            if let Some(status) = self.try_wait()? {
+                return Ok(status);
+            }
+            thread::sleep(Duration::from_millis(10));
+        }
+    }
+}
+
+#[cfg(windows)]
+fn restricted_process_exit_status(pid: u32) -> std::io::Result<Option<ExitStatus>> {
+    use std::os::windows::process::ExitStatusExt;
+    use windows::Win32::{
+        Foundation::{CloseHandle, STILL_ACTIVE},
+        System::Threading::{GetExitCodeProcess, OpenProcess, PROCESS_QUERY_LIMITED_INFORMATION},
+    };
+    let process = match unsafe { OpenProcess(PROCESS_QUERY_LIMITED_INFORMATION, false, pid) } {
+        Ok(process) => process,
+        // Restricted children are intentionally not kept alive by a host
+        // process HANDLE. Once Windows reaps the process object OpenProcess
+        // can no longer recover its exact exit code; report a conservative
+        // failure so on-failure restart policy remains fail-safe.
+        Err(_) => return Ok(Some(ExitStatus::from_raw(1))),
+    };
+    let mut exit_code = 0u32;
+    let result = unsafe { GetExitCodeProcess(process, &mut exit_code) };
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+    result.map_err(|error| std::io::Error::other(error.to_string()))?;
+    if exit_code == STILL_ACTIVE.0 as u32 {
+        Ok(None)
+    } else {
+        Ok(Some(ExitStatus::from_raw(exit_code)))
+    }
+}
+
+#[cfg(not(windows))]
+fn restricted_process_exit_status(_pid: u32) -> std::io::Result<Option<ExitStatus>> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "restricted processes are only supported on Windows",
+    ))
+}
+
+#[cfg(windows)]
+fn terminate_restricted_process(pid: u32) -> std::io::Result<()> {
+    use windows::Win32::{
+        Foundation::CloseHandle,
+        System::Threading::{OpenProcess, PROCESS_TERMINATE, TerminateProcess},
+    };
+    let process = unsafe { OpenProcess(PROCESS_TERMINATE, false, pid) }
+        .map_err(|error| std::io::Error::other(error.to_string()))?;
+    let result = unsafe { TerminateProcess(process, 1) };
+    unsafe {
+        let _ = CloseHandle(process);
+    }
+    result.map_err(|error| std::io::Error::other(error.to_string()))
+}
+
+#[cfg(not(windows))]
+fn terminate_restricted_process(_pid: u32) -> std::io::Result<()> {
+    Err(std::io::Error::new(
+        std::io::ErrorKind::Unsupported,
+        "restricted processes are only supported on Windows",
+    ))
+}
+
 type PendingResponse = mpsc::SyncSender<Result<Value, String>>;
 
 struct RpcChannel {
-    writer: Arc<Mutex<ChildStdin>>,
+    writer: Arc<Mutex<Box<dyn Write + Send>>>,
     pending: Arc<Mutex<HashMap<String, PendingResponse>>>,
 }
 
@@ -1008,30 +1116,112 @@ impl RuntimeProcess {
             BackendMode::Service => (Stdio::null(), Stdio::piped()),
             BackendMode::Rpc => (Stdio::piped(), Stdio::piped()),
         };
-        let mut child = command
+        command
             .stdin(stdin_cfg)
             .stdout(stdout_cfg)
-            .stderr(Stdio::piped())
-            .spawn()
-            .map_err(|source| RuntimeError::Start { executable, source })?;
-        // If the service declared resource quotas, confine the freshly
-        // spawned process in a Job Object now. The handle is retained on
-        // the `RuntimeProcess` so `KILL_ON_JOB_CLOSE` reaps the whole
-        // tree on drop, and the memory / process-count / CPU caps apply
-        // for the process's lifetime.
-        let isolation = match &spec.limits {
-            Some(limits) => Some(
-                crate::container::isolation::confine_process(limits, child.id())
-                    .map_err(|error| RuntimeError::Isolation(error.to_string()))?,
-            ),
-            None => None,
+            .stderr(Stdio::piped());
+        let restrict_backends = std::env::var("ALEX_RESTRICT_BACKENDS")
+            .ok()
+            .is_some_and(|value| matches!(value.as_str(), "1" | "true" | "yes"));
+
+        let (mut child, stdin, mut stdout, stderr, isolation) = if restrict_backends {
+            #[cfg(windows)]
+            {
+                use std::os::windows::io::FromRawHandle;
+
+                let mut env: Vec<(String, String)> = ["SystemRoot", "WINDIR", "TEMP", "TMP"]
+                    .into_iter()
+                    .filter_map(|name| {
+                        std::env::var_os(name)
+                            .map(|value| (name.to_owned(), value.to_string_lossy().into_owned()))
+                    })
+                    .collect();
+                env.extend(command.get_envs().filter_map(|(name, value)| {
+                    value.map(|value| {
+                        (
+                            name.to_string_lossy().into_owned(),
+                            value.to_string_lossy().into_owned(),
+                        )
+                    })
+                }));
+                let limits = spec.limits.clone().unwrap_or_default();
+                let request = crate::container::isolation::SpawnRequest {
+                    executable: executable.clone(),
+                    args: command
+                        .get_args()
+                        .map(|arg| arg.to_string_lossy().into_owned())
+                        .collect(),
+                    env,
+                    cwd: spec.package_root.clone(),
+                    limits: &limits,
+                    level: crate::container::IsolationLevel::AppContainer,
+                };
+                let need_stdin = matches!(spec.backend.mode, BackendMode::Rpc);
+                let (spawned, stdio) = crate::container::isolation::spawn_restricted_with_stdio(
+                    &request, need_stdin, true, true,
+                )
+                .map_err(|error| RuntimeError::Isolation(error.to_string()))?;
+                let stdin = stdio.stdin.map(|handle| {
+                    Box::new(unsafe { std::fs::File::from_raw_handle(handle.0) })
+                        as Box<dyn Write + Send>
+                });
+                let stdout = stdio.stdout.map(|handle| {
+                    BufReader::new(
+                        Box::new(unsafe { std::fs::File::from_raw_handle(handle.0) })
+                            as Box<dyn Read + Send>,
+                    )
+                });
+                let stderr = stdio.stderr.map(|handle| {
+                    Box::new(unsafe { std::fs::File::from_raw_handle(handle.0) })
+                        as Box<dyn Read + Send>
+                });
+                (
+                    ManagedRuntimeChild::restricted(spawned.pid),
+                    stdin,
+                    stdout,
+                    stderr,
+                    Some(spawned.isolation),
+                )
+            }
+            #[cfg(not(windows))]
+            {
+                return Err(RuntimeError::Isolation(
+                    "ALEX_RESTRICT_BACKENDS is only supported on Windows".into(),
+                ));
+            }
+        } else {
+            let mut child = command
+                .spawn()
+                .map_err(|source| RuntimeError::Start { executable, source })?;
+            let isolation = match &spec.limits {
+                Some(limits) => Some(
+                    crate::container::isolation::confine_process(limits, child.id())
+                        .map_err(|error| RuntimeError::Isolation(error.to_string()))?,
+                ),
+                None => None,
+            };
+            let stderr = child
+                .stderr
+                .take()
+                .map(|value| Box::new(value) as Box<dyn Read + Send>);
+            let stdin = child
+                .stdin
+                .take()
+                .map(|value| Box::new(value) as Box<dyn Write + Send>);
+            let stdout = child
+                .stdout
+                .take()
+                .map(|value| BufReader::new(Box::new(value) as Box<dyn Read + Send>));
+            (
+                ManagedRuntimeChild::standard(child),
+                stdin,
+                stdout,
+                stderr,
+                isolation,
+            )
         };
-        let stderr = child
-            .stderr
-            .take()
-            .ok_or_else(|| RuntimeError::Protocol("runtime stderr is unavailable".into()))?;
-        let stdin = child.stdin.take();
-        let stdout = child.stdout.take().map(BufReader::new);
+        let stderr =
+            stderr.ok_or_else(|| RuntimeError::Protocol("runtime stderr is unavailable".into()))?;
 
         let (ready_tx, ready_rx) = if endpoint.is_some() {
             let (tx, rx) = mpsc::sync_channel::<u16>(1);
@@ -1061,7 +1251,7 @@ impl RuntimeProcess {
         // Service mode also gets a stdout drain. RPC mode keeps
         // stdout in `Self::stdout` for the JSON Lines read loop.
         if matches!(spec.backend.mode, BackendMode::Service)
-            && let Some(stdout_pipe) = child.stdout.take()
+            && let Some(stdout_pipe) = stdout.take()
         {
             let logs_for_stdout = Arc::clone(&logs);
             let sink_for_stdout = log_sink.clone();
@@ -1136,7 +1326,7 @@ impl RuntimeProcess {
     /// Take ownership of the child's stdin. Used by `plugin::run` to
     /// send reverse-IPC responses back to a plugin that asked the host
     /// a question. Returns `None` if stdin has already been taken.
-    pub fn take_stdin(&mut self) -> Option<ChildStdin> {
+    pub fn take_stdin(&mut self) -> Option<Box<dyn Write + Send>> {
         self.stdin.take()
     }
 
@@ -1144,7 +1334,7 @@ impl RuntimeProcess {
     /// `plugin::run`) uses this to forward backend output to the host
     /// terminal. Once taken, `RuntimeProcess::invoke` cannot be used
     /// on this process.
-    pub fn take_stdout(&mut self) -> Option<BufReader<ChildStdout>> {
+    pub fn take_stdout(&mut self) -> Option<BufReader<Box<dyn Read + Send>>> {
         self.stdout.take()
     }
 
@@ -1395,7 +1585,7 @@ impl Drop for RuntimeProcess {
 /// a managed log root. When present, every line is also written
 /// (after secret redaction) to the per-service `stderr.log` file.
 fn stderr_pump(
-    stderr: std::process::ChildStderr,
+    stderr: Box<dyn Read + Send>,
     logs: Arc<Mutex<VecDeque<String>>>,
     ready_tx: Option<mpsc::SyncSender<u16>>,
     ready_flag: Option<Arc<AtomicBool>>,
@@ -1447,11 +1637,10 @@ fn stderr_pump(
 /// When `log_sink` is present, every line is also written (after
 /// secret redaction) to the per-service `stdout.log` file.
 fn stdout_pump(
-    stdout: std::process::ChildStdout,
+    mut reader: BufReader<Box<dyn Read + Send>>,
     logs: Arc<Mutex<VecDeque<String>>>,
     log_sink: Option<crate::runtime::log_file::ServiceLogSink>,
 ) {
-    let mut reader = BufReader::new(stdout);
     let mut line = String::new();
     loop {
         line.clear();
@@ -2156,7 +2345,7 @@ mod service_runtime_tests {
         let logs_for_thread = Arc::clone(&logs);
         let handle = std::thread::spawn(move || {
             stderr_pump(
-                stderr,
+                Box::new(stderr),
                 logs_for_thread,
                 Some(ready_tx_for_thread),
                 Some(flag_for_thread),

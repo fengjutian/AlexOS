@@ -825,8 +825,9 @@ pub fn spawn_restricted_with_stdio(
         Foundation::CloseHandle,
         System::JobObjects::AssignProcessToJobObject,
         System::Threading::{
-            CREATE_NO_WINDOW, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
-            PROCESS_INFORMATION, STARTF_USESTDHANDLES, STARTUPINFOW, TerminateProcess,
+            CREATE_NO_WINDOW, CREATE_SUSPENDED, CREATE_UNICODE_ENVIRONMENT, CreateProcessAsUserW,
+            PROCESS_INFORMATION, ResumeThread, STARTF_USESTDHANDLES, STARTUPINFOW,
+            TerminateProcess,
         },
     };
     use windows::core::{PCWSTR, PWSTR};
@@ -901,7 +902,7 @@ pub fn spawn_restricted_with_stdio(
             None,
             None,
             true,
-            CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT,
+            CREATE_NO_WINDOW | CREATE_UNICODE_ENVIRONMENT | CREATE_SUSPENDED,
             Some(environment.as_ptr().cast()),
             PCWSTR(cwd_wide.as_ptr()),
             &startup,
@@ -936,6 +937,19 @@ pub fn spawn_restricted_with_stdio(
         return Err(IsolationError::Bind(format!(
             "AssignProcessToJobObject(restricted child): {error}"
         )));
+    }
+    // The child was created suspended so no untrusted instruction can run
+    // between CreateProcessAsUserW and assignment to the kill-on-close Job.
+    // Resume only after every mandatory boundary is in place.
+    if unsafe { ResumeThread(process.hThread) } == u32::MAX {
+        unsafe {
+            let _ = TerminateProcess(process.hProcess, 1);
+            let _ = CloseHandle(process.hThread);
+            let _ = CloseHandle(process.hProcess);
+        }
+        return Err(IsolationError::Bind(
+            "ResumeThread(restricted child) failed".into(),
+        ));
     }
     unsafe {
         let _ = CloseHandle(process.hThread);

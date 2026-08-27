@@ -78,8 +78,9 @@ nav_order: 3
   `DISABLE_MAX_PRIVILEGE` + `WinRestrictedCodeSid`）与保留 stdio 的受管 spawn
   （`spawn_restricted_with_stdio`：匿名管道 + `STARTF_USESTDHANDLES` + `CreateProcessAsUserW`，
   真实 Windows 测试证明受限令牌子进程可正常产出 stdout）；
-- [未做] `RuntimeProcess` I/O 重构（`Child` → `ManagedChild` raw-handle 抽象）与
-  `ALEX_RESTRICT_BACKENDS` 接线——受限 spawn 已就绪，缺 supervisor 侧适配；
+- [已完成基础] `RuntimeProcess` 已使用可管理普通/受限进程的抽象，`ALEX_RESTRICT_BACKENDS=1`
+  将 Supervisor 的 RPC 与 service backend 接入 Restricted Token、受管 stdio 和 Job Object；
+  受限子进程会先以 suspended 状态创建，完成 Job 绑定后才恢复执行；
 - [未做] backend 文件、进程和网络策略强制执行（当前为「声明即拒绝」，未到「声明即强制」）；
 - [未做] 权限撤销与审计覆盖实际服务进程。
 
@@ -283,7 +284,8 @@ capabilities 明确报告，不能静默降级。
 - 更新下载集成测试和故障注入；
 - Windows 多版本兼容矩阵；
 - 性能、内存和长时间稳定性基准；
-- 依赖漏洞扫描、许可证检查和 SBOM；
+- [已完成基础] CI 对锁定 Rust 依赖执行漏洞审计、PR 依赖/许可证审查，并生成 CycloneDX SBOM；
+  发布产物恶意软件扫描、签名与可复现构建证明仍待完成；
 - API 文档生成；
 - ADR、协议规范和 Manifest JSON Schema；
 - 正式版本策略和兼容性承诺。
