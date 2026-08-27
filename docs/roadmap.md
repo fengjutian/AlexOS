@@ -270,6 +270,8 @@ capabilities 明确报告，不能静默降级。
 
 ## 工程质量未完成项
 
+- 按 [`tauri-lessons.md`](./tauri-lessons.md) A0-A3 落地权限/Schema 单一来源、统一 IPC SDK、官方模板、
+  插件 contract tests 和 Windows 打包更新工程化；
 - 执行 [`release-gates.md`](./release-gates.md) 的 v0.1/Preview/Stable evidence 门禁；
 - 落地 [`compatibility-migration-support-policy.md`](./compatibility-migration-support-policy.md) 的协议矩阵、
   迁移 fixture 和支持窗口；
@@ -311,6 +313,7 @@ capabilities 明确报告，不能静默降级。
 - [`compatibility-migration-support-policy.md`](./compatibility-migration-support-policy.md) — 协议、数据与支持周期；
 - [`resource-scheduling-fault-domains.md`](./resource-scheduling-fault-domains.md) — 全局调度与故障隔离；
 - [`release-gates.md`](./release-gates.md) — Developer Preview、Preview 和 Stable 统一发布门禁；
+- [`tauri-lessons.md`](./tauri-lessons.md) — 可借鉴的 Tauri 工程实践、当前差距和分版本落地顺序；
 - [`app-manager-ui-design.md`](./app-manager-ui-design.md) — §3.2 权限设置 UI、§3.4 安装器 UI 的设计提案；
 - [`alex-container-design.md`](./alex-container-design.md) — §3.1 Job Object、§3.10 0.3 AppContainer、§3.13 OCI 的详细分阶段计划；
 - [`DESKTOP_API_STATUS.md`](./DESKTOP_API_STATUS.md) — 每个 API 的"待 wired"项对应 P0 §3.2 / P1 §3.5。

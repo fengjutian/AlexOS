@@ -334,6 +334,8 @@ Alex OS 一共**三条独立协议通道 + 一条复用变体**。下表里 Reve
   准入、优先级、压力处理和进程故障域；
 - [`ai-product-roadmap.md`](./ai-product-roadmap.md) — Model Router、Eval 与 Knowledge Service 产品路线；
 - [`release-gates.md`](./release-gates.md) — 不同成熟度的发布 evidence 和强制门禁；
+- [`tauri-lessons.md`](./tauri-lessons.md) — 结合当前实现对 Tauri 权限工程、Schema、IPC、插件、
+  打包更新和故障隔离实践的选择性借鉴；
 
 按"新人 20 分钟入门"读：
 
