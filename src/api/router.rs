@@ -1,4 +1,5 @@
 use std::{
+    collections::VecDeque,
     fs,
     path::{Path, PathBuf},
     sync::Arc,
@@ -62,6 +63,9 @@ pub struct ApiRouter {
     /// this on; the production shell does not. Off by default
     /// because a polling page would otherwise log every frame.
     permission_log: Arc<std::sync::atomic::AtomicBool>,
+    request_identity: crate::identity::RequestIdentity,
+    authorization_sequence: std::sync::atomic::AtomicU64,
+    shadow_differences: Arc<Mutex<VecDeque<crate::policy::ShadowDifference>>>,
 }
 
 #[derive(Default)]
@@ -110,6 +114,20 @@ impl ApiRouter {
         let windows = WindowRegistry::new();
         let menu_store = MenuStore::new();
         let process_registry = ProcessRegistry::new();
+        let app_principal = crate::identity::PrincipalId::application(&manifest.id)
+            .expect("validated manifest application id");
+        let request_identity = crate::identity::RequestIdentity {
+            identity: crate::identity::Identity {
+                principal_id: app_principal.clone(),
+                authentication: crate::identity::AuthenticationMethod::AppLaunchToken,
+                session_id: format!("router_{}", std::process::id()),
+                issued_at_ms: now_ms(),
+                expires_at_ms: None,
+                assurance: crate::identity::AssuranceLevel::ProcessBound,
+                claims: Default::default(),
+            },
+            actor_chain: crate::identity::ActorChain::new(app_principal),
+        };
         Self {
             package_root,
             manifest,
@@ -133,6 +151,9 @@ impl ApiRouter {
                 crate::runtime::stream::StreamLimits::default(),
             )),
             permission_log: Arc::new(std::sync::atomic::AtomicBool::new(false)),
+            request_identity,
+            authorization_sequence: std::sync::atomic::AtomicU64::new(1),
+            shadow_differences: Arc::new(Mutex::new(VecDeque::new())),
         }
     }
 
@@ -439,12 +460,66 @@ impl ApiRouter {
         predicate: impl Fn(&Permission) -> bool,
         name: &'static str,
     ) -> Result<(), (&'static str, String)> {
-        let declared =
-            self.manifest.permissions.iter().any(predicate) && self.permission_granted(name);
-        declared.then_some(()).ok_or((
+        let manifest_declared = self.manifest.permissions.iter().any(predicate);
+        let user_granted = self.permission_granted(name);
+        let allowed = manifest_declared && user_granted;
+        self.shadow_authorize_permission(name, manifest_declared, user_granted, allowed);
+        allowed.then_some(()).ok_or((
             "PERMISSION_DENIED",
             format!("{name} is not allowed or was revoked"),
         ))
+    }
+
+    fn shadow_authorize_permission(
+        &self,
+        action: &str,
+        manifest_declared: bool,
+        user_granted: bool,
+        legacy_allowed: bool,
+    ) {
+        let sequence = self
+            .authorization_sequence
+            .fetch_add(1, std::sync::atomic::Ordering::Relaxed);
+        let request_id = format!("auth_{}_{}", std::process::id(), sequence);
+        let owner = self.request_identity.actor_chain.initiator.clone();
+        let Ok(resource) = crate::policy::Resource::capability(owner, action) else {
+            return;
+        };
+        let request = crate::policy::AuthorizationRequest {
+            request_id,
+            caller: self.request_identity.clone(),
+            action: action.into(),
+            resource,
+            context: Default::default(),
+        };
+        let decision = crate::policy::ShadowPolicyEngine::evaluate(
+            &request,
+            crate::policy::CompatibilityFacts {
+                action_registered: super::idl_generated::PERMISSION_KINDS.contains(&action),
+                platform_supported: true,
+                manifest_declared,
+                user_granted,
+                resource_allowed: true,
+                delegation_valid: true,
+            },
+            now_ms(),
+        );
+        if let Some(difference) =
+            crate::policy::ShadowDifference::between(&request, legacy_allowed, &decision)
+            && let Ok(mut differences) = self.shadow_differences.lock()
+        {
+            if differences.len() >= 128 {
+                differences.pop_front();
+            }
+            eprintln!(
+                "alex: authorization shadow mismatch action={} legacy={} shadow={} reason={:?}",
+                difference.action,
+                difference.legacy_allowed,
+                difference.shadow_allowed,
+                difference.shadow_reason
+            );
+            differences.push_back(difference);
+        }
     }
 
     fn has_permission_for(&self, operation: &str, _path: &Path) -> bool {
@@ -452,20 +527,31 @@ impl ApiRouter {
         // scope-validated by `resolve_scoped_path` before
         // reaching here, so this just confirms the app
         // declared the permission at all.
-        self.manifest
-            .permissions
-            .iter()
-            .any(|permission| permission.paths_for(operation).is_some())
-            && self.permission_granted(operation)
-    }
-
-    fn require_runtime_manage(&self) -> Result<(), (&'static str, String)> {
-        let allowed = self
+        let manifest_declared = self
             .manifest
             .permissions
             .iter()
-            .any(|permission| matches!(permission, Permission::RuntimeManage))
-            && self.permission_granted("runtime.manage");
+            .any(|permission| permission.paths_for(operation).is_some());
+        let user_granted = self.permission_granted(operation);
+        let allowed = manifest_declared && user_granted;
+        self.shadow_authorize_permission(operation, manifest_declared, user_granted, allowed);
+        allowed
+    }
+
+    fn require_runtime_manage(&self) -> Result<(), (&'static str, String)> {
+        let manifest_declared = self
+            .manifest
+            .permissions
+            .iter()
+            .any(|permission| matches!(permission, Permission::RuntimeManage));
+        let user_granted = self.permission_granted("runtime.manage");
+        let allowed = manifest_declared && user_granted;
+        self.shadow_authorize_permission(
+            "runtime.manage",
+            manifest_declared,
+            user_granted,
+            allowed,
+        );
         allowed.then_some(()).ok_or((
             "PERMISSION_DENIED",
             "runtime.manage is not allowed or was revoked".into(),

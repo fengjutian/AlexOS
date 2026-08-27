@@ -8,6 +8,7 @@ pub mod manifest;
 pub mod manifest_v2;
 pub mod package;
 pub mod plugin;
+pub mod policy;
 pub mod trust;
 pub mod update;
 pub mod update_tasks;
