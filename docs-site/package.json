@@ -5,7 +5,8 @@
   "scripts": {
     "dev": "next dev",
     "build": "next build",
-    "start": "next start"
+    "start": "next start",
+    "postinstall": "node scripts/patch-nextra.mjs"
   },
   "dependencies": {
     "next": "^15.3.0",
@@ -13,5 +14,8 @@
     "nextra-theme-docs": "^4.0.0",
     "react": "^19.0.0",
     "react-dom": "^19.0.0"
+  },
+  "overrides": {
+    "zod": "4.3.6"
   }
 }
