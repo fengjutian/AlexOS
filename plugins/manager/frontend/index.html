@@ -6,12 +6,28 @@
     <link rel="stylesheet" href="app.css" />
   </head>
   <body>
-    <header>
-      <h1>Alex OS Manager</h1>
-      <p id="subtitle">Self-hosted by <code>com.alex.manager</code> via reverse IPC.</p>
-    </header>
-    <main>
-      <section>
+    <div class="app-shell">
+      <aside class="sidebar">
+        <div class="brand" aria-label="Alex Runtime">
+          <span class="brand-mark" aria-hidden="true">A</span>
+          <span><strong>Alex</strong><small>Runtime Manager</small></span>
+        </div>
+        <nav aria-label="Manager navigation">
+          <a class="nav-item active" href="#applications">Applications</a>
+          <a class="nav-item" href="#updates">Updates</a>
+          <a class="nav-item" href="#services">Services</a>
+          <a class="nav-item" href="#security">Security</a>
+          <a class="nav-item" href="#system">System</a>
+        </nav>
+        <p class="sidebar-foot">Developer Preview<br /><code>com.alex.manager</code></p>
+      </aside>
+      <div class="workspace">
+        <header class="topbar">
+          <div><p class="eyebrow">LOCAL APPLICATION RUNTIME</p><h1>Application Manager</h1><p id="subtitle">Install, inspect and control applications running on this device.</p></div>
+          <span class="host-badge"><i></i> Local host</span>
+        </header>
+        <main>
+      <section id="applications" class="card install-card">
         <h2>Install a package</h2>
         <p class="hint">
           Enter the absolute path of a <code>.alex</code> archive on
@@ -30,8 +46,8 @@
         </div>
         <p id="install-status"></p>
       </section>
-      <section>
-        <h2>Installed applications</h2>
+      <section class="card applications-card">
+        <div class="section-heading"><div><p class="eyebrow">LIBRARY</p><h2>Installed applications</h2></div><button id="refresh" type="button">Refresh</button></div>
         <div class="apps-toolbar">
           <input
             id="app-search"
@@ -52,33 +68,28 @@
             <button type="button" class="chip" data-filter="crashed" role="tab" aria-selected="false">Crashed</button>
             <button type="button" class="chip" data-filter="stopped" role="tab" aria-selected="false">Stopped</button>
           </div>
-          <button id="refresh" type="button">Refresh</button>
         </div>
         <p id="status">Loading…</p>
         <ul id="apps"></ul>
       </section>
-      <section>
+      <section id="updates" class="card">
+        <p class="eyebrow">DELIVERY</p><h2>Update tasks</h2>
+        <p class="hint">Background updates remain visible after navigation and can be cancelled or retried.</p>
+        <p id="update-status">Loading...</p><ul id="update-tasks"></ul>
+      </section>
+      <section id="services" class="card">
+        <p class="eyebrow">RUNTIME</p><h2>Services</h2>
+        <p class="hint">Long-running backend services currently managed by Alex Runtime.</p>
+        <p id="services-status">Loading…</p><ul id="services"></ul>
+      </section>
+      <section class="card">
+        <p class="eyebrow">EXTENSIBILITY</p>
         <h2>Plugin extension points</h2>
         <p id="extension-status">Loading…</p>
         <ul id="extensions"></ul>
       </section>
-      <section>
-        <h2>Update tasks</h2>
-        <p class="hint">Background updates remain visible after navigation and can be cancelled or retried.</p>
-        <p id="update-status">Loading...</p>
-        <ul id="update-tasks"></ul>
-      </section>
-      <section>
-        <h2>Services</h2>
-        <p class="hint">
-          Long-running backend runtimes (service mode). Derived from
-          the same <code>system.listApps</code> payload as the
-          Applications list, filtered to runtimes that are alive.
-        </p>
-        <p id="services-status">Loading…</p>
-        <ul id="services"></ul>
-      </section>
-      <section>
+      <section id="security" class="card">
+        <p class="eyebrow">SECURITY</p>
         <h2>Trust store</h2>
         <p class="hint">
           Publishers whose signature is accepted at install time. A
@@ -88,7 +99,8 @@
         <p id="trust-status">Loading…</p>
         <ul id="trust"></ul>
       </section>
-      <section>
+      <section class="card">
+        <p class="eyebrow">SECURITY</p>
         <h2>Audit log</h2>
         <p class="hint">
           Most recent permission decisions across every installed
@@ -98,7 +110,8 @@
         <p id="audit-status">Loading…</p>
         <ul id="audit" class="audit-list"></ul>
       </section>
-      <section>
+      <section id="system" class="card">
+        <p class="eyebrow">ENVIRONMENT</p>
         <h2>Host info</h2>
         <p class="hint">
           Read-only snapshot of the running host. Sourced from
@@ -107,7 +120,9 @@
         </p>
         <dl id="host-info" class="host-info"></dl>
       </section>
-    </main>
+        </main>
+      </div>
+    </div>
     <script src="app.js"></script>
   </body>
 </html>
