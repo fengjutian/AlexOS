@@ -71,7 +71,7 @@ security-framework = "3.5.1"
 version = "0.22.1"
 
 [dependencies.ed25519-dalek]
-version = "2.2.0"
+version = "3.0.0"
 features = ["rand_core"]
 
 [dependencies.rand_core]
