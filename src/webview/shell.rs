@@ -860,6 +860,33 @@ pub mod windows {
         let sequence = std::time::SystemTime::now()
             .duration_since(std::time::UNIX_EPOCH)?
             .as_nanos();
+        // Startup recovery may already have launched an application whose
+        // durable desired state is `running`. Opening another window for that
+        // app must reuse the live runtime instead of failing with
+        // `AlreadyRunning`.
+        let status_request = crate::daemon::ControlRequest {
+            protocol: crate::daemon::PROTOCOL_VERSION,
+            id: format!("shell-status-{}-{sequence}", std::process::id()),
+            identity: None,
+            command: crate::daemon::ControlCommand::Status {
+                app_id: app_id.to_owned(),
+            },
+        };
+        let status_response = crate::daemon::send_request(pipe, &status_request)?;
+        if status_response.protocol != crate::daemon::PROTOCOL_VERSION
+            || status_response.id != status_request.id
+        {
+            return Err("alexd returned a mismatched status response".into());
+        }
+        if status_response.ok
+            && status_response
+                .result
+                .as_ref()
+                .is_some_and(runtime_status_is_active)
+        {
+            return Ok(());
+        }
+
         let request = crate::daemon::ControlRequest {
             protocol: crate::daemon::PROTOCOL_VERSION,
             id: format!("shell-start-{}-{sequence}", std::process::id()),
@@ -873,12 +900,43 @@ pub mod windows {
             return Err("alexd returned a mismatched start response".into());
         }
         if !response.ok {
-            return Err(response
+            let error = response
                 .error
-                .unwrap_or_else(|| "alexd failed to start application".into())
-                .into());
+                .unwrap_or_else(|| "alexd failed to start application".into());
+            // Another caller can win the race between Status and Start. The
+            // resulting runtime is exactly the state this shell needs.
+            if error.contains("already running") {
+                return Ok(());
+            }
+            return Err(error.into());
         }
         Ok(())
+    }
+
+    fn runtime_status_is_active(value: &serde_json::Value) -> bool {
+        matches!(
+            value.get("state").and_then(serde_json::Value::as_str),
+            Some("starting" | "running" | "ready")
+        )
+    }
+
+    #[cfg(test)]
+    mod daemon_start_tests {
+        use super::runtime_status_is_active;
+
+        #[test]
+        fn active_runtime_states_are_reused_by_the_shell() {
+            for state in ["starting", "running", "ready"] {
+                assert!(runtime_status_is_active(
+                    &serde_json::json!({ "state": state })
+                ));
+            }
+            for state in ["stopped", "crashed", "unknown"] {
+                assert!(!runtime_status_is_active(
+                    &serde_json::json!({ "state": state })
+                ));
+            }
+        }
     }
 
     pub fn asset_response(
