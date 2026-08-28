@@ -17,6 +17,12 @@ $alex = Join-Path $repoRoot "target\release\alex.exe"
 $installRoot = if ($env:ALEX_INSTALL_ROOT) { $env:ALEX_INSTALL_ROOT } else { Join-Path $repoRoot "target\apps" }
 $pluginDir = Join-Path $repoRoot "plugins\manager"
 $archive = Join-Path $repoRoot "target\manager.alex"
+$daemonRoot = Join-Path $repoRoot "target\alexd"
+$daemonState = Join-Path $daemonRoot "state.json"
+$permissionsRoot = Join-Path $daemonRoot "permissions"
+$daemonStdout = Join-Path $daemonRoot "stdout.log"
+$daemonStderr = Join-Path $daemonRoot "stderr.log"
+$daemonPipe = "\\.\pipe\alex-runtime-v1"
 
 # 1. Make sure release binary is up to date.
 Write-Host "==> cargo build --release" -ForegroundColor Cyan
@@ -51,6 +57,52 @@ if ($LASTEXITCODE -ne 0) { throw "pack failed" }
 & $alex install $archive --root $installRoot
 if ($LASTEXITCODE -ne 0) { throw "install failed" }
 
-# 6. Launch. This blocks until the WebView window is closed.
-Write-Host "==> launching alex manager (close the WebView window to exit)" -ForegroundColor Green
-& $alex manager --install-root $installRoot
+# 6. The production shell starts plugin backends through alexd. Reuse an
+#    existing daemon when present; otherwise own one for this session.
+$ownsDaemon = -not (Test-Path -LiteralPath $daemonPipe)
+$daemonProcess = $null
+if ($ownsDaemon) {
+    New-Item -ItemType Directory -Path $daemonRoot -Force | Out-Null
+    Write-Host "==> starting alex daemon" -ForegroundColor Cyan
+    $daemonProcess = Start-Process -FilePath $alex `
+        -ArgumentList @(
+            "daemon",
+            "--state", $daemonState,
+            "--pipe", $daemonPipe,
+            "--install-root", $installRoot,
+            "--permissions-root", $permissionsRoot
+        ) `
+        -RedirectStandardOutput $daemonStdout `
+        -RedirectStandardError $daemonStderr `
+        -WindowStyle Hidden `
+        -PassThru
+
+    $deadline = [DateTime]::UtcNow.AddSeconds(15)
+    while (-not (Test-Path -LiteralPath $daemonPipe)) {
+        if ($daemonProcess.HasExited) {
+            $details = if (Test-Path -LiteralPath $daemonStderr) { Get-Content -LiteralPath $daemonStderr -Raw } else { "no daemon log" }
+            throw "alex daemon exited during startup: $details"
+        }
+        if ([DateTime]::UtcNow -ge $deadline) {
+            Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
+            throw "alex daemon did not create $daemonPipe within 15 seconds"
+        }
+        Start-Sleep -Milliseconds 100
+    }
+}
+
+try {
+    # 7. Launch. This blocks until the WebView window is closed.
+    Write-Host "==> launching alex manager (close the WebView window to exit)" -ForegroundColor Green
+    & $alex manager --install-root $installRoot --pipe $daemonPipe
+    if ($LASTEXITCODE -ne 0) { throw "manager failed with exit code $LASTEXITCODE" }
+} finally {
+    if ($ownsDaemon -and $daemonProcess -and -not $daemonProcess.HasExited) {
+        Write-Host "==> stopping alex daemon" -ForegroundColor DarkGray
+        & $alex shutdown --pipe $daemonPipe 2>$null | Out-Null
+        $daemonProcess.WaitForExit(5000) | Out-Null
+        if (-not $daemonProcess.HasExited) {
+            Stop-Process -Id $daemonProcess.Id -Force -ErrorAction SilentlyContinue
+        }
+    }
+}

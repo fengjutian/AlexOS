@@ -39,6 +39,7 @@ cargo run --offline -- --help
 
 ## 文档
 
+- [应用开发与操作文档（Nextra）](docs-site/README.md)
 - [文档首页](docs/index.md)
 - [当前实现状态](docs/status.md)
 - [开发路线图](docs/roadmap.md)

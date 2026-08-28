@@ -12,7 +12,7 @@ export const metadata = {
 const navbar = (
   <Navbar
     logo={<span className="alex-logo"><b>Alex</b><small>Runtime Docs</small></span>}
-    projectLink="https://github.com"
+    projectLink="https://github.com/fengjutian/AlexOS"
   />
 )
 
@@ -26,7 +26,7 @@ export default async function RootLayout({ children }) {
         <Layout
           navbar={navbar}
           pageMap={await getPageMap()}
-          docsRepositoryBase="https://github.com/AlexOS/AlexOS/tree/main/docs-site"
+          docsRepositoryBase="https://github.com/fengjutian/AlexOS/tree/main/docs-site"
           footer={footer}
           sidebar={{ autoCollapse: true, defaultMenuCollapseLevel: 1 }}
           navigation={{ prev: true, next: true }}
