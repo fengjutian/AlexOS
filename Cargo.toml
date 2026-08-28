@@ -34,7 +34,7 @@ arboard = "3.6.1"
 open = "5.3.6"
 rfd = { version = "0.16.0", default-features = false }
 tao = "0.35.3"
-wry = "0.55.1"
+wry = "0.56.1"
 webview2-com = "0.38.2"
 muda = { version = "0.19.3", default-features = false }
 tray-icon = { version = "0.24.1", default-features = false }
