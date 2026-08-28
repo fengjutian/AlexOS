@@ -821,6 +821,18 @@ packagePathInput.addEventListener("keydown", (event) => {
   }
 });
 
+// Keep the desktop navigation state in sync with the section the user opens.
+document.querySelectorAll(".nav-item").forEach((item) => {
+  item.addEventListener("click", () => {
+    document.querySelectorAll(".nav-item").forEach((other) => {
+      const active = other === item;
+      other.classList.toggle("active", active);
+      if (active) other.setAttribute("aria-current", "page");
+      else other.removeAttribute("aria-current");
+    });
+  });
+});
+
 async function browseForPackage() {
   // The host's `dialog.openFile` IPC is the only way a WebView can
   // surface a real native file picker — WebView2's `<input
