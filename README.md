@@ -14,6 +14,15 @@ cargo run -- shell examples/hello
 cargo run -- dev examples/desktop-api
 ```
 
+Windows Developer Preview 便携包可通过以下命令生成：
+
+```powershell
+.\scripts\build-windows-package.ps1
+```
+
+解压 `target/release-package/*.zip` 后，双击 `Alex Manager.cmd`。首次启动会把内置的 Manager
+安装到当前用户的 `%LOCALAPPDATA%\AlexRuntime\apps`，后续直接打开桌面管理器。
+
 查看当前 CLI，避免使用设计文档中尚未实现的目标命令：
 
 ```powershell

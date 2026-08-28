@@ -117,12 +117,15 @@ jobs:
         # Validates that the CLI surface builds and prints help on Windows;
         # the actual WebView is not started (it would block the runner).
         run: cargo run --offline -- manager --help
-      - name: Upload alex.exe
+      - name: Build Windows Developer Preview package
+        shell: pwsh
+        run: ./scripts/build-windows-package.ps1 -SkipBuild
+      - name: Upload Windows Developer Preview
         uses: actions/upload-artifact@v4
         with:
-          name: alex-windows
-          path: target/debug/alex.exe
-          if-no-files-found: warn
+          name: alex-windows-developer-preview
+          path: target/release-package/*.zip
+          if-no-files-found: error
 
   windows-node-matrix:
     name: Windows · Node ${{ matrix.node-version }}
