@@ -1,0 +1,12 @@
+.alex-logo { display: inline-flex; align-items: baseline; gap: .5rem; }
+.alex-logo b { font-size: 1.05rem; }
+.alex-logo small { color: #777; font-size: .72rem; font-weight: 500; }
+.hero { padding: 3rem 0 2rem; }
+.hero h1 { max-width: 760px; margin: 0; font-size: clamp(2.4rem, 6vw, 4.8rem); line-height: 1.05; letter-spacing: -.055em; }
+.hero p { max-width: 680px; margin: 1.25rem 0 0; color: #667085; font-size: 1.15rem; line-height: 1.8; }
+.quick-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 1rem; margin: 2rem 0; }
+.quick-card { display: block; padding: 1.4rem; border: 1px solid #e5e7eb; border-radius: 14px; color: inherit; text-decoration: none; transition: border-color .15s, transform .15s; }
+.quick-card:hover { border-color: #6d5ce7; transform: translateY(-2px); }
+.quick-card strong, .quick-card span { display: block; }
+.quick-card span { margin-top: .45rem; color: #667085; font-size: .9rem; }
+@media (max-width: 640px) { .quick-grid { grid-template-columns: 1fr; } }

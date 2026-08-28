@@ -1,0 +1,43 @@
+---
+title: 开始使用
+description: 安装并验证 Alex Runtime 的开发环境。
+---
+
+# 开始使用
+
+## 系统要求
+
+- Windows 10 或 Windows 11
+- Microsoft Edge WebView2 Runtime
+- 稳定版 Rust 工具链，支持 Rust 2024 edition
+- Node.js 20 或更高版本（应用包含 Node 后端或 React 前端时需要）
+
+## 构建 Runtime
+
+在仓库根目录运行：
+
+```powershell
+cargo build --release --locked
+```
+
+生成的程序位于 `target\release\alex.exe`。建议先执行环境诊断：
+
+```powershell
+.\target\release\alex.exe doctor
+```
+
+`doctor` 会检查 WebView2、Node.js 等运行条件。修复所有必需项后再创建应用。
+
+## 打开桌面管理器
+
+开发仓库中的一键入口会构建、打包并安装 Manager 插件：
+
+```powershell
+.\scripts\run-manager.ps1
+```
+
+若使用发行 ZIP，解压后直接双击 `Alex Manager.cmd`。首次运行会把 Manager 安装到当前用户目录。
+
+## 下一步
+
+继续阅读[创建应用](/create-app)，完成第一个窗口应用。

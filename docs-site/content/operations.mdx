@@ -1,0 +1,73 @@
+---
+title: 应用操作
+description: 安装、启动、停止、更新和卸载 Alex 应用。
+---
+
+# 应用操作
+
+## 使用桌面 Manager
+
+启动 `Alex Manager.cmd` 或在开发仓库中运行：
+
+```powershell
+.\scripts\run-manager.ps1
+```
+
+Manager 提供以下操作：
+
+- 浏览并安装 `.alex` 包
+- 搜索、筛选已安装应用
+- 查看 Runtime 状态、PID、端口和最近日志
+- 查看或更改应用权限
+- 启动、取消或重试更新任务
+- 查看受信任发布者和权限审计记录
+
+## 使用 CLI 安装
+
+```powershell
+alex install .\dist\hello-alex.alex --root .\target\apps
+alex list --root .\target\apps
+```
+
+不要安装来源不明的未签名包。受控环境可添加 `--require-signature`，并配置信任库。
+
+## 通过 Daemon 运行
+
+先在一个终端启动长期 Runtime：
+
+```powershell
+alex daemon --install-root .\target\apps
+```
+
+在另一个终端操作应用：
+
+```powershell
+alex start com.example.hello
+alex status com.example.hello
+alex logs com.example.hello --limit 100
+alex restart com.example.hello
+alex stop com.example.hello
+```
+
+结束 Daemon：
+
+```powershell
+alex shutdown
+```
+
+## 权限管理
+
+```powershell
+alex permissions list com.example.hello --root .\target\permissions
+alex permissions grant com.example.hello window.manage --root .\target\permissions
+alex permissions revoke com.example.hello window.manage --root .\target\permissions
+alex permissions audit com.example.hello --root .\target\permissions
+```
+
+## 卸载
+
+```powershell
+alex uninstall com.example.hello --root .\target\apps
+```
+
+卸载前确认应用 ID 和安装根目录。应用数据是否保留取决于当前 Runtime 数据目录策略，重要数据应先备份。

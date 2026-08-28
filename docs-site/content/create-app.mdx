@@ -1,0 +1,80 @@
+---
+title: 创建应用
+description: 使用 Alex CLI 创建、开发和构建桌面应用。
+---
+
+# 创建应用
+
+## 1. 选择模板
+
+Vanilla 模板不需要前端构建工具，适合快速验证：
+
+```powershell
+alex create .\hello-alex --id com.example.hello
+```
+
+React + TypeScript 模板适合正式界面：
+
+```powershell
+alex create .\hello-alex --id com.example.hello --template react-ts
+```
+
+应用 ID 应采用反向域名格式，并在发布后保持不变。
+
+## 2. 了解目录
+
+```text
+hello-alex/
+├─ manifest.json       # 身份、入口、权限和后端配置
+├─ frontend/           # WebView 用户界面
+└─ backend/            # 可选 Node.js 后端
+```
+
+React 模板的构建结果位于 `frontend/dist/`，其构建命令由 `manifest.json` 的 `frontend.build` 声明。
+
+## 3. 安装前端依赖
+
+仅 React 模板需要：
+
+```powershell
+Set-Location .\hello-alex\frontend
+npm install
+Set-Location ..\..
+```
+
+## 4. 启动开发模式
+
+```powershell
+alex dev .\hello-alex
+```
+
+开发模式会打开原生 WebView 窗口，并监听前端、后端和清单变化。开发模式下会启用 DevTools。
+
+## 5. 调用 Desktop API
+
+WebView 中可通过宿主注入的桥调用 API：
+
+```js
+const info = await window.alex.invoke('system.info', {})
+await window.alex.invoke('window.setTitle', { title: `Hello ${info.os}` })
+```
+
+调用受保护能力前，必须在清单中声明相应权限。宿主仍会执行运行时授权检查。
+
+## 6. 验证和构建
+
+```powershell
+alex validate .\hello-alex
+alex build .\hello-alex
+alex inspect .\hello-alex
+```
+
+Vanilla 应用没有 `frontend.build` 时无需执行 `alex build`。
+
+## 7. 打包
+
+```powershell
+alex package .\hello-alex .\dist\hello-alex.alex
+```
+
+完成后可在 Manager 中选择这个 `.alex` 文件安装，或使用 CLI 安装。

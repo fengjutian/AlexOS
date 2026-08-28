@@ -1,0 +1,29 @@
+---
+title: Alex Runtime 文档
+description: 创建、调试和管理 Windows 桌面应用。
+---
+
+<div className="hero">
+  <h1>构建运行在 Alex Runtime 上的桌面应用</h1>
+  <p>从创建项目、连接 Desktop API，到打包、安装和运行。这里提供一条基于当前 0.2 Developer Preview 的完整路径。</p>
+</div>
+
+<div className="quick-grid">
+  <a className="quick-card" href="/getting-started"><strong>开始使用</strong><span>准备 Windows、Rust、Node.js 与 WebView2 环境。</span></a>
+  <a className="quick-card" href="/create-app"><strong>创建第一个应用</strong><span>使用 Vanilla 或 React + TypeScript 模板。</span></a>
+  <a className="quick-card" href="/operations"><strong>安装与管理</strong><span>通过桌面 Manager 或 CLI 操作应用。</span></a>
+  <a className="quick-card" href="/cli-reference"><strong>CLI 速查</strong><span>查找开发、打包和运行命令。</span></a>
+</div>
+
+> [!WARNING]
+> 当前版本是 Windows Developer Preview。请只运行自己开发或来源可信的应用包。
+
+## 最短路径
+
+```powershell
+cargo build --release --locked
+.\target\release\alex.exe create .\my-app --id com.example.my_app
+.\target\release\alex.exe dev .\my-app
+```
+
+开发窗口打开后，修改 `my-app/frontend/` 下的文件即可看到刷新结果。

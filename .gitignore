@@ -2,4 +2,7 @@
 target/
 .alex/
 *.log
+docs-site/node_modules/
+docs-site/.next/
+docs-site/out/
 .reasonix

@@ -1,0 +1,28 @@
+---
+title: CLI 速查
+description: Alex Runtime 常用命令一览。
+---
+
+# CLI 速查
+
+| 目标 | 命令 |
+| --- | --- |
+| 检查环境 | `alex doctor` |
+| 创建 Vanilla 应用 | `alex create <path> --id <id>` |
+| 创建 React 应用 | `alex create <path> --id <id> --template react-ts` |
+| 开发模式 | `alex dev <path>` |
+| 构建前端 | `alex build <path>` |
+| 验证应用 | `alex validate <path>` |
+| 查看规范化清单 | `alex inspect <path>` |
+| 打开应用窗口 | `alex shell <path>` |
+| 打包应用 | `alex package <path> <output.alex>` |
+| 安装应用 | `alex install <archive> --root <apps>` |
+| 打开 Manager | `alex manager --install-root <apps>` |
+| 启动 Daemon | `alex daemon --install-root <apps>` |
+| 查看应用 | `alex list --root <apps>` |
+| 启停应用 | `alex start/stop/restart <id>` |
+| 查看状态 | `alex status <id>` |
+| 查看日志 | `alex logs <id> --limit 200` |
+| 卸载应用 | `alex uninstall <id> --root <apps>` |
+
+运行 `alex --help` 或 `alex <command> --help` 查看当前二进制提供的完整参数。设计文档中的路线图命令不一定已实现，应以 CLI 帮助为准。
