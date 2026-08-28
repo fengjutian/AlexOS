@@ -147,7 +147,7 @@ AI Application
   alex build
        │
        ▼
-     .alx
+    .alex
        │
        ▼
  Alex Registry
@@ -213,8 +213,8 @@ Daemon 是应用 desired state、服务状态、日志和恢复信息的唯一�
 
 ## 4. Application Package
 
-目标规范包扩展名为 `.alx`。当前 CLI 只正式生成和声明 `.alex`；双扩展名兼容属于尚未完成的
-迁移工作，不能把 `.alx` 示例当作当前可执行命令。
+应用包的当前实现与目标规范统一使用 `.alex` 扩展名。CLI、Registry、更新清单和跨平台切片
+不再规划第二种应用包扩展名。
 
 目标目录示例：
 

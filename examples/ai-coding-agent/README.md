@@ -90,7 +90,7 @@ both packages.
 # From this directory, build the frontend first so dist/ exists.
 npm run build
 cd ..
-cargo run --manifest-path ../../Cargo.toml -- pack . ../../target/ai-coding-agent.alx
+cargo run --manifest-path ../../Cargo.toml -- pack . ../../target/ai-coding-agent.alex
 ```
 
 Configure the Runtime's Ollama provider and make `qwen3` available before

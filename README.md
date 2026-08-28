@@ -14,14 +14,57 @@ cargo run -- shell examples/hello
 cargo run -- dev examples/desktop-api
 ```
 
-Windows Developer Preview 便携包可通过以下命令生成：
+## 打包
+
+### Windows Runtime 便携包
+
+在项目根目录执行：
 
 ```powershell
 .\scripts\build-windows-package.ps1
 ```
 
-解压 `target/release-package/*.zip` 后，双击 `Alex Manager.cmd`。首次启动会把内置的 Manager
-安装到当前用户的 `%LOCALAPPDATA%\AlexRuntime\apps`，后续直接打开桌面管理器。
+脚本会使用 `Cargo.lock` 编译 Release 可执行文件、打包内置 Manager，并生成发布清单、
+SHA-256 校验和便携 ZIP。产物位于：
+
+```text
+target\release-package\alex-runtime-<version>-windows-x64.zip
+```
+
+解压后双击 `Alex Manager.cmd`。首次启动会把内置 Manager 安装到当前用户的
+`%LOCALAPPDATA%\AlexRuntime\apps`，后续可直接打开桌面管理器。已经执行过 Release 编译时，
+可使用 `-SkipBuild` 仅重新组装发布包。
+
+### Alex 应用包
+
+推荐使用 `package`，一步完成已配置的前端构建、Manifest 校验和 `.alex` 打包：
+
+```powershell
+cargo run --release -- package examples\desktop-api target\desktop-api.alex
+```
+
+如果应用已经构建完成，可使用 `pack` 直接封装现有产物：
+
+```powershell
+cargo run --release -- pack examples\hello target\hello.alex
+```
+
+正式分发时应生成发布者密钥并签名：
+
+```powershell
+cargo run --release -- keygen target\publisher-key.json
+cargo run --release -- package examples\desktop-api target\desktop-api-signed.alex `
+  --sign target\publisher-key.json
+```
+
+可在本地安装目录验证产物：
+
+```powershell
+cargo run --release -- install target\desktop-api.alex --root target\apps
+```
+
+应用包的统一扩展名是 `.alex`。Manifest v1 使用 `manifest.json`，Manifest v2 使用
+`app.yaml`。
 
 查看当前 CLI，避免使用设计文档中尚未实现的目标命令：
 
@@ -31,7 +74,7 @@ cargo run --offline -- --help
 
 ## 当前边界
 
-- 当前包扩展名是 `.alex`；`.alx` 是尚未完成迁移的目标名称。
+- 应用包扩展名统一为 `.alex`。
 - Manifest v1 使用 `manifest.json`，Manifest v2 使用 `app.yaml`。
 - `alex dev` 提供热重载；`examples/desktop-api` 还内置开发模式 MCP endpoint。
 - 不应运行来源不明的 Node backend、Native Worker 或未受信任应用包。

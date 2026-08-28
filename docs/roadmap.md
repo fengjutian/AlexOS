@@ -226,13 +226,13 @@ nav_order: 3
 - Linux AppImage/deb/rpm；
 - 平台 CI 和 GUI 自动化。
 
-验收标准：同一个兼容 `.alx` 应用可以在 Windows、macOS 和 Linux 安装运行，平台能力差异通过
+验收标准：同一个兼容 `.alex` 应用可以在 Windows、macOS 和 Linux 安装运行，平台能力差异通过
 capabilities 明确报告，不能静默降级。
 
 ### 3.9 Android、HarmonyOS 与 iOS
 
 - 定义 Mobile Runtime Profile，明确 Web、WASM、Agent Workflow、Model 和 MCP Client 为首批可移植执行类型；
-- `.alx` 支持 common slice，以及 Android、HarmonyOS、iOS 的架构与平台切片；
+- `.alex` 支持 common slice，以及 Android、HarmonyOS、iOS 的架构与平台切片；
 - Registry 按 OS、系统版本、CPU 架构和 Runtime 能力解析并下发兼容切片；
 - Android WebView Shell，以及 Kotlin/JNI 到 Rust Core 的平台适配层；
 - HarmonyOS ArkWeb Shell，以及 ArkTS/Node-API 到 Rust/C++ Core 的平台适配层；

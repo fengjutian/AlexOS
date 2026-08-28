@@ -29,11 +29,11 @@ The first run installs frontend dependencies, starts Vite on
 `strictPort`, so an occupied port fails fast instead of silently
 drifting.
 
-For a production build and a packaged `.alx` archive:
+For a production build and a packaged `.alex` archive:
 
 ```powershell
 cargo run -- build examples/desktop-api
-cargo run -- pack  examples/desktop-api target/desktop-api.alx
+cargo run -- pack  examples/desktop-api target/desktop-api.alex
 ```
 
 ## Frontend layout

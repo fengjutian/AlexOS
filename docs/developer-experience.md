@@ -12,7 +12,7 @@ nav_order: 9
 > 和 [`roadmap.md`](./roadmap.md) 为准。
 
 当前可用命令请运行 `cargo run --offline -- --help`。其中 `create`、`dev`、`build`、`pack`、
-`install` 已存在；`test`、`package`、`publish`、`login`、`dashboard` 和 `mcp add` 是目标命令，
+`install` 和 `package` 已存在；`test`、`publish`、`login`、`dashboard` 和 `mcp add` 是目标命令，
 尚未实现。
 
 ## 0. 设计原则
@@ -437,8 +437,8 @@ dist/
 └── coding-agent.alex
 ```
 
-当前 `.alex` 是 **AI Application Package**，不是 Docker Image。`.alx` 是规划中的规范扩展名，
-CLI 双轨兼容尚未完成。
+`.alex` 是统一的 **AI Application Package** 扩展名，不是 Docker Image。CLI、Registry 和
+更新清单均应使用该扩展名。
 
 ## 13. 当前 `.alex` 包结构
 
@@ -592,7 +592,7 @@ alex dev
    ↓
 alex build
    ↓
-.alex（当前）→ .alx（目标）
+.alex
 ```
 
 也就是:
@@ -618,7 +618,7 @@ HarmonyOS / Mobile / Enterprise。
 | 3 | `alex create` 交互式问题 + 4 模板(react-ts / vue-ts / py-fastapi / rust) | 3-4 天 | 未开始 |
 | 4 | 受管 Node Runtime(§0.3 阶段一)+ `alex dev` 拉起 node 不用 PATH | 1 周+ | 未开始 |
 | 5 | `alex dashboard` + `alex test --sandbox` 落地 | 1 周 | 未开始 |
-| 6 | `.alex` → `.alx` 改名 + 双轨过渡 + Registry MVP | 1-2 周 | 未开始 |
+| 6 | `.alex` Registry MVP + 发布/更新流程 | 1-2 周 | 未开始 |
 
 不试图一次凑齐所有 5-6 周;Step 1 跑通就能让"30 分钟 demo"成立 80%,Step 4 是真正
 "开箱即用"门槛,可以分两期(0.1.1 + 0.1.2)。
