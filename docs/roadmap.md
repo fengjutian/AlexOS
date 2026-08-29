@@ -121,7 +121,7 @@ nav_order: 3
 - Node 随 Alex OS 安装并固定受支持版本（属 §0.3 受管 Runtime，未做）；
 - [已完成] 单请求并发、响应乱序关联和单请求取消（`runtime_handle_multiplexes_and_cancels_without_killing_backend`）；
 - 结构化日志级别、日志文件轮转和诊断导出（`runtime/log_file` 已 wired 轮转，结构化级别未做）；
-- CPU/内存/子进程数量限制（未做）；
+- [已完成] CPU/内存/子进程数量限制（Windows Job Object）；
 - [已完成] Windows Job Object 管理完整进程树（`container::isolation::job_provider` + `JOB_OBJECT_LIMIT_KILL_ON_JOB_CLOSE`，测试 `job_provider_kills_process_on_handle_drop` 通过）；
 - [已部分] Shell 异常退出后的孤儿进程回收（Job Object RAII Drop 已 wired；明确的"Shell 异常退出"路径单测未补）。
 
@@ -162,7 +162,8 @@ nav_order: 3
 
 - GitHub Actions 或等效 CI；
 - 格式、Clippy、Rust 测试、SDK 测试和 Windows 构建流水线；
-- MSI/MSIX 或签名安装器；
+- [已完成基础] WiX v4 MSI 构建、SHA-256 校验和，以及证书存储 thumbprint 驱动的
+  `alex.exe`/MSI Authenticode 签名与 RFC 3161 时间戳；生产证书和干净 Windows 安装验收待发布环境完成；
 - WebView2 Bootstrapper/Runtime 检查；
 - Alex Shell 本身的代码签名和自动更新；
 - Release 产物、校验和和变更日志。

@@ -136,12 +136,13 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 - 外部导航、新窗口和下载拦截；
 - 临时 WebView 会话；
 - Debug 环境显式启用 DevTools；
-- 焦点、尺寸和位置事件。
+- 焦点、尺寸和位置事件；
+- 多窗口创建、枚举、位置/尺寸控制、销毁与无边框全屏；
+- 应用菜单、上下文菜单、托盘图标与全局快捷键，并把点击/触发事件回传给应用；
+- 主窗口和子窗口文件拖放，返回受权限约束的临时文件令牌。
 
 限制：
 
-- 单窗口；
-- 没有菜单、托盘、快捷键、拖放和全屏 API；
 - 没有持久 Cookie/Profile 管理；
 - CSP 仍允许内联脚本和内联样式，以兼容当前示例；
 - 没有 WebView GUI 自动化测试；
@@ -385,9 +386,27 @@ RuntimeStatus 报告 `Crashed` 不再启动。
 限制：
 
 - Restricted Token + Job Object 已通过 `ALEX_RESTRICT_BACKENDS=1` 接入 RPC/service 启动路径；
-  Restricted Code SID 所需包目录和应用数据目录 ACL 尚未自动配置，因此当前仍为显式 opt-in；
+  启动前自动为包目录/运行时可执行文件授予 Restricted Code SID 只读执行权限，为应用
+  data/cache/log 目录授予修改权限；任一 ACL 配置失败都会 fail closed。当前仍为显式 opt-in；
 - backend 文件、进程和网络策略在 0.1 supervisor 路径未强制（容器路径 `enforce_policy` 已有雏形）；
 - 权限撤销与审计尚未覆盖实际运行中的服务进程。
+
+### 2.13 Windows 安装器与代码签名
+
+已实现：
+
+- WiX Toolset v4 MSI，安装 `alex.exe`、内置 Manager 包、启动脚本、许可证、发布清单和校验文件；
+- Start Menu 的 Alex Manager 快捷方式、per-machine 安装和 MajorUpgrade；
+- `build-windows-installer.ps1` 复用便携包构建，输出 MSI 与 SHA-256 校验文件；
+- 可选 Authenticode 签名：从 Windows 证书存储按 thumbprint 选择证书，分别签名暂存的
+  `alex.exe` 和最终 MSI，使用 SHA-256/RFC 3161 时间戳并强制执行 `signtool verify /pa /all`；
+- Windows CI 构建并上传未签名 Developer Preview MSI。
+
+限制：
+
+- 仓库和普通 CI 不持有生产代码签名证书，因此默认产物明确为未签名 Developer Preview；
+- WebView2 Bootstrapper、签名证书轮换/HSM、安装/升级/卸载 GUI 自动化仍待发布环境验收；
+- 当前提供 MSI，尚未增加 MSIX 身份、Store submission 或 App Installer feed。
 
 ## 关联文档
 

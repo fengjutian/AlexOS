@@ -156,6 +156,6 @@ Generated from `packages/sdk/desktop-api.schema.json`. Do not edit manually.
 | `shortcuts.unregister` | `shortcuts.unregister` | `shortcut.register` | shortcut | stable | native |
 | `shortcuts.list` | `shortcuts.list` | `shortcut.register` | shortcut | stable | native |
 
-Typed JSON Schema coverage: 142/142 methods.
+Typed JSON Schema coverage: 144/144 methods.
 
 Common errors: `INVALID_PARAMS`, `PERMISSION_DENIED`, `OPERATION_FAILED`, `DEADLINE_EXCEEDED`, `HOST_BUSY`, `METHOD_NOT_FOUND`.

@@ -1127,7 +1127,42 @@ impl RuntimeProcess {
         let (mut child, stdin, mut stdout, stderr, isolation) = if restrict_backends {
             #[cfg(windows)]
             {
+                use crate::platform::{PlatformServices, RestrictedPathAccess};
                 use std::os::windows::io::FromRawHandle;
+
+                // A restricted token requires both the normal user SID and the
+                // WinRestrictedCodeSid to pass every filesystem ACL check.
+                // Grant only the immutable package/executable read+execute and
+                // the app-owned data/cache/log roots modify access. Do this
+                // before CreateProcessAsUserW so an incomplete ACL setup fails
+                // closed instead of silently launching without confinement.
+                let platform = crate::platform::native();
+                platform
+                    .grant_restricted_path(&spec.package_root, RestrictedPathAccess::ReadExecute)
+                    .and_then(|_| {
+                        platform
+                            .grant_restricted_path(&executable, RestrictedPathAccess::ReadExecute)
+                    })
+                    .and_then(|_| {
+                        data_dir.map_or(Ok(()), |path| {
+                            platform.grant_restricted_path(path, RestrictedPathAccess::Modify)
+                        })
+                    })
+                    .and_then(|_| {
+                        cache_dir.map_or(Ok(()), |path| {
+                            platform.grant_restricted_path(path, RestrictedPathAccess::Modify)
+                        })
+                    })
+                    .and_then(|_| {
+                        log_dir.map_or(Ok(()), |path| {
+                            platform.grant_restricted_path(path, RestrictedPathAccess::Modify)
+                        })
+                    })
+                    .map_err(|error| {
+                        RuntimeError::Isolation(format!(
+                            "failed to prepare restricted backend ACLs: {error}"
+                        ))
+                    })?;
 
                 let mut env: Vec<(String, String)> = ["SystemRoot", "WINDIR", "TEMP", "TMP"]
                     .into_iter()

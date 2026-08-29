@@ -35,6 +35,28 @@ target\release-package\alex-runtime-<version>-windows-x64.zip
 `%LOCALAPPDATA%\AlexRuntime\apps`，后续可直接打开桌面管理器。已经执行过 Release 编译时，
 可使用 `-SkipBuild` 仅重新组装发布包。
 
+### Windows MSI 安装器
+
+安装 [WiX Toolset v4](https://wixtoolset.org/) 后执行：
+
+```powershell
+dotnet tool install --global wix
+.\scripts\build-windows-installer.ps1
+```
+
+开发用未签名 MSI 输出到 `target\release-installer\`。正式发布时，先把 Authenticode 证书安装到
+Windows 证书存储，再通过证书 SHA-1 thumbprint 同时签名 `alex.exe` 和 MSI，并使用 RFC 3161
+时间戳：
+
+```powershell
+.\scripts\build-windows-installer.ps1 `
+  -SigningThumbprint '<certificate-thumbprint>' `
+  -TimestampUrl 'http://timestamp.digicert.com'
+```
+
+脚本会在签名后调用 `signtool verify /pa /all`；验证失败不会生成可交付结果。CI 生成未签名开发
+安装器，生产签名证书不得提交到仓库，应由受保护的发布环境提供。
+
 ### Alex 应用包
 
 推荐使用 `package`，一步完成已配置的前端构建、Manifest 校验和 `.alex` 打包：

@@ -1,0 +1,38 @@
+<Wix xmlns="http://wixtoolset.org/schemas/v4/wxs">
+  <Package
+    Name="Alex Runtime"
+    Manufacturer="Alex Runtime"
+    Version="$(Version)"
+    UpgradeCode="9F92B170-1F73-4B88-814E-6C5C38DD398E"
+    Scope="perMachine"
+    InstallerVersion="500">
+    <SummaryInformation Description="Alex Runtime for Windows" />
+    <MajorUpgrade DowngradeErrorMessage="A newer version of Alex Runtime is already installed." />
+    <MediaTemplate EmbedCab="yes" CompressionLevel="high" />
+
+    <StandardDirectory Id="ProgramFiles64Folder">
+      <Directory Id="INSTALLFOLDER" Name="Alex Runtime">
+        <Component Id="RuntimeFiles" Guid="*" Bitness="always64">
+          <File Id="AlexExecutable" Source="$(PackageDir)\alex.exe" KeyPath="yes" />
+          <File Id="ManagerPackage" Source="$(PackageDir)\manager.alex" />
+          <File Id="ManagerLauncher" Source="$(PackageDir)\Alex Manager.cmd">
+            <Shortcut
+              Id="ManagerStartMenuShortcut"
+              Directory="ProgramMenuFolder"
+              Name="Alex Manager"
+              Description="Open Alex Runtime Manager"
+              WorkingDirectory="INSTALLFOLDER"
+              Advertise="no" />
+          </File>
+          <File Id="ReleaseManifest" Source="$(PackageDir)\release-manifest.json" />
+          <File Id="Checksums" Source="$(PackageDir)\checksums.txt" />
+          <File Id="License" Source="$(PackageDir)\LICENSE" />
+        </Component>
+      </Directory>
+    </StandardDirectory>
+
+    <Feature Id="MainFeature" Title="Alex Runtime" Level="1">
+      <ComponentRef Id="RuntimeFiles" />
+    </Feature>
+  </Package>
+</Wix>
