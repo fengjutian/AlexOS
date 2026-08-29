@@ -1,0 +1,7 @@
+[build]
+  command = "npm ci --prefix docs-site && npm run build --prefix docs-site"
+  publish = "docs-site/out"
+
+[build.environment]
+  NODE_VERSION = "20"
+
