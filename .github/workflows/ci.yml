@@ -41,7 +41,7 @@ jobs:
       - name: Generate CycloneDX SBOM from Cargo.lock
         run: cargo cyclonedx --all-features --format json
       - name: Upload SBOM
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: alex-cyclonedx-sbom
           path: |
@@ -126,7 +126,7 @@ jobs:
         shell: pwsh
         run: ./scripts/build-windows-installer.ps1 -SkipBuild
       - name: Upload Windows Developer Preview
-        uses: actions/upload-artifact@v4
+        uses: actions/upload-artifact@v7
         with:
           name: alex-windows-developer-preview
           path: |
